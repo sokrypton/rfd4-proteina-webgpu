@@ -1,0 +1,2144 @@
+/* THE SELECTION PANEL'S SKIN IS SHARED NOW, in src/parts/panel.js
+   beside the rows it draws. It was forty-six rules here and nowhere
+   else, so a notebook or an embed mounting the panel got the markup
+   and no styling at all - the same two-copies problem the panel's
+   markup had, one layer down. `selectionPanelCSS(scope)` returns
+   them; the embed passes its container id so nothing leaks into a
+   host page, and this stylesheet asks for no scope.
+   What stays here is #selectionGlobalTools, which is this page's own
+   row beside the strip and not on the panel at all - and the CARD, below.
+   ============================================================================
+   THIS PAGE'S SELECTION PANEL IS A CARD; EVERY OTHER SHELL'S IS A SECTION.
+   ----------------------------------------------------------------------------
+   Here it has a column of its own beside the structure, among other boxes that
+   look the same - the PAE plot, the scatter - so `container-box` is exactly
+   right. In the notebook's 180px control column and the embed's 190px one the
+   same card was a bordered white box INSIDE a bordered white box: two frames
+   around one stack of controls, which is what "it still appears as a separate
+   panel" means from the reader's seat.
+
+   So parts/panel.js ships the SECTION form - full width, no chrome, a hairline
+   above - at ZERO specificity, and what puts the card back here is a class this
+   page is the only one to define: `.container-box`, which `buildSelectionPanel`
+   has always put on the element and which supplies the border, the radius, the
+   ground, the padding and the shadow at (0,1,0). Nothing else is needed, and
+   THERE IS DELIBERATELY NO `.selection-panel` RULE HERE: one was written, and
+   measured as a no-op - the panel's slot on this page is exactly 340px, so the
+   shared `width: 100%` lands on the same number, and `container-box`'s own
+   border and padding already outrank the hairline. A rule that changes nothing
+   is a rule the next reader will try to fix. Same "one panel, two skins"
+   contract the Style panel has had since it became data. */
+/* ============================================================================
+   CSS VARIABLES & DESIGN TOKENS
+   ============================================================================ */
+:root {
+    --color-primary: #3b82f6;
+    --color-primary-hover: #2563eb;
+    --color-primary-dark: #1d4ed8;
+    --color-success: #10b981;
+    --color-success-hover: #059669;
+    --color-success-dark: #047857;
+    --color-danger: #ef4444;
+    --color-danger-hover: #dc2626;
+    --color-danger-dark: #b91c1c;
+    --color-gray-50: #f9fafb;
+    --color-gray-100: #f3f4f6;
+    --color-gray-200: #e5e7eb;
+    --color-gray-300: #d1d5db;
+    --color-gray-400: #9ca3af;
+    --color-gray-500: #6b7280;
+    --color-gray-600: #4b5563;
+    --color-gray-700: #374151;
+    --color-gray-800: #1f2937;
+    --color-gray-900: #111827;
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-full: 9999px;
+    --btn-radius: 6px;
+    /* COMPACT, so the viewer gets the room. These were 36 and 28 against a
+       14px label; the notebook and the embed settled on 24 for the same
+       controls. Every button, select and input on the page reads these. */
+    --btn-height: 30px;
+    --btn-height-small: 26px;
+    --btn-padding-x: 14px;
+    --btn-padding-x-small: 10px;
+    --btn-font-size: 14px;
+    --btn-font-size-small: 12px;
+    --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+    --container-padding: 8px;
+    --container-gap: 10px;
+}
+
+/* ============================================================================
+   BASE & LAYOUT
+   ============================================================================ */
+.py2dmol-viewer-instance,
+.py2dmol-viewer-instance * {
+    box-sizing: border-box;
+}
+
+/* ============================================================================
+   STANDARD CONTAINER BOX
+   ============================================================================ */
+.container-box {
+    /* BORDER-BOX, so the stated width is the width you see. The page's blocks
+       carry an explicit 948px and were drawn 966 wide - their own padding and
+       border added on top - while the viewer row beside them, which IS
+       border-box (see .py2dmol-viewer-instance *), came out at 948. Three
+       right-hand edges down one page: 1194, 1212 and 1220, all from boxes
+       whose left edges agreed. That rule uses a descendant selector, so it
+       never reached these blocks or the instance element itself. */
+    box-sizing: border-box;
+    background: #ffffff;
+    border: 1px solid var(--color-gray-200);
+    border-radius: var(--radius-lg);
+    padding: var(--container-padding);
+    box-shadow: var(--shadow-md);
+    transition: box-shadow var(--transition-base), border-color var(--transition-base);
+}
+
+.container-box:hover {
+    box-shadow: var(--shadow-lg);
+    border-color: var(--color-gray-300);
+}
+
+.py2dmol-viewer-instance #canvasContainer.container-box,
+.py2dmol-viewer-instance #scatterContainer.container-box,
+.py2dmol-viewer-instance #heatmapContainer.container-box {
+    padding: 0;
+}
+
+/* [EDIT] Centered viewer on the page */
+.py2dmol-viewer-instance {
+    position: relative;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: transparent;
+    display: block;
+    margin: 0 auto;
+    /* 600 (canvas) + 8 (gap) + 340 (panel). It was 974, which carried 26px of
+       padding and border that the boxes beside it added on top of their own
+       stated width - and now do not, since .container-box is border-box. The
+       26 was the only reason this row hung 26px past the header above it and
+       the sequence strip below. */
+    width: 948px;
+    line-height: 1.5;
+}
+
+/* [END EDIT] */
+
+.py2dmol-viewer-instance #mainContainer {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 8px;
+    background: transparent;
+}
+
+.py2dmol-viewer-instance #viewerColumn {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 600px;
+}
+
+.py2dmol-viewer-instance #canvasContainer,
+.py2dmol-viewer-instance #scatterContainer {
+    display: inline-block;
+    overflow: hidden;
+    resize: both;
+    min-width: 200px;
+    min-height: 200px;
+    position: relative;
+    box-sizing: border-box;
+}
+
+.py2dmol-viewer-instance #canvasContainer {
+    width: 600px;
+    height: 600px;
+}
+
+/* Scatter container styling (matches viewer box) */
+.scatter-container {
+    box-sizing: border-box;
+    padding: 0;
+    border: 1px solid var(--color-gray-200);
+    border-radius: var(--radius-lg);
+    background: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden; /* clip canvas corners like main viewer */
+    position: relative;
+}
+
+.scatter-container.box-off {
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+}
+
+/* Ensure scatter canvas itself is transparent so rounded corners show */
+#scatterCanvas {
+    background: transparent;
+    display: block;
+}
+
+
+/* Hide default resize handle for canvasContainer */
+.py2dmol-viewer-instance #canvasContainer::-webkit-resizer {
+    display: none;
+}
+.py2dmol-viewer-instance #scatterContainer::-webkit-resizer {
+    display: none;
+}
+
+/* Custom resize handle for canvasContainer */
+.py2dmol-viewer-instance #canvasContainer .resize-handle,
+.py2dmol-viewer-instance #scatterContainer .resize-handle {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    width: 16px;
+    height: 16px;
+    cursor: nwse-resize;
+    opacity: 0.4;
+    transition: opacity 0.2s;
+    z-index: 100;
+    pointer-events: none;
+}
+
+.py2dmol-viewer-instance #canvasContainer:hover .resize-handle,
+.py2dmol-viewer-instance #scatterContainer:hover .resize-handle {
+    opacity: 0.8;
+}
+
+.py2dmol-viewer-instance #canvasContainer .resize-handle::before,
+.py2dmol-viewer-instance #scatterContainer .resize-handle::before {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 0 0 16px 16px;
+    border-color: transparent transparent #3b82f6 transparent;
+}
+
+.py2dmol-viewer-instance #canvas {
+    background: #ffffff;
+    cursor: grab;
+    display: block;
+    touch-action: none;
+    transition: cursor var(--transition-fast);
+}
+
+.py2dmol-viewer-instance #canvas:active {
+    cursor: grabbing;
+}
+
+.py2dmol-viewer-instance #rightPanelsContainer {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex-shrink: 0;
+    align-self: flex-start;
+}
+
+.py2dmol-viewer-instance #rightPanelContainer {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    /* 340, and it earns it: the selection panel lives here and its rows are
+       two buttons and a caption apiece. Narrowing it to 260 was tried and put
+       back - the panel is the widest thing in the column, not the sliders. */
+    width: 340px;
+}
+
+.py2dmol-viewer-instance #binding-results-container {
+    display: flex;
+    flex-direction: column;
+    width: 340px;
+}
+
+.py2dmol-viewer-instance #rightPanelContainer.container-box {
+    /* Inherits all container-box styles from .container-box */
+    /* Intentionally empty - styles inherited from .container-box */
+    display: flex;
+    /* Prevent empty ruleset warning */
+}
+
+/* ============================================================================
+   UNIFIED BUTTON SYSTEM
+   ============================================================================ */
+
+/* Base button class - all buttons inherit from this */
+.btn {
+    height: var(--btn-height);
+    padding: 0 var(--btn-padding-x);
+    border-radius: var(--btn-radius);
+    font-size: var(--btn-font-size);
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    box-shadow: var(--shadow-sm);
+    color: white;
+    text-align: center;
+}
+
+/* Small button modifier */
+.btn-small {
+    height: var(--btn-height-small);
+    padding: 0 var(--btn-padding-x-small);
+    font-size: var(--btn-font-size-small);
+    line-height: var(--btn-height-small);
+}
+
+/* Unified hover state for all buttons */
+.btn:hover:not(:disabled) {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+}
+
+/* Unified active state for all buttons */
+.btn:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: var(--shadow-sm);
+}
+
+/* Unified disabled state */
+.btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+    box-shadow: none;
+    transform: none;
+}
+
+/* Color variants */
+.btn-primary {
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, var(--color-primary-hover) 0%, var(--color-primary-dark) 100%);
+}
+
+.btn-primary:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+}
+
+.btn-secondary {
+    background: var(--color-gray-200);
+    color: var(--color-gray-700);
+}
+
+.btn-secondary.active {
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
+    color: white;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: var(--color-gray-300);
+}
+
+.btn-secondary:focus-visible {
+    outline: 2px solid var(--color-gray-400);
+    outline-offset: 2px;
+}
+
+.btn-success {
+    background: linear-gradient(135deg, var(--color-success) 0%, var(--color-success-hover) 100%);
+}
+
+.btn-success:hover:not(:disabled) {
+    background: linear-gradient(135deg, var(--color-success-hover) 0%, var(--color-success-dark) 100%);
+}
+
+.btn-success:focus-visible {
+    outline: 2px solid var(--color-success);
+    outline-offset: 2px;
+}
+
+.btn-danger {
+    background: linear-gradient(135deg, var(--color-danger) 0%, var(--color-danger-hover) 100%);
+}
+
+.btn-danger:hover:not(:disabled) {
+    background: linear-gradient(135deg, var(--color-danger-hover) 0%, var(--color-danger-dark) 100%);
+}
+
+.btn-danger:focus-visible {
+    outline: 2px solid var(--color-danger);
+    outline-offset: 2px;
+}
+
+.btn-grey {
+    background: var(--color-gray-200);
+    color: var(--color-gray-700);
+}
+
+.btn-grey:hover:not(:disabled) {
+    background: var(--color-gray-300);
+}
+
+.btn-grey:active:not(:disabled) {
+    background: var(--color-gray-400);
+}
+
+/* Active state for a grey button. */
+.btn-grey.active {
+    background: linear-gradient(135deg, var(--color-success) 0%, var(--color-success-hover) 100%);
+    color: white;
+}
+
+.btn-grey.active:hover:not(:disabled) {
+    background: linear-gradient(135deg, var(--color-success-hover) 0%, var(--color-success-dark) 100%);
+}
+
+
+/* .btn-blue removed - use .btn-primary instead */
+
+
+/* Button utility classes */
+.btn-flex {
+    flex: 1;
+}
+
+.btn-no-margin {
+    margin: 0;
+}
+
+.btn-icon-only {
+    min-width: 40px;
+    width: 40px;
+    /* Height inherits from btn/btn-small; width stays fixed for icons */
+}
+
+
+/* Specific button overrides (for backward compatibility) */
+
+/* THE LOAD ROW'S THREE BUTTONS ARE ONE SET, so they are one size. They were
+   three different widths - Fetch pinned at 100, Upload at 170, and Options
+   left to size itself at 98 - which read as three unrelated controls rather
+   than the three ways of getting a structure onto the page. Upload was the
+   odd one: 170px for a label that needs 96 with its icon.
+
+   One rule rather than three numbers, and 100px because that is what the
+   WIDEST of them needs - "Options" plus its caret - so nothing is clipped and
+   nothing is padded out to match a number no label asked for. .btn is already
+   inline-flex and centred, so the contents stay put. */
+#fetch-btn,
+#upload-button,
+#fetchOptionsButton {
+    min-width: 100px;
+}
+
+#example-button-1,
+#example-button-2 {
+    flex: 1;
+}
+
+/* Control buttons (Play button) - now uses .btn-primary with min-width utility */
+
+/* ============================================================================
+   NAVIGATION BUTTONS (TOOLBAR)
+   ============================================================================ */
+.py2dmol-viewer-instance {
+    --btn-h: 36px;
+    --gap: 8px;
+}
+
+.py2dmol-viewer-instance .toolbar-row {
+    display: flex;
+    gap: var(--gap);
+}
+
+.py2dmol-viewer-instance .toolbar-row>* {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+#prevObjectButton,
+#nextObjectButton {
+    flex: 0 0 48px;
+    padding: 0;
+    text-align: center;
+}
+
+
+/* ============================================================================
+   TOGGLE SWITCHES (UNIFIED STYLE)
+   ============================================================================ */
+/* Base toggle switch - used for all checkboxes styled as toggles */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider-toggle {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #cbd5e1;
+    transition: .3s;
+    border-radius: 24px;
+}
+
+.slider-toggle:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .3s;
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.switch input:checked+.slider-toggle {
+    background-color: #3b82f6;
+}
+
+.switch input:focus+.slider-toggle {
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+.switch input:checked+.slider-toggle:before {
+    transform: translateX(20px);
+}
+
+/* ============================================================================
+   BUTTON-STYLE TOGGLES (for toolbar)
+   ============================================================================ */
+.py2dmol-viewer-instance .btn-toggle {
+    position: relative;
+    padding: 0;
+    border: none;
+    border-radius: var(--btn-radius);
+    background: transparent;
+    box-shadow: none;
+    height: var(--btn-height);
+    /* Use standard button height */
+    min-width: 0;
+    /* Allow flex shrinking in toolbar */
+}
+
+.py2dmol-viewer-instance .btn-toggle:hover {
+    background: transparent;
+    box-shadow: none;
+    transform: none;
+}
+
+.py2dmol-viewer-instance .btn-toggle input[type="checkbox"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    margin: 0;
+    cursor: pointer;
+}
+
+.py2dmol-viewer-instance .btn-toggle>span {
+    /* Apply .btn base styles */
+    width: 100%;
+    min-width: 0;
+    /* Allow shrinking in flex container */
+    height: var(--btn-height);
+    /* Use standard button height */
+    padding: 0 var(--btn-padding-x);
+    /* Use standard button padding */
+    border-radius: var(--btn-radius);
+    font-size: var(--btn-font-size);
+    /* Use standard button font size */
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    box-shadow: var(--shadow-sm);
+    transition: all 0.2s;
+    background: var(--color-gray-200);
+    color: var(--color-gray-700);
+    box-sizing: border-box;
+}
+
+/* Small button toggle variant */
+.py2dmol-viewer-instance .btn-toggle.btn-small {
+    height: var(--btn-height-small);
+}
+
+.py2dmol-viewer-instance .btn-toggle.btn-small>span {
+    height: var(--btn-height-small);
+    padding: 0 var(--btn-padding-x-small);
+    font-size: var(--btn-font-size-small);
+}
+
+.py2dmol-viewer-instance .btn-toggle input:checked+span {
+    background: linear-gradient(135deg, var(--color-success) 0%, var(--color-success-hover) 100%);
+    color: #fff;
+}
+
+/* A BUTTON that opens a panel reads as ON while the panel is open, in the same
+   green as a checked toggle. Style and Save Image are <button>, not
+   <label><input>, so the state lives on aria-expanded rather than :checked -
+   but it is the same state to the eye and should look the same. */
+.py2dmol-viewer-instance .btn-toggle[aria-pressed="true"]>span,
+.py2dmol-viewer-instance .btn-toggle[aria-expanded="true"]>span {
+    background: linear-gradient(135deg, var(--color-success) 0%, var(--color-success-hover) 100%);
+    color: #fff;
+}
+
+.py2dmol-viewer-instance .btn-toggle[aria-pressed="true"]>span:hover,
+.py2dmol-viewer-instance .btn-toggle[aria-expanded="true"]>span:hover {
+    background: linear-gradient(135deg, var(--color-success-hover) 0%, var(--color-success-dark) 100%);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+}
+
+.py2dmol-viewer-instance .btn-toggle input:not(:checked)+span:hover {
+    background: var(--color-gray-300);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+}
+
+.py2dmol-viewer-instance .btn-toggle input:checked+span:hover {
+    background: linear-gradient(135deg, var(--color-success-hover) 0%, var(--color-success-dark) 100%);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+}
+
+/* Icon button styles (record, save SVG, etc.) - unified with base button styles */
+.py2dmol-viewer-instance .btn-toggle.btn-icon-only>span {
+    min-width: 36px;
+    /* Prevent collapsing below minimum */
+}
+
+.py2dmol-viewer-instance .btn-toggle.btn-icon-only.btn-small>span {
+    min-width: 28px;
+    /* Smaller min-width for small icon buttons */
+}
+
+.py2dmol-viewer-instance .btn-toggle.btn-icon-only>span>i {
+    font-size: 1em;
+    line-height: 1;
+}
+
+.py2dmol-viewer-instance .btn-toggle.btn-icon-only:hover:not(:disabled)>span {
+    background: var(--color-gray-300);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+}
+
+.py2dmol-viewer-instance .btn-toggle.btn-icon-only:active:not(:disabled)>span {
+    transform: translateY(0);
+    box-shadow: var(--shadow-sm);
+}
+
+.py2dmol-viewer-instance .btn-toggle:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.py2dmol-viewer-instance .btn-toggle:disabled>span {
+    background: var(--color-gray-200);
+    box-shadow: none;
+    transform: none;
+    cursor: not-allowed;
+}
+
+/* ============================================================================
+   SLIDERS
+   ============================================================================ */
+
+/* Frame slider */
+.py2dmol-viewer-instance #frameSlider {
+    height: 6px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: #e5e7eb;
+    border-radius: 3px;
+    outline: none;
+    flex-grow: 1;
+    margin: 0 8px;
+    vertical-align: middle;
+}
+
+.py2dmol-viewer-instance #frameSlider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    background: #3b82f6;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    transition: all 0.2s;
+}
+
+.py2dmol-viewer-instance #frameSlider::-webkit-slider-thumb:hover {
+    background: #2563eb;
+    transform: scale(1.1);
+}
+
+.py2dmol-viewer-instance #frameSlider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: #3b82f6;
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    transition: all 0.2s;
+}
+
+.py2dmol-viewer-instance #frameSlider::-moz-range-thumb:hover {
+    background: #2563eb;
+    transform: scale(1.1);
+}
+
+/* Unified slider styles for all control sliders.
+   Selects EVERY range input in a viewer rather than naming ids: the old rule
+   listed lineWidth/outlineWidth/ortho/shadow explicitly, so every slider added
+   afterwards (thick, detail, pencil, round, flat, hilite, ink) silently fell
+   back to the browser default and the panel ended up with two different slider
+   styles side by side. frameSlider keeps its own look and is excluded. */
+.py2dmol-viewer-instance input[type="range"]:not(#frameSlider) {
+    height: 6px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: #e5e7eb;
+    border-radius: 3px;
+    outline: none;
+    flex-grow: 1;
+    margin-top: 0;
+}
+
+.py2dmol-viewer-instance input[type="range"]:not(#frameSlider)::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    background: #3b82f6;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    transition: all 0.2s;
+}
+
+.py2dmol-viewer-instance input[type="range"]:not(#frameSlider)::-webkit-slider-thumb:hover {
+    background: #2563eb;
+    transform: scale(1.1);
+}
+
+.py2dmol-viewer-instance input[type="range"]:not(#frameSlider)::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: #3b82f6;
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    transition: all 0.2s;
+}
+
+.py2dmol-viewer-instance input[type="range"]:not(#frameSlider)::-moz-range-thumb:hover {
+    background: #2563eb;
+    transform: scale(1.1);
+}
+
+/* ============================================================================
+   SELECT DROPDOWNS
+   ============================================================================ */
+
+/* #objectSelect ONLY. #colorSelect used to share this - 14px text, 8px/12px
+ * padding, a 170px width and `flex-shrink: 0` - and it lives in the Style panel
+ * now, where every other dropdown is 28px with 8px of side padding and shrinks
+ * with its cell. The panel rule below overrode the height and the font and NOT
+ * the width or the shrink, so Color refused to give ground while Sele beside it
+ * did, and the pair sat unevenly. It takes the panel's own rule now, like the
+ * rest of them. */
+.py2dmol-viewer-instance #objectSelect {
+    font-size: 14px;
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #374151;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-grow: 1;
+    width: 170px;
+    min-width: 150px;
+    flex-shrink: 0;
+}
+
+/* Small color/object select (matches btn-small height).
+ *
+ * 🔴 THIS HOOK READS AN INLINE STYLE ATTRIBUTE AS TEXT. It matches only while
+ * the element literally carries `style="... height: 28px; ..."` in its markup,
+ * which is invisible coupling of the worst kind: the compact variant looks like
+ * a normal rule and is really keyed on a string.
+ *
+ * #colorSelect is built by parts/panel.js now and has no inline style, so this
+ * silently stopped matching it - and the base rule above, 14px text with 8px of
+ * vertical padding, put 30px of content in a 28px box and clipped the
+ * descenders. It gets a real selector below.
+ *
+ * #objectSelect is still written by hand in index.html WITH that inline style,
+ * so it still matches. The day that markup is cleaned up, this breaks the same
+ * way.
+ */
+.py2dmol-viewer-instance #objectSelect[style*="height: 28px"] {
+    height: 28px;
+    font-size: 12px;
+    padding: 0 8px;
+    min-width: 100px;
+}
+
+.py2dmol-viewer-instance #objectSelect:hover {
+    border-color: #9ca3af;
+}
+
+.py2dmol-viewer-instance #objectSelect:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    outline: none;
+}
+
+.py2dmol-viewer-instance #speedSelect {
+    font-size: 14px;
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #374151;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 70px;
+}
+
+.py2dmol-viewer-instance #speedSelect:hover {
+    border-color: #9ca3af;
+}
+
+.py2dmol-viewer-instance #speedSelect:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    outline: none;
+}
+
+/* ============================================================================
+   CONTROL GROUPS & CONTAINERS
+   ============================================================================ */
+.py2dmol-viewer-instance #controlsContainer {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    background: #fff;
+    border: 1px solid var(--color-gray-200);
+    border-radius: var(--radius-lg);
+    padding: var(--container-padding) 16px;
+    box-shadow: var(--shadow-md);
+}
+
+.py2dmol-viewer-instance #navigationControls.toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.py2dmol-viewer-instance .control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.py2dmol-viewer-instance .toggle-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+}
+
+.py2dmol-viewer-instance .toggle-item>label {
+    font-weight: 500;
+    color: #374151;
+    font-size: 14px;
+    text-align: left;
+    flex-shrink: 1;
+    line-height: 1.5;
+    margin: 0;
+}
+
+.py2dmol-viewer-instance #frameCounter {
+    color: #374151;
+    min-width: 50px;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+/* #sequence-viewer-container display is controlled by JS */
+
+/* Override sequence-section-container styles for sequence viewer */
+#sequence-viewer-container {
+    min-height: auto;
+    /* Override the 520px min-height from .sequence-section-container */
+    height: auto;
+    /* Let content determine height */
+    overflow: visible;
+    /* Override overflow: hidden from .sequence-section-container */
+    resize: none;
+    /* Disable resizing for sequence viewer */
+}
+
+/* [EDIT] Removed old #sequenceViewContainer styles */
+
+/* [EDIT] Updated #sequenceView styles for canvas-based rendering */
+#sequenceView {
+    display: block;
+    max-height: 400px;
+    /* Fixed height with scrollbar */
+    overflow-y: auto;
+    /* Always show scrollbar when content exceeds height */
+    overflow-x: hidden;
+    /* Prevent horizontal scrollbar */
+    position: relative;
+}
+
+/* Make scrollbar visible and styled */
+#sequenceView::-webkit-scrollbar {
+    width: 12px;
+    /* Width of the scrollbar */
+}
+
+#sequenceView::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    /* Background of the scrollbar track */
+    border-radius: 6px;
+}
+
+#sequenceView::-webkit-scrollbar-thumb {
+    background: #888;
+    /* Color of the scrollbar thumb */
+    border-radius: 6px;
+    border: 2px solid #f1f1f1;
+    /* Space around thumb */
+}
+
+#sequenceView::-webkit-scrollbar-thumb:hover {
+    background: #555;
+    /* Darker color on hover */
+}
+
+/* Canvas element for sequence viewer */
+#sequenceCanvas {
+    cursor: crosshair;
+    display: block;
+    margin: 0;
+    padding: 0;
+    /* width and height are set inline by JavaScript - don't override */
+    box-sizing: border-box;
+    touch-action: none;
+    /* Prevent default touch behaviors */
+}
+
+/* [END EDIT] */
+
+
+/* ============================================================================
+   PAE CONTAINER
+   ============================================================================ */
+.py2dmol-viewer-instance #heatmapContainer {
+    display: none;
+    width: 340px;
+    aspect-ratio: 1;
+    position: relative;
+    /* 🔴 VISIBLE, BECAUSE THE TAB STRIP HANGS ABOVE THE BOX. The tabs used to
+       sit in a reserved white band INSIDE the card, which reads as part of the
+       plot rather than as a control over it - and a clipped container cut them
+       off the moment they moved outside. The canvas is absolutely positioned
+       and sized to fit by updateSize, so nothing else here overflows. */
+    overflow: visible;
+    flex-shrink: 0;
+}
+
+/* THE SLOTS (src/parts/slots.js), BY NUMBER. The two boxes above used to size
+   themselves; a slot sizes itself now and whatever view it holds fills it, so
+   the numbers moved here - 600 for slot 1, where the structure was, and 340
+   for slot 2, where the map was. The rules above still apply to a box in the
+   PARK, where nothing is drawn.
+   🔴 THIS IS THE ONLY PLACE THOSE TWO NUMBERS ARE A DIFFERENCE. They were the
+   whole content of the words "big" and "small", and they are the WEBSITE's
+   answer: it has a 948px row to lay out and a panel column that has always
+   been 340. Where no stylesheet and no markup says otherwise a slot is the
+   size the caller asked the viewer for, so in the notebook the two names were
+   one number - which is why they went. See parts/slots.js.
+   The drag and its knob come from parts/slots.js for EVERY slot; what is here
+   is this shell's sizes and the floor under them. Full screen is slot 1's
+   alone and is parts/viewport.js's. */
+.py2dmol-viewer-instance .py2dmol-slot--1 > .py2dmol-slot-body {
+    width: 600px;
+    height: 600px;
+    min-width: 200px;
+    min-height: 200px;
+    border-radius: var(--radius-lg);
+}
+.py2dmol-viewer-instance .py2dmol-slot--2 > .py2dmol-slot-body {
+    width: 340px;
+    height: 340px;
+    min-width: 160px;
+    min-height: 160px;
+}
+
+.py2dmol-viewer-instance #heatmapContainer.container-box {
+    /* Inherits all container-box styles */
+    padding: 0;
+    /* PAE canvas needs no padding */
+}
+
+.py2dmol-viewer-instance #heatmapCanvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    border: none;
+    background: transparent;
+}
+
+/* Object select in sequence header */
+#sequence-viewer-container #objectSelect {
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 14px;
+    background: #ffffff;
+    color: #374151;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 150px;
+}
+
+#sequence-viewer-container #objectSelect:hover {
+    border-color: #9ca3af;
+}
+
+#sequence-viewer-container #objectSelect:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    outline: none;
+}
+
+/* ============================================================================
+   INPUT FIELDS
+   ============================================================================ */
+#fetch-id {
+    flex-grow: 1;
+    height: 42px;
+    padding: 0 16px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 14px;
+    transition: all 0.2s;
+    background: #ffffff;
+}
+
+#fetch-id:hover {
+    border-color: #9ca3af;
+}
+
+#fetch-id:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    outline: none;
+}
+
+#fetch-id::placeholder {
+    color: #9ca3af;
+}
+
+/* THE FETCH PANEL. Lines, not columns: the ID box and its buttons, the
+   examples, and the options when they are asked for. A two-column table put
+   the options beside the input and sized the whole panel by the part nobody
+   changes, which left the examples in half a column where four of them wrapped
+   onto two rows. */
+.fetch-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.fetch-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+/* NOWRAP, which is the whole point of giving this row the full width: the
+   examples are a set and they read as one when they are on one line. */
+.fetch-examples {
+    flex-wrap: nowrap;
+    gap: 6px;
+}
+
+.fetch-row-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: #374151;
+    margin-right: 2px;
+}
+
+/* The ID box takes what is left. min-width: 0 because a flex item will not
+   shrink below its content otherwise, and a long placeholder would then push
+   the buttons off the end. */
+#fetch-input-container input {
+    flex: 1 1 auto;
+    min-width: 0;
+    /* THE SAME HEIGHT AS THE BUTTONS BESIDE IT. This was 42 against their 36,
+       so the row stood 6px taller than anything in it and the ID box looked
+       like a different kind of control from the Fetch button it feeds. One
+       token, so they cannot drift apart again. */
+    height: var(--btn-height);
+}
+
+/* ...AND THE OPTIONS, IN GROUPS. Eight switches in one flowing row is a list
+   to read rather than a thing to scan: they answer three separate questions,
+   and which one a switch belongs to is not obvious from its name. One column
+   per question, so the two you are not asking can be skipped at a glance. */
+.fetch-options {
+    display: flex;
+    flex-wrap: wrap;
+    /* The column gap and the rule's own padding below are ONE measurement:
+       28 + 28 - 14 put 42px between the groups' contents, which is wider than
+       most of the labels in them. Tightened together so the rule stays
+       centred in the gap. */
+    gap: 8px 16px;
+    padding: 8px 10px;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+}
+
+.fetch-option-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* A RULE BETWEEN THE GROUPS, not around them: a box each would make three
+   panels out of one. Drawn on the left of every group but the first, so it
+   disappears with the group and cannot end up dangling. */
+.fetch-option-group + .fetch-option-group {
+    border-left: 1px solid #e5e7eb;
+    /* Half the gap either side, so the rule sits in the middle of it - the
+       three numbers here and the column gap above move together or the rule
+       drifts off centre. */
+    padding-left: 16px;
+    margin-left: -8px;
+}
+
+.fetch-option-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #9ca3af;
+    margin-bottom: 1px;
+}
+
+/* [hidden] is a UA rule and display:flex outranks it - the same trap the clip
+   and style panels document. */
+.fetch-options[hidden] { display: none !important; }
+
+/* the caret turns when the panel is open, so the button says which way it goes */
+#fetchOptionsButton[aria-expanded="true"] #fetchOptionsCaret {
+    display: inline-block;
+    transform: rotate(180deg);
+}
+
+/* ============================================================================
+   UPLOAD CONTROLS
+   ============================================================================ */
+/* No additional styles needed - button defined above */
+
+.upload-options-section {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 10px;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+}
+
+
+.upload-toggle-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.upload-toggle-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: #374151;
+    cursor: pointer;
+    margin: 0;
+    user-select: none;
+}
+
+/* ============================================================================
+   STATUS MESSAGE
+   ============================================================================ */
+/* A RECEIPT IS ONE LINE. This sat above the viewer for the whole session at
+   43px plus its margin - 55px of the page permanently spent on "loaded 1
+   object". It says the same thing in half the height. */
+#status-message {
+    display: none;
+    margin-top: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid;
+    background: #dbeafe;
+    border-color: #3b82f6;
+    color: #1e40af;
+}
+
+#status-message:not(:empty) {
+    display: block;
+}
+
+/* ============================================================================
+   GLOBAL DROP OVERLAY
+   ============================================================================ */
+#global-drop-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.95);
+    border: 4px dashed #3b82f6;
+    z-index: 10000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    border-radius: 16px;
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+}
+
+#global-drop-overlay p {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #3b82f6;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* ============================================================================
+   PAGE STYLING
+   ============================================================================ */
+body {
+    background: #f9fafb;
+}
+
+h1 {
+    color: #111827;
+    letter-spacing: -0.025em;
+}
+
+/* THE HEADER, ON ONE LINE. The title and the line under it were two stacked
+   blocks with their own margins, which spent three lines of the page on a word
+   and a sentence. Baseline-aligned rather than centred: they are one sentence
+   with a big first word, and centring made the strapline look like a caption
+   floating beside the title. */
+.page-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 10px;
+    /* clear of the Save / Clear All / GPU cluster, which is positioned
+       absolutely against this same container - without it a longer strapline
+       runs under the buttons instead of wrapping */
+    padding-right: 300px;
+}
+
+.page-head h1 {
+    font-size: 1.75rem;
+    font-weight: 800;
+    line-height: 1.1;
+    margin: 0;
+}
+
+/* THE PAGE-LEVEL BUTTONS: OUTLINED, NOT FILLED. Save, Clear All and GPU sit at
+   the top of the page for the whole session, while Fetch and Upload are used
+   once and then not again - so as three filled blocks in strong colours the
+   standing ones took the eye first, and the first thing to do on this page is
+   load something.
+   Fading them was the first attempt and it was the wrong instrument: a faded
+   red is a red that looks broken. Outlined instead - white ground, coloured
+   letters, coloured border - which reads as a lighter WEIGHT rather than a
+   weaker version of the same thing, and keeps every one of them legible.
+   The colour still says which is which: blue Save, red Clear All.
+   ONE RULE FOR ALL THREE. The GPU control is a label wrapping a checkbox and
+   the other two are buttons, so their skins are different elements - they are
+   listed together here so the height, padding, type and border cannot drift
+   apart, which is exactly what happened when each carried its own. */
+/* the LABEL as well as the span it wraps: the label carries its own height,
+   and left at the full one it sat 4 px above the two buttons beside it */
+.page-actions .btn-toggle-global {
+    height: var(--btn-height-small);
+}
+
+.page-actions .btn,
+.page-actions .btn-toggle-global>span {
+    height: var(--btn-height-small);
+    padding: 0 var(--btn-padding-x-small);
+    font-size: 12px;
+    font-weight: 600;
+    gap: 6px;
+    border-radius: var(--btn-radius);
+    border: 1px solid currentColor;
+    background: #fff;
+    background-image: none;
+    box-shadow: none;
+    box-sizing: border-box;
+    transition: background 0.2s, color 0.2s;
+}
+
+.page-actions #saveStateButton { color: var(--color-primary); }
+.page-actions #clearAllButton { color: var(--color-danger); }
+.page-actions .btn-toggle-global>span { color: var(--color-gray-500); }
+
+/* HOVER FILLS THE OUTLINE, rather than changing the colour: the button you are
+   about to press is the one that is solid. */
+.page-actions #saveStateButton:hover:not(:disabled) {
+    background: var(--color-primary);
+    background-image: none;
+    color: #fff;
+}
+
+.page-actions #clearAllButton:hover:not(:disabled) {
+    background: var(--color-danger);
+    background-image: none;
+    color: #fff;
+}
+
+/* ...AND THE GPU SWITCH IS A STATE, not an action, so it fills when it is ON.
+   Which way it stands has to be readable without hovering - that is the whole
+   job of the control - and green-on-white is the same green the toggles in the
+   Style panel use for on. */
+.page-actions .btn-toggle-global input:checked+span {
+    color: var(--color-success);
+    background: rgba(16, 185, 129, 0.10);
+    background-image: none;
+}
+
+.page-actions .btn-toggle-global:hover>span,
+.page-actions .btn-toggle-global input:checked+span:hover {
+    background: var(--color-gray-100);
+    background-image: none;
+    box-shadow: none;
+    transform: none;
+}
+
+.page-actions .btn-toggle-global input:checked+span:hover {
+    background: rgba(16, 185, 129, 0.18);
+}
+
+/* ============================================================================
+   UTILITY CLASSES
+   ============================================================================ */
+
+.hidden {
+    display: none !important;
+}
+
+table.layout-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+table.layout-table td {
+    vertical-align: top;
+}
+
+
+/* [EDIT] Removed old opacity styles for .residue-span */
+
+/* [EDIT] Appended new styles for accordion, pills, and sequence view */
+/* Sequence section container with box */
+.sequence-section-container {
+    margin-top: var(--container-gap);
+    margin-bottom: 8px;
+    overflow: hidden;
+    position: relative;
+    min-width: 600px;
+    max-width: 2400px;
+    min-height: 520px;
+}
+
+.sequence-section-container.container-box {
+    /* Inherits all container-box styles from .container-box */
+    /* Intentionally empty - styles inherited from .container-box */
+    display: block;
+    /* Prevent empty ruleset warning */
+}
+
+/* Reduce bottom margin when collapsed to remove extra white space */
+.sequence-section-container.collapsed {
+    margin-bottom: 4px;
+}
+
+/* Sequence header with toggle */
+.sequence-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 0;
+}
+
+.sequence-content:not(.hidden) {
+    margin-top: 8px;
+}
+
+
+.sequence-content.hidden {
+    display: none;
+}
+
+.sequence-actions {
+    display: none;
+    gap: 8px;
+}
+
+.sequence-actions[style*="display: flex"] {
+    display: flex !important;
+}
+
+/* Select all / Unselect stay in the sequence header: they CREATE a selection,
+   so they cannot live in a panel that only exists once there is one. */
+.selection-global-tools {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+/* Removed - now handled by .btn-small modifier above */
+
+/* Chain buttons and residue characters are now drawn on canvas - no CSS needed for HTML elements */
+
+/* Sequence view container */
+/* [EDIT] Canvas-based rendering - no HTML element styles needed */
+/* [END EDIT] */
+
+
+/* === MSA Viewer === */
+#msa-buttons {
+    min-width: auto;
+    width: auto;
+    height: auto;
+    min-height: auto;
+    overflow: visible;
+    resize: none;
+    background: transparent;
+    border: none;
+    padding: 0;
+    box-shadow: none;
+    border-radius: 0;
+}
+
+/* Canvas container */
+.msa-canvas {
+    position: relative;
+    display: block;
+    resize: both;
+    overflow: hidden;
+    min-width: 200px;
+    min-height: 200px;
+    /* 🔴 BORDER-BOX, for the same reason .container-box is - see the note on
+       .py2dmol-app above. This block states 948 and drew 974: its own 12px of
+       padding on each side and 1px of border went on top of the stated width,
+       and 2*12 + 2*1 is exactly the 26px it hung past the sequence strip above
+       it and the panels below. The width is set inline by createCanvasContainer
+       from MIN_CANVAS_WIDTH, which was already 948 - the number was never
+       wrong, the box model was. */
+    box-sizing: border-box;
+    width: 948px;
+    margin-top: var(--container-gap);
+    background: #ffffff;
+    border: 1px solid var(--color-gray-200);
+    border-radius: var(--radius-lg);
+    padding: var(--container-padding);
+    box-shadow: var(--shadow-md);
+    transition: box-shadow var(--transition-base), border-color var(--transition-base);
+}
+
+.msa-canvas:hover {
+    box-shadow: var(--shadow-lg);
+    border-color: var(--color-gray-300);
+}
+
+.msa-canvas--coverage {
+    padding: 0;
+}
+
+.msa-canvas--coverage canvas {
+    border-radius: var(--radius-lg);
+}
+
+/* Hide default resize handle */
+.msa-canvas::-webkit-resizer {
+    display: none;
+}
+
+/* Custom resize handle */
+.msa-canvas .resize-handle {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    width: 16px;
+    height: 16px;
+    cursor: nwse-resize;
+    opacity: 0.4;
+    transition: opacity 0.2s;
+    z-index: 100;
+    pointer-events: none;
+}
+
+.msa-canvas:hover .resize-handle {
+    opacity: 0.8;
+}
+
+.msa-canvas .resize-handle::before {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 0 0 16px 16px;
+    border-color: transparent transparent #3b82f6 transparent;
+}
+
+.msa-canvas canvas {
+    display: block;
+}
+
+
+/* A TOGGLE THAT LIVES OUTSIDE THE VIEWER. The .btn-toggle rules are scoped to
+   .py2dmol-viewer-instance, and Use GPU sits in the page header beside Save and
+   Clear All - it is a global setting, not a viewer control. Same skin as those
+   toggles (green on, grey off), same size as the buttons it stands next to. */
+.btn-toggle-global {
+    position: relative;
+    display: inline-flex;
+    height: var(--btn-height);
+    border-radius: var(--btn-radius);
+    cursor: pointer;
+}
+
+.btn-toggle-global input[type="checkbox"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    margin: 0;
+    cursor: pointer;
+}
+
+.btn-toggle-global>span {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: var(--btn-height);
+    padding: 0 var(--btn-padding-x);
+    border-radius: var(--btn-radius);
+    font-size: var(--btn-font-size);
+    font-weight: 600;
+    box-shadow: var(--shadow-sm);
+    transition: all 0.2s;
+    background: var(--color-gray-200);
+    color: var(--color-gray-700);
+    box-sizing: border-box;
+}
+
+.btn-toggle-global input:checked+span {
+    background: linear-gradient(135deg, var(--color-success) 0%, var(--color-success-hover) 100%);
+    color: #fff;
+}
+
+.btn-toggle-global input:not(:checked)+span:hover {
+    background: var(--color-gray-300);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+}
+
+.btn-toggle-global input:checked+span:hover {
+    background: linear-gradient(135deg, var(--color-success-hover) 0%, var(--color-success-dark) 100%);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+}
+
+/* THE OBJECT LIST - what is on screen, and only that. The button opens into a
+   row per object, each an eye and a name, and only the eye is the switch.
+   Which object is being EDITED is asked for separately, by the picker in the
+   sequence header - which is the whole control in the ordinary mode, and
+   greyed out in Multi. */
+.object-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.object-list-btn {
+    height: var(--btn-height-small);
+    /* AN ICON, so square: three stacked lines standing for the list this
+       opens. The word it replaced ("Multi") took 46px of a 340px row that the
+       picker beside it now has. */
+    width: var(--btn-height-small);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-gray-500);
+    background: #fff;
+    border: 1px solid currentColor;
+    border-radius: var(--btn-radius);
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+
+.object-list-btn:hover { background: var(--color-gray-100); }
+
+/* MULTI IS A MODE, so the button fills while it is on - the same way the GPU
+   switch reads on. */
+.object-list-btn.is-on,
+.object-list-btn[aria-pressed="true"] {
+    color: var(--color-primary);
+    background: rgba(59, 130, 246, 0.10);
+}
+
+.object-list {
+    margin-top: 4px;
+    border: 1px solid #e5e7eb;
+    border-radius: var(--btn-radius);
+    overflow: hidden;
+}
+
+.object-list[hidden] { display: none; }
+
+.object-list-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.object-list-row + .object-list-row { border-top: 1px solid #f3f4f6; }
+
+.object-list-row:hover { background: var(--color-gray-100); }
+
+/* TWO HALVES, TWO QUESTIONS. The eye is whether the object is DRAWN; the name
+   is whether it is the one the controls act on. Both offer themselves. */
+.object-list-eye { cursor: pointer; }
+.object-list-name { cursor: pointer; }
+
+/* ...AND THE ONE BEING EDITED SAYS SO. Every panel below the list - Style,
+   Clip, the settings - acts on this object and on no other, which is not
+   guessable from a list where every row looks the same. */
+.object-list-row.is-editing { background: var(--color-gray-100); }
+.object-list-row.is-editing .object-list-name {
+    font-weight: 600;
+    color: var(--color-gray-900);
+}
+
+/* THE PICKER sits beside the Multi button, because the two are one control
+   between them: which object, or several. Live in both modes: in Multi the
+   eyes decide what is DRAWN and the picker still decides what you are
+   EDITING. */
+.object-picker {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--color-gray-300);
+    border-radius: var(--btn-radius);
+    background: #fff;
+    color: var(--color-gray-700);
+}
+
+.object-picker:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.object-list-eye {
+    width: 20px;
+    text-align: center;
+    color: var(--color-gray-500);
+    font-size: 12px;
+}
+
+/* A HIDDEN OBJECT KEEPS ITS ROW but loses its ink, so the list reads as a set
+   of switches rather than as a list that things vanish from. */
+.object-list-row.is-hidden .object-list-name,
+.object-list-row.is-hidden .object-list-eye { opacity: 0.45; }
+.object-list-row:hover .object-list-eye { color: var(--color-primary); }
+
+.object-list-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* THE THIRD QUESTION, AND THE QUIETEST. The eye is a state and the name is a
+   state; `sele` is an ACTION, and three equally loud controls stop the row
+   reading as "this object, shown, being edited". It sits at the right because
+   the name takes flex: 1, and it comes up only on the row the pointer is on -
+   the list is scanned far more often than it is acted on. */
+.object-list-sele {
+    flex: 0 0 auto;
+    cursor: pointer;
+    font-size: 10px;
+    line-height: 1;
+    padding: 3px 5px;
+    border: 1px solid var(--color-gray-300);
+    border-radius: var(--btn-radius);
+    background: #fff;
+    color: var(--color-gray-500);
+}
+.object-list-sele:hover {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+}
+
+/* 🔴 ALWAYS THERE, AND IT SAYS WHEN IT IS ON. It used to appear on hover
+   only, which made it a control you had to already know about - and nothing
+   told you whether the selection on screen was this object's or something
+   else's. Pressed means the selection is EXACTLY this object's residues. */
+.object-list-sele[aria-pressed="true"] {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+    color: #fff;
+}
+.object-list-sele[aria-pressed="true"]:hover {
+    color: #fff;
+}
+/* ...and a hidden object still offers it: selecting is not showing, and
+   sele then Show is how you get at something you cannot currently see. */
+.object-list-row.is-hidden .object-list-sele { opacity: 0.55; }
+
+
+
+/* THE SEQUENCE STRIP WITH NOTHING ON SCREEN. Every object can be switched off,
+   and a strip still listing residues then describes a picture that is not
+   there. It says so, and its tools are dead until something comes back. */
+.sequence-empty-note {
+    padding: 10px 4px;
+    font-size: 12px;
+    color: var(--color-gray-500);
+    font-style: italic;
+}
+
+.sequence-section-container.is-empty .sequence-actions { opacity: 0.45; }
+
+/* ============================================================================
+   THE EIGHT TAILWIND UTILITIES THIS PAGE USED
+   ============================================================================
+   index.html pulled in cdn.tailwindcss.com - an in-browser JIT compiler that
+   re-scans the DOM on every mutation and warns, correctly, that it is not for
+   production - to supply these eight rules. The values are Tailwind's own
+   defaults, so the page looks exactly as it did.
+
+   Kept as utility class names rather than folded into the elements that use
+   them: `font-medium` and `text-gray-700` are on seventeen elements each, and
+   rewriting those into semantic rules is a different change from removing a
+   CDN dependency. */
+.bg-gray-50    { background-color: #f9fafb; }
+.text-gray-700 { color: #374151; }
+.text-gray-800 { color: #1f2937; }
+.font-medium   { font-weight: 500; }
+.font-sans     { font-family: ui-sans-serif, system-ui, -apple-system,
+                 "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+.p-4           { padding: 1rem; }
+.p-8           { padding: 2rem; }
+.mr-3          { margin-right: 0.75rem; }
+.mx-auto       { margin-left: auto; margin-right: auto; }
+
+/* ============================================================================
+   THE STYLE PANEL'S SKIN.
+   ----------------------------------------------------------------------------
+   The panel is BUILT by src/parts/panel.js and is the same DOM in
+   both pages; this is index.html's half of the contract, and the notebook's
+   equivalent lives in py2Dmol/resources/viewer.html.
+
+   These rules used to be inline style="" attributes on every row, cell, label
+   and slider of the markup - which is precisely why the panel had to be written
+   out twice and why the two copies drifted. Same DOM, different CSS: that was
+   always the arrangement, it just had nowhere to live.
+   ========================================================================== */
+#stylePanel {
+    display: flex; flex-direction: column; gap: 6px;
+    border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; padding: 8px;
+}
+/* One wrapping flow per row: a cell belonging to the other style collapses and
+   the survivors pack themselves onto whole lines. */
+#stylePanel .toggle-item { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* BASIS 45%, NOT `flex: 1`. The rows are one wrapping flow, so with no basis
+   five half-cells share a single line and each slider gets what is left after a
+   50px caption - measured 10px. At 45% two fit per line and the rest wrap,
+   which is what the inline styles this replaced were doing. */
+#stylePanel .half {
+    flex: 1 1 45%; display: flex; align-items: center; gap: 4px; min-width: 0;
+}
+/* :not(.btn-toggle) - a toggle is a <label> too, and must not take the 50px
+   caption width. */
+#stylePanel .toggle-item label:not(.btn-toggle) {
+    width: 50px; flex-shrink: 0; font-size: 12px; font-weight: 500; color: #374151;
+}
+/* THE PANEL'S BOXES, IN ONE RULE, AT ONE HEIGHT.
+ *
+ * 24px is the notebook's --ctl-h. The website ran its panel controls at 28 and
+ * nothing else did, so the same panel was a different height in each shell -
+ * and slimmer reads better anyway: these are settings a reader adjusts once,
+ * not buttons competing with the picture.
+ *
+ * `.controlButton` is here because the SSE palette used to be one - a <button>,
+ * since a <select> cannot colour its options - and it stays because the
+ * notebook and the embed style `select, .controlButton` together for the same
+ * reason: anything box-shaped the panel grows should look like the dropdowns
+ * beside it without having to be told again. That palette is two options in
+ * the Color dropdown now, so nothing matches it today. */
+#stylePanel select,
+#stylePanel .controlButton {
+    flex: 1; min-width: 0; height: 24px; font-size: 12px; padding: 0 8px;
+    border: 1px solid #d1d5db; border-radius: 8px; background: #fff;
+    color: #374151; cursor: pointer;
+}
+/* ...and the states, which only #colorSelect used to have. Standardising DOWN
+   would have meant taking its focus ring away; these give it to all of them. */
+#stylePanel select:hover,
+#stylePanel .controlButton:hover { border-color: #9ca3af; }
+#stylePanel select:focus,
+#stylePanel .controlButton:focus {
+    border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    outline: none;
+}
+#stylePanel input[type="range"] { flex: 1; min-width: 0; outline: none; }
+/* Three to a line at 30% basis, which is what the toggles were given inline. */
+#stylePanel .btn-toggle { flex: 1 1 30%; margin: 0; }
+/* ...AND AS SLIM AS THE DROPDOWNS BESIDE THEM. --btn-height is 30px, which is
+   the page's toolbar height - right for Orient and Style, which are targets you
+   hit, and too tall for a row of settings inside a panel. The pill is the SPAN,
+   so both take the height or the outer box keeps its 30 and the pill floats in
+   it. */
+#stylePanel .btn-toggle,
+#stylePanel .btn-toggle > span {
+    height: 24px; font-size: 12px;
+}
+[hidden] { display: none !important; }
+
+/* ============================================================================
+   THE SHELL WIDTH, AND THE NARROW LAYOUT
+   ----------------------------------------------------------------------------
+   948 = 600 (canvas) + 8 (gap) + 340 (panel). It was written INLINE on four
+   elements - the header, the upload box, the sequence strip and the footer -
+   and an inline width is one no stylesheet can override: not a media query,
+   not a container query, not any amount of specificity. Only `!important`
+   beats one, and a page whose responsive rules all need `!important` is a page
+   with no cascade left. So the number lives here, once, and the block below
+   overrides that one rule instead of four attributes.
+
+   The same fault was in JavaScript and was the real blocker: setupViewport
+   wrote `canvasContainer.style.width`, so every rule aimed at the canvas box
+   lost to an attribute set at load. `data-autosize="css"` on the container
+   turns that write off - see the banner in src/parts/viewport.js, and note the
+   notebook needs the OPPOSITE and needs it in the markup, because Colab
+   measures output HTML before any script has run.
+
+   🔴 AND THIS BLOCK MUST BE LAST IN THE FILE. Its declarations are the same
+   specificity as the ones they replace, so ORDER is the only thing deciding
+   them - the same lesson the selection panel's container query already cost
+   once, where the heights took and the widths did not and it looked exactly
+   like a query that was not matching.
+   ============================================================================ */
+.page-width { width: 948px; }
+
+/* THE TOP BAR. `position: absolute; top: 0; right: 0` was written INLINE on
+   .page-actions - the sixth of these, and the only one that was a POSITION
+   rather than a width. Absolutely positioned means out of flow, so as soon as
+   the page is narrower than title + three buttons the buttons slide left and
+   sit ON TOP of "2Dmol". Reported from a phone, and invisible to a check that
+   only asks whether anything overflows: an overlap costs no width at all. */
+.page-topbar { position: relative; }
+.page-actions {
+    position: absolute;
+    top: 0;
+    right: 0;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+/* WHY 980 AND NOT 948: the shell is 948 plus the page's own margins, so it
+   starts overflowing slightly before its stated width. Below this the two
+   columns cannot sit side by side at all - 600 + 8 + 340 is arithmetic, not
+   styling - so they stack, and everything pinned to the shell becomes fluid.
+   ONE breakpoint for the structure. Touch and target size are asked about
+   separately below, because they are different questions: a 900px tablet with
+   a mouse wants the stack and not the fat controls, and a phone wants both. */
+@media (max-width: 980px) {
+    .page-width,
+    .py2dmol-viewer-instance {
+        width: 100%;
+        max-width: 948px;
+    }
+
+
+    /* WIDTH AS WELL AS DIRECTION. #viewer-container is given `display: flex`
+       INLINE by the JS that reveals it, so #mainContainer is a flex ITEM and
+       sizes to its content - and its content is sized from it, which resolves
+       to an arbitrary 312px in a 452px shell. Stating the width breaks that
+       circularity; on desktop it is 948 either way. */
+    /* THE BAR BECOMES AN ORDINARY ROW. Out of flow is what let the actions
+       overlap the title; in flow they push it or wrap under it instead. */
+    .page-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px 12px;
+    }
+    .page-actions { position: static; }
+    /* 🔴 AND THE TITLE RESERVES 300px FOR BUTTONS THAT ARE NO LONGER OVER IT.
+       `.page-head` carries `padding-right: 300px` to keep a strapline clear of
+       the absolutely positioned actions - correct while they float, and 300px
+       of dead width once they are in flow. It is most of a phone. */
+    .page-head { margin: 0; padding-right: 0; }
+
+    /* 🔴 THE ROW THAT WOULD NOT SHRINK, AND WHY "no overflow" WAS A LIE.
+       `.fetch-row` is a flex row with no wrap, so the ID box, Fetch, Upload and
+       Options insist on 504px between them - measured with `width: min-content`.
+       Under mobile emulation a page that cannot fit does NOT overflow: the
+       LAYOUT VIEWPORT grows to fit it, so scrollWidth == innerWidth and every
+       overflow check passes while the phone shows a zoomed-out page. Asking for
+       390 gave an innerWidth of 408. Letting the row wrap is what actually
+       makes the page fit. */
+    /* THE ID BOX GETS A LINE OF ITS OWN, then Fetch / Upload / Options share
+       the next one. `flex: 1 1 100%` is what forces the break - letting the row
+       simply wrap put Fetch up beside the box and left Upload and Options
+       stranded on a line of their own, which reads as two unrelated groups.
+
+       SCOPED TO THE INPUT ROW, not `.fetch-row`, which is also the EXAMPLES
+       row: that one is `flex-wrap: nowrap` on purpose (they are a set and read
+       as one), and a `.fetch-row` rule down here has the same specificity and
+       comes later, so it silently turned the nowrap off. */
+    #fetch-input-container { flex-wrap: wrap; }
+    /* `1 0 100%` AND NOT `1 1 100%`: with shrink allowed the flex algorithm
+       is free to squeeze the box back onto one line beside the buttons, which
+       is exactly what it did - the basis is a preference, the shrink is the
+       permission. Zero shrink makes the break unconditional. */
+    /* 🔴 AND IT MUST OUT-SPECIFY `#fetch-input-container input`, which already
+       says `flex: 1 1 auto`. That is (1,0,1) against a bare `#fetch-id`'s
+       (1,0,0), so the plain id rule lost and the box stayed on line one with
+       Fetch beside it - measured as "2 lines" the whole time, because it IS
+       two lines, just split [box, Fetch] / [Upload, Options] instead of
+       [box] / [Fetch, Upload, Options]. A line COUNT cannot tell those apart;
+       only looking at it could. */
+    #fetch-input-container #fetch-id {
+        flex: 1 0 100%;
+        /* ...AND border-box, or `100%` is 100% of the line PLUS its own padding
+           and border, which hangs the box past the card's right edge and takes
+           the layout viewport a pixel with it. The page's global box-sizing is
+           scoped to `.py2dmol-viewer-instance *` and this input is outside it. */
+        box-sizing: border-box;
+        min-width: 0;
+    }
+
+    /* ===== THE THREE ROWS THAT MUST NOT BREAK =====
+       The title and the three page actions on ONE line; the ID box alone on
+       the next; Fetch / Upload / Options together on the one after; and the
+       examples on a single line. Measured at 390 those come to 304, 300 and
+       285 CSS px against a 342px shell - they fit, and at 360 the shell is
+       312 and the top bar is 316, so it breaks by four pixels. THE ROWS ARE
+       TOLD NOT TO WRAP AND THE CONTENT IS TRIMMED TO SUIT, rather than the
+       other way round: a row that is allowed to wrap will, at some width
+       nobody tested. The examples row is NOT restated here - `.fetch-examples`
+       already says nowrap at the top of this file, and the wrap rule below is
+       scoped to the input row so nothing clobbers it. Measured: removing a
+       copy here changed nothing. */
+
+    /* WHAT GIVES: the horizontal padding on the two button groups. Heights are
+       untouched - these are the same controls, narrower.
+
+       A smaller TITLE was written here too and measured as a no-op at every
+       width including 320, so it is not there: "2Dmol" is 84px at its full
+       size and the bar has room for it. */
+    .page-actions .btn,
+    .page-actions .btn-toggle-global > span,
+    .fetch-examples .btn {
+        padding-left: 8px;
+        padding-right: 8px;
+    }
+    /* `.btn` carries `min-width: 100px`, so Fetch / Upload / Options insist on
+       316px with their gaps and do not fit a 320px phone's 272px shell. The
+       floor comes off for these three only - they size to their labels and
+       still share the line. Not `flex: 1 1 0`, which was tried and collapsed
+       them to 30px of clipped text: a zero BASIS with no floor is not the same
+       as a natural width with no floor. */
+    #fetch-input-container > button { min-width: 0; }
+    /* ...and the row's own gap comes down 8 -> 6. Fetch / Upload / Options are
+       65 + 94 + 98 = 257, and two 8px gaps put them at 273 in a 320px phone's
+       272px shell: over by ONE pixel, which is enough to stand Options on a
+       line of its own. Scoped to this row - the examples row has its own 6px. */
+
+    /* 🔴 THE PLAY BAR BREAKS AT THE OVERLAY BUTTON, and the slider is why.
+       A wrapping flex row decides its line breaks from each item's BASE size,
+       and #frameSlider's is an <input>'s natural ~173px - so play(40) +
+       slider(173) + counter(50) + speed(40) + overlay(39) + four gaps came to
+       374 against a 342px row and overlay was pushed to a second line. It then
+       GREW to fill line one, which is why the finished row looks like it has
+       room to spare: the width that caused the break is not the width you see.
+
+       `flex-basis: 0` takes the slider out of that decision - it claims nothing
+       while lines are chosen, then absorbs whatever is left. The min-width is
+       what stops it becoming a hairline, and 40 is a MEASURED number, not a
+       chosen one: at 320 the row's content box is 270 and the other four come
+       to 169 plus four 6px gaps, so the slider may claim 77 and no more. 60
+       was tried and still wrapped. */
+    .py2dmol-viewer-instance #controlsContainer #frameSlider {
+        flex: 1 1 0;
+        min-width: 40px;
+    }
+    /* ...and the row's gap 8 -> 6, which is the last 8px a 320px phone needs.
+       Its content box is the 272px shell less .container-box's padding and
+       border - 254 - against 229 of controls plus four gaps. At 8 that is 261
+       and overlay drops; at 6 it is 253. */
+    .py2dmol-viewer-instance #controlsContainer {
+        gap: 6px;
+        /* ...and 16px of SIDE padding of its own, on top of the card's 8, which
+           is 32px of a 320px phone's row spent on margin. Both this and the gap
+           are load-bearing at 320: removing either puts the overlay button on a
+           second line. (A mutation run reported this rule as a no-op; the
+           regex had failed to match, so "not caught" meant "not mutated" - a
+           mutation that does not mutate is indistinguishable from a rule that
+           does nothing.) */
+        padding-left: 8px;
+        padding-right: 8px;
+    }
+    /* ...and the same 100px floor is why the toolbar row insists on 312px
+       (three buttons plus two gaps), which is 40 more than a 320px phone's
+       shell. Measured as `#rightPanelContainer` refusing to shrink, which is
+       what pushed a 320 device to a 324 layout viewport. */
+
+
+    /* A BUTTON'S LABEL IS NOT A PARAGRAPH. "Select all" broke across two lines
+       inside its own button and took the row's baseline with it, so it sat half
+       a line above Unselect and Invert.
+
+       LETTING THE ROW WRAP IS THE WHOLE FIX. A `white-space: nowrap` on the
+       buttons was written beside this and measured as inert at 320, 360 and
+       390 - with the row free to break, each button gets its natural width and
+       nothing inside one wraps. It is not here. `tests/mobile_layout.py`
+       measures the overflow (scrollHeight against clientHeight) rather than
+       the declaration, and forcing a wrap is caught at 13px. */
+    .sequence-header { flex-wrap: wrap; }
+
+    /* NOTHING TO DRAG, SO NOTHING TO SHOW. The canvas box is `resize: none`
+       here (it is fluid), and the handle is revealed on :hover, which a touch
+       screen does not have - so it was a permanent blue triangle over the
+       corner of the structure that does nothing when tapped. */
+    .py2dmol-viewer-instance #canvasContainer .resize-handle { display: none; }
+
+    .py2dmol-viewer-instance #mainContainer {
+        flex-direction: column;
+        width: 100%;
+    }
+
+    /* min-width 600 is what pinned the viewer column; both it and the panel
+       column become full width and stack. */
+    .py2dmol-viewer-instance #viewerColumn {
+        min-width: 0;
+        width: 100%;
+    }
+    .py2dmol-viewer-instance #rightPanelsContainer,
+    .py2dmol-viewer-instance #rightPanelContainer,
+    .py2dmol-viewer-instance #binding-results-container {
+        width: 100%;
+    }
+
+    /* SQUARE, AND CSS OWNS IT. height comes off with the width or the box keeps
+       its stated 600 and the canvas is letterboxed inside it. `resize: both`
+       goes because a fluid box cannot also be a dragged one - and its handle is
+       revealed on :hover, which a touch screen does not have (below). */
+    .py2dmol-viewer-instance #canvasContainer {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 1 / 1;
+        resize: none;
+    }
+    /* ...and the slots that hold it now, the same way. */
+    .py2dmol-viewer-instance .py2dmol-slot {
+        width: 100%;
+    }
+    .py2dmol-viewer-instance .py2dmol-slot > .py2dmol-slot-body {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 1 / 1;
+        resize: none;
+    }
+    /* ...and no knob where there is no drag, which is the same rule the
+       canvas box's own handle already follows here. */
+    .py2dmol-viewer-instance .py2dmol-slot-knob { display: none; }
+
+    /* the strip is the panel that earns its width most on a narrow screen, and
+       .sequence-section-container pinned it to 600. */
+    .sequence-section-container { min-width: 0; }
+}
+
+

@@ -1,0 +1,42 @@
+{
+  "name": "rfd4p",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Interactive WebGPU implementation of RFD4-Proteina (all-atom biomolecular flow matching & latent reasoning in the browser)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RosettaCommons/RFD4-Proteina.git"
+  },
+  "keywords": [
+    "rfd4-proteina",
+    "rfdiffusion",
+    "protein-design",
+    "flow-matching",
+    "webgpu",
+    "biomolecular-design"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "shared",
+    "cpu",
+    "webgpu",
+    "web",
+    "index.html",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./webgpu/index.js",
+    "./shared/*": "./shared/*",
+    "./cpu/*": "./cpu/*",
+    "./webgpu/*": "./webgpu/*"
+  },
+  "scripts": {
+    "test": "node $(node --v8-options 2>/dev/null | grep -qe '--js-float16array' && node -e 'process.exit(typeof Float16Array === \"undefined\" ? 0 : 1)' && echo --js-float16array) --test --test-concurrency=1 $(ls test/*.test.js | grep -v '\\.gpu\\.')",
+    "test:gpu": "node tools/gpu-chrome.mjs tools/gpu/check-rfd4p.js",
+    "serve": "python3 -m http.server 4173",
+    "export:weights": "python3 tools/export_rfd4p_model.py"
+  }
+}

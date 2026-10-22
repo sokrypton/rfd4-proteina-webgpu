@@ -1,0 +1,9 @@
+node_modules/
+.ipynb_checkpoints/
+.DS_Store
+*.log
+notes.txt
+/runs/
+/oracle-dumps/
+/weights/*.safetensors
+/weights/int8/*.bin

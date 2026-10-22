@@ -1,0 +1,164 @@
+/*
+ * RFD4-Proteina additions on top of py2Dmol.app.css + localfold.css.
+ * Scoped strictly to RFD4-Proteina ids/classes so py2Dmol's light theme
+ * and controls remain untouched.
+ */
+
+#contig-input {
+  box-sizing: border-box;
+  flex-grow: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 6px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.35;
+  background: #fff;
+  color: #111827;
+}
+
+#contig-input:hover {
+  border-color: #9ca3af;
+}
+
+#contig-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.rfd4p-input-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.rfd4p-contig-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.rfd4p-contig-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.rfd4p-condition-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.rfd4p-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #374151;
+}
+
+.rfd4p-pill.pill-crd {
+  background: #ecfeff;
+  border-color: #a5f3fc;
+  color: #0e7490;
+}
+
+.rfd4p-pill.pill-crdgrp {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #b45309;
+}
+
+.rfd4p-pill.pill-hot {
+  background: #fff1f2;
+  border-color: #fecdd3;
+  color: #be123c;
+}
+
+.rfd4p-pill.pill-mcoord {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #047857;
+}
+
+.rfd4p-pill.pill-cath {
+  background: #f5f3ff;
+  border-color: #ddd6fe;
+  color: #6d28d9;
+}
+
+.rfd4p-drawer {
+  border-top: 1px solid #e5e7eb;
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
+.rfd4p-drawer summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+  user-select: none;
+}
+
+.rfd4p-drawer summary:hover {
+  color: #1f2937;
+}
+
+.rfd4p-drawer-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+@media (max-width: 760px) {
+  .rfd4p-drawer-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.rfd4p-box-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: #4b5563;
+  margin-bottom: 4px;
+}
+
+.rfd4p-textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 108px;
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.35;
+  background: #fff;
+  color: #111827;
+  resize: vertical;
+}
+
+.rfd4p-textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+}

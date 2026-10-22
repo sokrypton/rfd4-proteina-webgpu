@@ -1,0 +1,1231 @@
+/*
+ * What LocalFold adds to py2Dmol's page, and nothing more.
+ *
+ * 🔴 NOT web/style.css. That one dresses LocalFold's own standalone pages: it
+ * sets `body { background: #07110f }` and restyles `textarea, input, select`
+ * globally for a dark theme. Loaded over py2Dmol's light application it wins on
+ * both - the page keeps its own layout while every text box turns black - which
+ * is exactly what it did before this file existed. Nothing here sets a bare
+ * element selector for that reason; every rule is anchored to an id or a class
+ * this project introduced.
+ */
+
+/* THE SEQUENCE BOX IS THE FETCH BOX, one line taller. py2Dmol's #fetch-id is
+   the shape a reader already associates with "the thing you type into", so this
+   copies it rather than inventing a second look: same border, radius, focus
+   colour and flex-grow, with the height and the monospace a sequence needs.
+
+   🔴 AND #target IS THE SAME BOX ON proteinhunter.html, WHICH IS WHY IT IS
+   NAMED HERE RATHER THAN RESTYLED THERE. A bare <textarea> in a .fetch-row has
+   no flex-grow, so it takes its DEFAULT intrinsic width and stops: measured at
+   183px inside a 948px shell, on every viewport width alike, which reads as a
+   box that simply does not know it is in a layout. The three declarations that
+   fix it - box-sizing, flex-grow, min-width - are the same three, so a second
+   copy of this rule under another id would be a second thing to keep in step
+   with the narrow block below. */
+#sequence,
+#target {
+  /* ...BORDER-BOX, because these carry padding and a border and are sized
+     against their container. Without it a width:100% box is its padding wider
+     than the panel it sits in, and overflows by exactly that much. */
+  box-sizing: border-box;
+  flex-grow: 1;
+  min-width: 0;
+  height: 58px;
+  padding: 8px 16px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.35;
+  letter-spacing: .02em;
+  resize: vertical;
+  background: #fff;
+  color: #111827;
+}
+
+#sequence:hover,
+#target:hover { border-color: #9ca3af; }
+#sequence:focus,
+#target:focus { outline: none; border-color: #3b82f6; }
+
+/* ...and the alignment box, on its own full-width line inside the options so
+   the option columns beside it keep their measure. */
+.fold-option-wide { flex-basis: 100%; }
+.fold-option-wide:not(:has(> *:not([hidden]))) { display: none; }
+
+/* Keep option groups in a single row; push MSA options to the right */
+#foldOptions > .fetch-option-group {
+  flex-shrink: 0;
+}
+
+/* 🔴 PLM SITS WHERE THE MSA GROUP SITS, AND TAKES ITS RULE RATHER THAN ONE OF
+   ITS OWN. Exactly one of the two is ever shown - it is that row for a model
+   whose evolutionary input is a language model - so the separator and the
+   push to the right belong to whichever is up. Sizing them by hand was the
+   mistake: three attempts at a half-row basis all measured well in a narrow
+   window and wrapped the desktop row, which `tools/mobile-layout.py` holds to
+   one line. Everything here is content-sized; leave it that way. */
+#msaModeGroup, #plmGroup {
+  margin-left: auto;
+  border-left: 1px solid #e5e7eb;
+  padding-left: 16px;
+}
+/* 🔴 AND THE PLM ROW TAKES THE MSA ROW'S PLACE WITHOUT ITS `margin-left: auto`,
+   which pushes a group to the far RIGHT of whatever line it lands on. That is
+   right for the MSA group, whose line it starts; it is wrong here, because this
+   model hides the sampler-mode group and so leaves room on the line above -
+   PLM was landing at the right-hand end of the Diffusion row instead of beside
+   it. Without the auto margin the two pair up as `MSA` and `Max MSA` do. */
+/* 🔴 TWO EVEN COLUMNS, WHICH IS WHAT EVERY OTHER PAIR IN THIS ROW IS. The
+   groups below the first line come in twos - Sampler/Flow, MSA/Max MSA - and
+   they measure half the row each. `af3CountGroup` had no basis of its own, so
+   on a line it did not share it GREW to fill the row: 672px of 672 for this
+   model, which hides the sampler-mode group beside it. That pushed PLM to the
+   far end at x=587, and giving PLM a line of its own instead left it alone on
+   one. Half a row each, and the pair sits like every other pair. */
+
+#msaModeGroup[hidden], #maxMsaGroup[hidden], #plmGroup[hidden] {
+  display: none !important;
+}
+
+#msa-text {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 64px;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: #fff;
+  color: #111827;
+  resize: vertical;
+}
+#msa-text:focus { outline: none; border-color: #3b82f6; }
+
+/* THE OPTION SELECTS WEAR py2Dmol'S INPUT, at the size the groups are built
+   for. A browser-default select beside their bordered, rounded controls is the
+   one thing in the panel that looks bolted on. */
+#foldOptions select,
+#foldOptions input[type="number"] {
+  height: 28px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  color: #111827;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+#foldOptions select {
+  padding: 0 24px 0 8px;
+  line-height: 1;
+  cursor: pointer;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, #6b7280 50%),
+                    linear-gradient(135deg, #6b7280 50%, transparent 50%);
+  background-position: calc(100% - 13px) 12px, calc(100% - 8px) 12px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+#foldOptions input[type="number"] {
+  width: 68px;
+  padding: 0 6px;
+  font-family: inherit;
+}
+
+#foldOptions select:hover,
+#foldOptions input[type="number"]:hover { border-color: #9ca3af; }
+#foldOptions select:focus,
+#foldOptions input[type="number"]:focus { outline: none; border-color: #3b82f6; }
+
+/* EVERYTHING THAT ACTS ON THE SEQUENCE STACKS TO ITS RIGHT, so the panel is
+   two rows tall instead of four. The column does not grow or shrink: the box
+   beside it takes whatever is left, which is what makes the row reflow
+   sensibly at narrower widths. */
+/* 🔴 A ROW IN THE PAGE HEAD, NOT A 198px COLUMN. This used to reserve a fixed
+   column beside the sequence box for Fold and the MSA switch. The entity list
+   needs the panel's whole width - with a column taken out of every row, the
+   copies fields could not line up - so the actions moved to the page head,
+   opposite the title, where py2Dmol keeps the controls that act on the page. */
+.fold-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.fold-toggle-label {
+  cursor: pointer;
+  font-size: var(--btn-font-size, 14px);
+  font-weight: 600;
+  color: #374151;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+
+.switch.switch-sm {
+  width: 36px;
+  height: 20px;
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.switch.switch-sm .slider-toggle {
+  border-radius: 20px;
+}
+
+.switch.switch-sm .slider-toggle:before {
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+}
+
+.switch.switch-sm input:checked + .slider-toggle:before {
+  transform: translateX(16px);
+}
+
+#predict {
+  width: 96px;
+  min-width: 96px;
+  max-width: 96px;
+  height: var(--btn-height, 36px);
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: var(--btn-font-size, 14px);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+#predict i {
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+#predict span {
+  display: inline-block;
+  text-align: center;
+}
+
+/* STOP stays visibly dangerous while an already-submitted GPU command reaches
+   the next cancellation boundary. */
+#predict.btn-danger:disabled { opacity: 1; }
+
+#status-message {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid #bfdbfe;
+  background: #dbeafe;
+  color: #1e40af;
+  line-height: 1.25;
+  display: block;
+}
+
+#status-message:empty {
+  display: none;
+}
+
+#status-message.error {
+  border-color: #fca5a5;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+/* PROGRESS IS PART OF THE STATUS BLOCK AND IS ALWAYS THERE.
+   🔴 It used to sit at the foot of #fold-panel carrying `hidden`, so it was
+   laid out only while a fold ran - and that panel grew 11px at the start of
+   every fold and shrank again at the end, moving the viewer and every panel
+   below it twice per run. Reserving the space permanently is the whole fix;
+   `data-state` changes how it LOOKS, never whether it occupies room. */
+#status-row {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* THE STATUS LINE AND THE MODEL DIAL SHARE A ROW. The line takes what is
+   left, so a long message pushes nothing off the end; the dial is fixed and
+   sits against the right edge. */
+#status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+#status-line #status-message { flex: 1 1 auto; min-width: 0; }
+
+/* ...and it is `hidden` whenever there is nothing loading, which is most of the
+   time: the attribute is what app.js toggles, so this only has to describe the
+   shown state. */
+#model-load {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 0;
+}
+
+/* 🔴 THE ONE PLACE THE DOWNLOAD SPEAKS. It used to write "Loading AlphaFold 3 ·
+   N MiB" into the status line, which was harmless while it was the only thing
+   running and became a fight once it ran beside the MSA search - two writers,
+   several times a second, and the message that loses is the one about a server
+   that may be queuing for a minute. Here it cannot collide with anything.
+   Smaller and quieter than the line, because it is a secondary job. */
+#model-load-text {
+  font-size: 11px;
+  line-height: 1;
+  color: #6b7280;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 🔴 THE LABEL GOES FIRST ON A PHONE, NOT THE MESSAGE. It cannot wrap and it
+   cannot shrink, so at 320px its 171px took two thirds of a 254px row and left
+   the status line 75px - which fits none of "MSA search · queued (PENDING) ·
+   41s · api.colabfold.com". Nothing overflowed, so a fit check saw nothing
+   wrong; it was measured by forcing the dial visible, which is the only way it
+   is ever laid out. The dial keeps the meaning, and its title keeps the bytes. */
+@media (max-width: 560px) {
+  #model-load-text { display: none; }
+}
+#model-load[hidden] { display: none; }
+#model-load svg { width: 18px; height: 18px; display: block; }
+#model-load circle {
+  fill: none;
+  stroke-width: 3;
+}
+.model-load-track { stroke: #e5e7eb; }
+.model-load-fill {
+  stroke: #3b82f6;
+  stroke-linecap: round;
+  /* 🔴 NO TRANSITION, AND IT USED TO HAVE ONE. The arc is set by app.js as a
+     dash offset, and `transition: stroke-dashoffset .2s linear` was here to
+     make it sweep rather than jump between shard callbacks. There is nothing
+     to smooth: HttpTensorStore reports once per network chunk, which is 8776
+     callbacks over one load of model-af3-int5 - and a transition retargeted
+     that often never arrives. Each callback restarts it from wherever the arc
+     has got to, so the arc trails the true value by about `duration x rate`,
+     and the rate is one whole arc over the length of the load.
+
+     Measured through tools/fold-in-page.py --bar, which reads the DRAWN
+     dashoffset beside the label, on a 450 ms local load:
+
+         label  96 / 265 MiB   arc 0.05
+         label 192 / 265 MiB   arc 0.28
+         label 264 / 265 MiB   arc 0.64   <- hidden here
+
+     The dial reads 99.6% and is two thirds drawn. It is worse the faster the
+     load, so a returning visitor with the shards cached sees the least of it,
+     and a slow link sees none: at 30 s the lag is 0.2/30, which is 0.7%. */
+}
+
+/* A load whose total is not known yet spins instead of filling, for the same
+   reason the bar sweeps: a dial frozen at nothing reads as a hang. */
+#model-load[data-state="unknown"] .model-load-fill {
+  stroke-dasharray: 14 43;
+  stroke-dashoffset: 0;
+  transform-origin: 12px 12px;
+  animation: localfold-dial 1s linear infinite;
+}
+@keyframes localfold-dial {
+  from { transform: rotate(-90deg); }
+  to { transform: rotate(270deg); }
+}
+
+#status-row progress {
+  width: 100%;
+  height: 3px;
+  border: 0;
+  border-radius: 2px;
+  appearance: none;
+  background: #e5e7eb;
+  transition: opacity .2s ease;
+}
+#status-row progress::-webkit-progress-bar { background: #e5e7eb; border-radius: 2px; }
+#status-row progress::-webkit-progress-value { background: #3b82f6; border-radius: 2px; }
+#status-row progress::-moz-progress-bar { background: #3b82f6; border-radius: 2px; }
+
+/* ...idle reads as a rule under the status line rather than an empty gauge:
+   still 3px tall, still in the layout, just fainter and with no fill. */
+#status-row progress[data-state="idle"] {
+  opacity: .5;
+}
+#status-row progress[data-state="idle"]::-webkit-progress-value { background: transparent; }
+#status-row progress[data-state="idle"]::-moz-progress-bar { background: transparent; }
+
+/* ...and an indeterminate sweep for the stretch with nothing to count: the
+   trunk queues its blocks and then waits, and a bar frozen at a number reads
+   as a hang where one that is visibly moving reads as work. */
+#status-row progress[data-state="waiting"] {
+  background: linear-gradient(90deg, #e5e7eb 25%, #3b82f6 50%, #e5e7eb 75%) 0 0 / 250% 100%;
+  animation: localfold-sweep 1.2s linear infinite;
+}
+#status-row progress[data-state="waiting"]::-webkit-progress-bar { background: transparent; }
+#status-row progress[data-state="waiting"]::-webkit-progress-value { background: transparent; }
+#status-row progress[data-state="waiting"]::-moz-progress-bar { background: transparent; }
+@keyframes localfold-sweep {
+  from { background-position: 125% 0; }
+  to { background-position: -125% 0; }
+}
+
+/* The download pair sits under the score card, matching the panels around it.
+   `max-width` because 340 is the DESKTOP panel column and this box is inside a
+   column that goes fluid below 980px - stated width, capped by the screen. */
+#downloads {
+  width: 340px;
+  max-width: 100%;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: stretch;
+  padding: 8px 12px;
+}
+#downloads button {
+  flex: 1;
+}
+
+/* Legend & swatches */
+.legend { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 11px; color: #64748b; }
+.swatch { display: inline-flex; align-items: center; gap: 4px; }
+.swatch::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--swatch); }
+
+/* --- mutation panel: sits below the viewer in single-sequence educational mode --- */
+#mutate-panel {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+}
+.mutate-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.mutate-title { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; font-weight: 700; color: #0f172a; }
+.mutate-hint { flex: 1; margin: 0; font-size: 12px; color: #64748b; }
+.mutate-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.mutate-cell {
+  flex: 1 1 24px; min-width: 24px; height: 28px; padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.12); border-radius: 4px; background: var(--cell);
+  color: #0f172a; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.1s ease;
+}
+.mutate-cell:hover { transform: scale(1.1); z-index: 2; border-color: #0f172a; }
+.mutate-cell.is-current {
+  border-color: #0f172a;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #0f172a;
+  font-weight: 800;
+}
+.mutate-close {
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px;
+  background: transparent; color: #64748b; font-size: 18px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.mutate-close:hover { color: #0f172a; background: #f1f5f9; }
+
+/* --- Prediction scores card --- */
+/* 🔴 FOUR NUMBERS DO NOT NEED FOUR BOXES, OR A LINE OF THEIR OWN. This was a
+   header line and then a grid of bordered, filled cells with the label stacked
+   over the value: 92px of a 340px column that also holds the PAE matrix and the
+   downloads, for four short readings.
+
+   THE WHOLE CARD IS ONE WRAPPING ROW NOW - title, the metrics, then the badge -
+   which is what buys the height. Dropping the cell chrome alone took it to 86,
+   because the metrics still could not share a line with anything: measured, the
+   four pairs are 84 + 70 + 73 + 90 = 317px against the 310 inside this card, so
+   a multimer wrapped them and paid for a header line as well. The title and the
+   badge have both since gone, which is what finally bought the room.
+
+   Nothing is smaller. The value keeps its 14px monospace, which is the part
+   anyone reads; it is the boxes and the two spare lines that went. */
+/* 🔴 A MOUNT HOLDING ONLY A HIDDEN PANEL STILL COSTS A GAP.
+   #selectionPanelMount is a layout slot the selection panel is built into, and
+   that panel ships `hidden` until something is selected - so the mount is a
+   zero-height flex item, and the column's 8px gap applies on BOTH sides of it.
+   Measured, that put 16px between the object selector and the heatmap's tab
+   strip where there should be 8, and since the strip hangs above its box the
+   doubled gap reads as empty space over the TABS.
+
+   🔴 `:empty` IS THE WRONG TEST AND SILENTLY DOES NOTHING. The mount is not
+   empty: it contains #selectionPanel, hidden. What has to be asked is whether
+   it holds anything VISIBLE, which is what :has() is for. */
+#selectionPanelMount:not(:has(> *:not([hidden]))) {
+  display: none;
+}
+
+#predictionScoresBox {
+  /* 🔴 IT GROWS TO ITS CONTENT NOW, up to whatever the column allows. A
+     monomer shows two metrics and a multimer five, and a fixed 340px wrapped
+     the second into a line of its own. */
+  width: fit-content;
+  min-width: 340px;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  /* 10px between pairs; the 2px row gap is what keeps two lines from reading as
+     two paragraphs. */
+  gap: 2px 10px;
+  padding: 8px 14px;
+}
+
+/* `display: contents` and not a rewrite of the markup: the header and the grid
+   are still their own elements, still where web/app.js looks for them, and
+   their children are the row's items. */
+.scores-card-grid { display: contents; }
+
+/* 🔴 AND THE TWO CELLS THAT COME AND GO ARE SHOWN FROM JAVASCRIPT, so the
+   display value lives in two places. web/app.js wrote `display = "block"` for
+   ipTM and Ranking - correct for a stacked cell and, once the cell is a flex
+   row, an inline style that beats this rule and puts those two labels back
+   above their values while pLDDT and pTM stayed beside theirs. It writes
+   "flex" now; the two must agree. */
+.score-metric-cell {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.score-metric-label {
+  font-size: 11px;
+  color: #6b7280;
+  font-weight: 500;
+}
+.score-metric-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* THE ENTITY LIST replaces the sequence box, so it takes its place in the
+   fetch row: it grows, everything beside it keeps its size. The rows inside
+   stack, and each row is one line - type, value, copies, remove - so the list
+   reads down as "what will be folded" and across as "what this one is". */
+.entity-list {
+  box-sizing: border-box;
+  flex-grow: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 🔴 A GRID, NOT A FLEX ROW, so the columns line up DOWN the list as well as
+   across it. With flex, a ligand's short code pulled its copies field left and
+   the rows no longer read as a table - the eye cannot scan a column that moves.
+   Four tracks: the type, the value taking whatever is left, then copies and
+   remove at a fixed width on every row. */
+/* 🔴 FIVE COLUMNS, AND EVERY ROW FILLS ALL FIVE. A protein row is type,
+   sequence, copies, options, remove; a ligand row is type, menu, code, copies,
+   remove. It was four, and adding the options button gave protein rows a fifth
+   child with nowhere to go - so it wrapped onto a line of its own and the row
+   grew a break down the middle. */
+/* 🔴 FIVE TRACKS, AND A SIXTH CONTROL DOES NOT FIT. The template briefly had a
+   button of its own here, and a grid with fewer tracks than children does not
+   overflow - it WRAPS, putting the overflow on an implicit second row, which
+   tools/mobile-layout.py reported as "the desktop entity row broke across 2
+   lines". The template lives behind the same `⋮` as the modified residues now,
+   which is where it belonged: both are set on one chain, both change what is
+   folded, and both are invisible on the row. */
+.entity-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto;
+  align-items: start;
+  gap: 8px;
+}
+
+/* A ligand row has one more control - the menu of common codes - and the box
+   beside it only ever holds five characters, so the menu takes the width the
+   sequence box would otherwise have. */
+/* A ligand row swaps the sequence box for the menu and a five-character code,
+   so the menu takes the width the sequence would have had. */
+/* A ligand takes no template, so its row keeps five tracks. */
+.entity-row-ligand { grid-template-columns: auto auto minmax(0, 1fr) 9ch auto; }
+.entity-picker {
+  box-sizing: border-box;
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #111827;
+  font-size: 13px;
+}
+
+/* The value field carries the look the sequence box had: py2Dmol's own border,
+   radius and focus colour, with the monospace a sequence needs. */
+.entity-value {
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.35;
+  letter-spacing: .02em;
+  background: #fff;
+  color: #111827;
+}
+
+/* 🔴 TWO LINES FOR A SEQUENCE, ONE FOR A LIGAND, AND THE HEIGHT IS SET HERE
+   RATHER THAN BY `rows`. A textarea's rows attribute loses to an explicit
+   height, so setting rows=2 in entity-ui.js alone changed nothing - both have
+   to agree. Two lines is 13px at 1.35 twice, plus 8px of padding either side
+   and the border: 52px. A ligand really is five characters and keeps one. */
+/* The row has to be the popup's positioning context, since the popup hangs off
+   the options button rather than off the page. */
+.entity-row { position: relative; }
+
+/* ...and it matches the button beside it, because they sit together and a
+   half-height neighbour reads as a different kind of control. */
+.entity-options { position: relative; flex-shrink: 0; height: 34px; width: 34px; }
+.entity-remove { width: 34px; }
+/* A count on the button, because a closed popup hides what it holds and a
+   modification changes what is folded. */
+.entity-options[data-count]::after {
+  content: attr(data-count);
+  position: absolute;
+  top: -5px; right: -5px;
+  min-width: 15px; height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 10px; line-height: 15px;
+  text-align: center;
+}
+
+/* 🔴 AND AMBER WHEN WHAT IS BEHIND THE BUTTON CANNOT FOLD. "From the MSA
+   search" with the MSA not set to search has no hits to draw a template from,
+   and the only way anyone found that out was to press Fold and be told. The
+   count is still the count; the colour is the warning, and the button's title
+   carries the sentence. */
+.entity-options[data-warn]::after {
+  background: #d97706;
+  content: attr(data-count) "!";
+}
+.entity-options[data-warn]:not([data-count])::after {
+  content: "!";
+}
+
+.entity-popup {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 340px;
+  padding: 10px 12px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .16);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.entity-popup-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.entity-popup-title { font-size: 12px; font-weight: 600; color: #374151; }
+/* A round close in the corner, since the popup no longer dismisses itself. */
+.entity-popup-close {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  display: grid; place-items: center;
+  padding: 0;
+  border: 1px solid #d1d5db;
+  border-radius: 50%;
+  background: #fff;
+  color: #6b7280;
+  font-size: 11px;
+  cursor: pointer;
+}
+.entity-popup-close:hover { background: #f3f4f6; color: #111827; }
+.entity-popup-empty, .entity-popup-problem {
+  margin: 0; font-size: 12px; line-height: 1.4; color: #6b7280;
+}
+.entity-popup-problem { color: #b91c1c; }
+.entity-popup-row { display: flex; align-items: center; gap: 6px; }
+/* 🔴 ONE SET OF METRICS FOR EVERY CONTROL IN THIS POPUP. The template section
+   arrived with its own - 28px tall, 4px radius, a grey #f8fafc fill - beside a
+   modification row that is 30px, 7px and white, and its <select> had no rule at
+   all, so it drew as a browser-default control. That is the same mismatch the
+   note on `#foldOptions select` exists to prevent, one popup further in. */
+.entity-popup-code,
+.entity-popup-typed,
+.entity-popup-position,
+.entity-template-kind,
+.entity-msa-kind,
+.entity-template-source,
+.entity-template-chain,
+.entity-template-file {
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 6px;
+  font-size: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 7px;
+  background: #fff;
+  color: inherit;
+}
+.entity-popup-code { flex: 1 1 auto; min-width: 0; }
+.entity-popup-typed { width: 6ch; text-align: center; text-transform: uppercase; }
+.entity-popup-at { font-size: 12px; color: #6b7280; }
+/* 🔴 SEVEN CHARACTERS FOR FOUR DIGITS, measured. With the spinner gone the
+   box is content again - 26px of it at 6ch - and "1000" is 26.7px wide in
+   this font, so a four-digit position on a long chain clipped by a hair. */
+.entity-popup-position { width: 7ch; text-align: center; }
+/* The residue actually at that position: a wrong number is then visible here
+   rather than as a validation message after pressing Fold. */
+.entity-popup-residue {
+  width: 2ch; font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+  font-weight: 600; color: #2563eb; text-align: center;
+}
+.entity-popup-hint { margin: 0; font-size: 11px; color: #6b7280; }
+/* Which row a click on the sequence will move. Without it the click looks like
+   it lands somewhere at random once there is more than one modification. */
+.entity-popup-row-active { 
+  background: #eff6ff;
+  border-radius: 7px;
+  box-shadow: 0 0 0 3px #eff6ff;
+}
+.entity-popup-add { align-self: flex-start; font-size: 12px; }
+
+/* 🔴 THE MIRROR AND THE BOX SHARE ONE CELL AND ONE SET OF METRICS. A textarea
+   cannot colour a single character, so the highlight is the same text drawn
+   behind it; anything that changes where a line breaks - font, size, letter
+   spacing, padding, border, width - has to be identical or the mark slides off
+   the residue further down the box. Both carry .entity-value for that reason. */
+.entity-field { position: relative; min-width: 0; }
+.entity-field > .entity-value { width: 100%; }
+.entity-mirror {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;      /* a sequence is one unbroken word */
+  color: transparent;
+  pointer-events: none;
+  background: #fff;
+}
+.entity-mirror mark {
+  background: #fde68a;
+  color: transparent;
+  border-radius: 3px;
+}
+/* The text itself stays on top and visible; only its background comes from the
+   mirror below, so the caret and selection behave as they always did. */
+.entity-field > textarea.entity-value { position: relative; background: transparent; }
+
+.entity-value-protein { height: 52px; min-height: 52px; resize: vertical; }
+.entity-value-ligand { height: 34px; text-transform: uppercase; }
+/* 🔴 EXPLICITLY NOT UPPERCASED. A CCD code is case-insensitive and shown upper
+   for tidiness; a SMILES is not - `c1ccccc1` is benzene and `C1CCCCC1` is
+   cyclohexane - so this rule is stated rather than left to default, because
+   the neighbouring one is two lines away and easy to extend by accident. */
+.entity-value-smiles { height: 34px; text-transform: none; font-family: ui-monospace, monospace; }
+
+.entity-value:hover { border-color: #9ca3af; }
+.entity-value:focus { outline: none; border-color: #3b82f6; }
+
+/* 🔴 BORDER-BOX ON ALL THREE, BECAUSE THE BROWSER DOES NOT AGREE WITH ITSELF.
+   Chrome makes a <select> and a <button> border-box by default and an
+   <input type="number"> content-box, so three controls all declaring
+   `height: 34px` came out 34, 34 and 35.6 - the copies box a border and a half
+   taller than the dropdown beside it, and visibly so against the shared bottom
+   edge. Stated here rather than relied on, so a fourth control cannot drift. */
+.entity-type, .entity-copies, .entity-remove { box-sizing: border-box; }
+
+.entity-type {
+  flex-shrink: 0;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #111827;
+  font-size: 13px;
+}
+
+/* No label: a number beside "Protein" already reads as a count, and the word
+   pushed the box to the far end of the row away from the thing it counts. */
+.entity-copies {
+  /* ...and the width follows the box it is now measured in: 52 + 12 of padding
+     + the border was 66 on screen, so 66 keeps it exactly where it was. */
+  width: 66px;
+  height: 34px;
+  padding: 0 4px 0 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #111827;
+  font-size: 13px;
+}
+
+.entity-remove { flex-shrink: 0; height: 34px; }
+/* Disabled rather than hidden on the last row: a control that comes and goes
+   makes the row jump as entities are added. */
+.entity-remove:disabled { opacity: .35; cursor: default; }
+
+
+/* THE ACTIONS SIT IN THE PAGE HEAD, opposite the title - py2Dmol's own place
+   for controls that act on the whole page, and out of the entity list's way. */
+.page-head-fold {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* A control that is still readable and no longer does anything: Max MSA with
+   the MSA select on None. Hiding it instead would reflow the row on a change
+   that did not concern the controls beside it, and would take the depth a
+   reader set out of sight rather than out of use. */
+.fetch-option-disabled {
+  opacity: .45;
+  pointer-events: none;
+}
+
+/* The one button that appears inside the status line, when a fold is refused
+   for memory and the reader is offered the choice of lifting the ceiling.
+   Inline with the message rather than below it, because it belongs to that
+   sentence and a block-level button would move everything under the panel. */
+.status-action {
+  margin-left: 4px;
+  vertical-align: baseline;
+}
+
+
+/* THE MSA PANEL'S FILTER SLIDERS. 100px each, and the width was written inline
+   on both - which is a width no media query can reach, so the narrow rule that
+   trims them to 72 was silently losing. It is the same fault four times over on
+   this page; see the shell note in index.html. */
+.msa-filters input[type="range"] { width: 100px; }
+
+/* ============================================================================
+   THE NARROW LAYOUT
+   ----------------------------------------------------------------------------
+   What this file adds to py2Dmol's own narrow block, which is at the foot of
+   web/vendor/py2Dmol.app.css and does the shell: `.page-width` goes fluid, the
+   viewer and panel columns stack, the canvas becomes a square that follows its
+   container. Everything below is LocalFold's own controls, which that file has
+   never heard of.
+
+   🔴 SAME BREAKPOINT AS THE SHELL, 980px, and for the same reason: 600 + 8 +
+   340 is arithmetic, not styling. Two breakpoints would give a band where the
+   columns have stacked and the fold panel still thinks it has 948px.
+
+   🔴 AND THIS BLOCK MUST BE LAST IN THE FILE. Its declarations are the same
+   specificity as the ones they replace, so ORDER is the only thing deciding
+   them.
+
+   Measured by tools/mobile-layout.py at 320, 360 and 390, with 1200 as the
+   control - every rule here could as easily have made the desktop fluid.
+   ============================================================================ */
+@media (max-width: 980px) {
+
+  /* THE TITLE AND THE ACTIONS GET A LINE EACH WHEN THEY MUST. `.page-head-fold`
+     is `justify-content: space-between` with no wrap, so at 360 "LocalFold"
+     took the row and squeezed Add entity until its label broke across two lines
+     INSIDE the button - measured as 13px of scrollHeight past clientHeight,
+     which is what a box that states its height does instead of growing. */
+  .page-head-fold { flex-wrap: wrap; gap: 8px 12px; }
+
+  /* 🔴 THE SEQUENCE BOX GETS ITS OWN LINE, AND A GRID CANNOT GIVE IT ONE.
+     .entity-row is five tracks - type, copies, `1fr`, options, remove - so the
+     field is whatever the four fixed controls and four gaps leave: measured at
+     0px on a 320px phone and 10px at 360, with "PIA" set one letter per line.
+     Nothing above could see it. The row fits, the page fits, and the one
+     control this page exists for is unusable.
+
+     A WRAPPING FLEX ROW, because `order` drives flex line assignment and the
+     field is third in the DOM: it goes last and takes a line of its own, the
+     four small controls share the first. `1 0 100%` and not `1 1 100%` - shrink
+     is permission, and the flex algorithm will use it to squeeze the box back
+     up beside the buttons. */
+  .entity-row, .entity-row-ligand {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  /* WHICH CHILD IS "the field" DEPENDS ON THE TYPE. A protein row wraps its
+     textarea and the highlight mirror in an .entity-field box; a DNA or RNA row
+     has no mirror and appends the .entity-value itself. A ligand's value is
+     five characters and stays on the first line - it is its PICKER, the menu of
+     common codes, that needs the width. */
+  .entity-row > .entity-field,
+  .entity-row > .entity-value:not(.entity-value-ligand),
+  .entity-row > .entity-picker { order: 1; flex: 1 0 100%; min-width: 0; }
+  .entity-row > .entity-value-ligand { flex: 0 0 9ch; }
+  /* 🔴 AND A 52px BOX HOLDS TWO 13px LINES, NOT TWO 16px ONES. The height is
+     stated (a textarea's `rows` loses to it), and raising the font to keep
+     Safari from zooming left 34px of content box against 21.6px lines - one
+     line and a clipped half of the next, which reads as a rendering fault
+     rather than as a box you can scroll. 1.25 line-height and 6px of padding
+     put two whole lines in 56. */
+  .entity-value-protein {
+    height: 56px;
+    min-height: 56px;
+    padding: 6px 10px;
+    line-height: 1.25;
+  }
+  /* `1 1 auto` LEAVES A <select> AT ITS CONTENT WIDTH, which is 142px for
+     "Protein" - and 142 + 66 + 34 + 34 with three gaps is 294 against a 320px
+     phone's 272px row, so the remove button took a line of its own and the
+     sequence box a third. A zero basis makes it share what is left: 120px. */
+  .entity-type { flex: 1 1 0; min-width: 0; }
+
+  /* ...and the popup hangs off a 34px button at the right end of that row.
+     `min-width: 340px` with `right: 0` measured as spanning -79..287 on a
+     320px screen: the left third of it was off the side of the page, close
+     button included. Pinned to both edges of the row instead. */
+  .entity-popup { left: 0; right: 0; min-width: 0; }
+
+  /* 🔴 A SEPARATOR DRAWN ON EVERY GROUP BUT THE FIRST DANGLES THE MOMENT THE
+     ROW WRAPS. `.fetch-option-group + .fetch-option-group` is a left border,
+     which is correct on one line and becomes a rule hanging at the start of
+     lines two and three; `#msaModeGroup`'s `margin-left: auto` then opened a
+     hole in the middle of whichever line it landed on. Two even columns with
+     no rules at all, and the labels do the separating. */
+  /* 🔴 AND THREE ROWS OF LABEL-OVER-CONTROL IS 176px OF A 844px PHONE. Measured
+     at 390: the fold panel is 297px before the reader sees a structure, and the
+     options are 176 of it - three rows of 46 (a 13px title, a 4px gap and a
+     28px control) plus 20px of row gaps and 16 of padding.
+
+     THE CONTROLS ARE NOT TOUCHED. 28px is already small for a finger and the
+     16px text is what stops mobile Safari zooming the page on focus; what comes
+     off is the space around them. A 10px title on a 1.2 line box is 12px
+     instead of 13, the group gap 4 -> 2, the row gap 10 -> 8 and the options'
+     own padding 8/10 -> 6/8. Measured at 390: the options go 176 -> 156 and the
+     fold panel 297 -> 281, which is 16px of a 844px phone returned to the
+     structure. A `#fold-panel { padding }` rule was written here too and
+     removed: `--container-padding` is already 8px, so it saved nothing
+     vertically and cost 2px either side.
+
+     LABELS BESIDE THE CONTROLS WOULD BE THE BIG WIN AND DOES NOT FIT. Measured,
+     "AF2-multi" needs the whole 98px a third of a 390px row gives it, so
+     "MODEL" and its select cannot share a line - and moving to two columns
+     turns seven groups into four rows, which is worse and breaks the pairing
+     above. */
+  #foldOptions { gap: 8px 10px; padding: 6px 8px; }
+  #foldOptions > .fetch-option-group { min-width: 0; gap: 2px; }
+  #foldOptions .fetch-option-title {
+    font-size: 10px;
+    line-height: 1.2;
+    letter-spacing: 0.03em;
+    margin-bottom: 0;
+  }
+
+  /* 🔴 THE GROUPS ARE PAIRED BY MEANING, AND A BARE `flex-wrap` KNOWS NOTHING
+     ABOUT THAT. Two per line filled the row in DOM order and put Seed beside
+     Sampler and Steps beside MSA - controls from different questions sharing a
+     line, and the two halves of one question (MSA and Max MSA, Sampler and
+     Steps) split across two.
+
+     A FLEX LINE IS CHOSEN FROM BASES, so stating the basis IS stating the row:
+     three at a third fill line one exactly and the next item cannot follow
+     them; two at a half fill the next. The subtraction is the column gap's
+     share (12px over three items is 8, over two is 6) plus a pixel of slack,
+     because a line that fits EXACTLY is one sub-pixel from wrapping.
+
+     It holds when a group is hidden, which is the case that matters: AF2 has no
+     Sampler or Steps, so line two becomes MSA and Max MSA and nothing is
+     stranded. Groups that grow rather than merely fit is why `1 1` and not
+     `0 0` - a lone MSA select with Max MSA hidden takes the line. */
+  /* 🔴 AND THE PAIRS ARE NAMED BY THE READER, NOT BY THE DOM. Asked for
+     directly: Model with Seed, Recycles with Early Stop, MSA with Max MSA. The
+     bases say it - Model, its NUMBER (AlphaFold 2 only) and Seed are thirds, so
+     AF2 fills line one with the three and AF3, which hides the number, grows
+     Model and Seed into a half each. Recycles stays a third and Early Stop is a
+     half: 33 + 50 fits one line and nothing else can follow them, so the pair
+     is the line. AF3 hides Early Stop, and then Recycles joins Model and Seed
+     as the third of line one rather than stranding itself - which is why it is
+     a third and not a half. */
+  #modelGroup, #af2ModelGroup, #recyclesGroup, #seedGroup { flex: 1 1 calc(33.333% - 9px); }
+  #af3ModeGroup, #af3CountGroup,
+  /* ...and PLM is one of the halves, for the same reason MSA is: it is the
+     other half of the line Diffusion starts. Left out, it kept its content
+     width while Diffusion grew to fill the rest, so the two controls of one
+     question were different sizes on a phone. */
+  #plmGroup,
+  #toleranceGroup,
+  #msaModeGroup, #maxMsaGroup { flex: 1 1 calc(50% - 7px); }
+  #foldOptions > .fetch-option-group + .fetch-option-group,
+  #plmGroup,
+  #msaModeGroup {
+    border-left: 0;
+    padding-left: 0;
+    margin-left: 0;
+  }
+  #foldOptions select,
+  #foldOptions input[type="number"] { width: 100%; }
+  /* ...and 4px of the caret's gutter back, which is what "Search (remote)" -
+     the longest label in the panel - needs to finish inside a half-width
+     column at 16px. */
+  #foldOptions select { padding-right: 20px; }
+
+  /* 🔴 A 13px INPUT IS A PAGE THAT ZOOMS ITSELF ON FOCUS. Mobile Safari scales
+     the whole layout up when a focused field's text is under 16px, and it does
+     NOT scale back out afterwards - so tapping the sequence box leaves the
+     reader on a page they now have to pinch. 16px everywhere a caret can go.
+     The heights are unchanged; these controls are 34px either way. */
+  .entity-value,
+  .entity-copies,
+  .entity-picker,
+  #msa-text,
+  #foldOptions select,
+  #foldOptions input[type="number"] { font-size: 16px; }
+
+  /* 🔴 THE MSA PANEL IS 948px WIDE AND NO STYLESHEET CAN MAKE IT NARROWER.
+     py2Dmol's msa.js has `const MIN_CANVAS_WIDTH = 948`, clamps every canvas
+     width up to it, and writes the result as `container.style.width` - an
+     INLINE width, on a box created at runtime. So the panel is a 948px sibling
+     of the page's own shell, and at 320 it took the whole document with it:
+     the layout viewport settled at 972 and every other fix on this page was
+     rendered zoomed out to a third of its size.
+
+     WHAT IS OURS TO DO IS CONTAIN IT. `max-width` is a different property from
+     `width`, so a stylesheet rule beats the inline one without `!important`,
+     and the panel scrolls sideways INSIDE its own box instead of widening the
+     page. The canvas keeps its full CSS width against its own backing store, so
+     nothing is scaled and no letter is distorted - it is a wide picture in a
+     narrow window, which is what an alignment on a phone has to be.
+
+     Fixing it properly is a py2Dmol change: the floor has to follow the
+     container, the way that project's sequence strip already does. */
+  .msa-canvas {
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* ...and nothing to drag. The handle is revealed on :hover, which a touch
+       screen has not got. */
+    resize: none;
+  }
+  .msa-canvas .resize-handle { display: none; }
+
+  /* ...and the MSA panel's filter sliders, which are 100px each in a row that
+     also holds two labels, two readouts and a count. */
+  .msa-filters { flex-wrap: wrap; }
+  .msa-filters input[type="range"] { width: 72px; }
+}
+
+/* The template's own controls, inside the options popup. */
+.entity-popup-section { margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 10px; }
+/* 🔴 THE TEMPLATE SECTION RESERVES ITS TALLEST SHAPE, so choosing a source
+   does not move the menu that is choosing it. A PDB entry and an AlphaFold
+   accession add a text row and an upload adds a file row; "no template" and
+   "from the MSA search" have no control at all, and without this the popup
+   changed height by exactly one row - 28px, measured - under the cursor, which
+   on the last item moves the menu out from under the pointer.
+   The tallest of the five measures 103px including the section's own gaps, so
+   the content box is reserved at 92 and the popup is exactly the size its
+   largest source already made it. python3 tools/entity-popup.py is what says
+   so, and what said this number was wrong the moment the controls grew from
+   28px to 30 to match the rest of the popup. */
+.entity-popup-section-template { min-height: 92px; }
+.entity-template-kind { flex: 1 1 auto; min-width: 0; }
+/* ...and the alignment's menu is the same control, so it takes the same rule.
+   Without this it was a browser-default select beside a styled one: shorter,
+   a different font, and sized to its longest option rather than to the row. */
+.entity-msa-kind { flex: 1 1 auto; min-width: 0; }
+.entity-template-source { flex: 1 1 auto; min-width: 0; }
+/* The file input carries its own button, so it needs room to shrink rather
+   than a width - `min-width: 0` is what lets a flex child go below its
+   content's size at 320px. */
+.entity-template-file { flex: 1 1 auto; min-width: 0; padding: 4px 6px; }
+.entity-template-chain { flex: 0 0 72px; }
+.entity-template-status.error { color: #b91c1c; }
+.entity-popup-check { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 6px; }
+
+
+/* The model-parameters dialog. Native <dialog>, so the backdrop, the focus
+   trap and Escape come from the browser rather than from this stylesheet. */
+.terms-dialog {
+  max-width: 460px;
+  padding: 0;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, .24);
+  color: #111827;
+}
+.terms-dialog::backdrop { background: rgba(15, 23, 42, .45); }
+.terms-form { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px 14px; }
+.terms-title { margin: 0; font-size: 15px; font-weight: 600; }
+.terms-body { margin: 0; font-size: 12.5px; line-height: 1.5; color: #374151; }
+.terms-links { margin: 0; font-size: 11.5px; color: #6b7280; }
+.terms-links a { color: #2563eb; }
+.terms-note { margin: 0; font-size: 11px; color: #6b7280; }
+/* The chooser: which model to fold with instead. Its options are cloned from
+   the model row when the dialog opens, so this styles a list whose longest
+   label is not known here - hence min-width: 0 on the select, without which a
+   flex item refuses to shrink below its content and pushes the dialog wider
+   than the viewport. tools/model-terms.py measures that at 320px. */
+.terms-choice { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.terms-choice-label { font-size: 12.5px; color: #374151; }
+.terms-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  font-size: 12.5px;
+  color: #374151;
+}
+/* 🔴 THE ALTERNATIVE READS FIRST, and it is the one styled as the primary
+   action. A dialog whose only emphasis is on "I agree" is a toll gate; the
+   point of this one is that there is somewhere else to go. */
+.terms-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.terms-button {
+  flex: 1 1 auto;
+  min-width: 150px;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  font-size: 12.5px;
+  color: #374151;
+  cursor: pointer;
+}
+.terms-button:hover { background: #f3f4f6; }
+.terms-button-primary {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+.terms-button-primary:hover { background: #1d4ed8; }
+/* 🔴 FILLED, NOT OUTLINED. Beside a filled button an outlined one reads as
+   "cancel", and this is not a cancel - it is the other half of a choice. Red
+   says the terms come with conditions, not that the button is destructive. */
+.terms-button-caution {
+  border-color: #b91c1c;
+  background: #b91c1c;
+  color: #fff;
+}
+.terms-button-caution:hover { background: #991b1b; }
+/* A phone gets one button per line rather than two squeezed ones - see
+   tools/mobile-layout.py, which measures this rather than looking at it. */
+@media (max-width: 560px) {
+  .terms-dialog { max-width: calc(100vw - 24px); }
+  .terms-actions { flex-direction: column; }
+  .terms-button { min-width: 0; }
+}
+
+/* The saved-session line: one row, under the status line.
+   🔴 THE TEXT TRUNCATES AND THE BUTTONS DO NOT. It carries a sequence, which
+   is one unbreakable word of arbitrary length; letting the row shrink from the
+   right put Restore off the edge at 320px, which is the only control on it
+   that matters. min-width:0 is what lets the ellipsis engage at all - a flex
+   item's automatic minimum size is its CONTENT, not zero. */
+.session-row {
+  display: flex; align-items: center; gap: 8px;
+  min-width: 0; margin-top: 8px;
+  font-size: 12px;
+}
+.session-row[hidden] { display: none !important; }
+#session-text {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  opacity: 0.85;
+}
+#session-restore, #session-forget { flex: 0 0 auto; }
+
+/* 🔴 THE HINT UNDER THE ENTITY ROWS, which is the whole of the job-JSON
+   feature's discoverability. It is a line of text rather than a dashed drop
+   zone because the drop target is the WHOLE PAGE - a box drawn round part of
+   it would be a lie about where the file may be let go, and the one thing
+   worse than an undiscoverable feature is a visible one that says the wrong
+   thing about itself. Sized and coloured like the privacy note, which is the
+   page's other standing line of explanation. */
+.entity-hint {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #6b7280;
+}
+.entity-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  background: rgba(107, 114, 128, 0.12);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+
+/* 🔴 THERE WAS A `.result-pending` COVER HERE, AND IT IS GONE. A model
+   switch used to leave the previous model's structure, map, scores and
+   downloads on screen under the new model's name, so they were veiled - an
+   opaque panel over the result region, a rule for when it lifted, and a
+   list of which parts it covered. One fold at a time, each its own session,
+   means a switch starts a NEW session and the page is simply empty: there
+   is nothing stale to cover and no state to describe. See startNewSession
+   in web/app.js. */
+
+/* WHERE FOLD RUNS, AND WHETHER IT IS STILL THERE.
+   Only ever on a page opened from the notebook's link (?backend=native), and
+   built by web/native-bridge.js rather than marked up, so a page that folds in
+   this browser carries nothing of it. The dot is the pulse: green while the
+   runtime page is collecting its commands, amber once it has stopped - which
+   is the same twenty seconds after which a fold in flight gives up. */
+.native-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px 3px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  background: #fff;
+  font-size: 12px;
+  color: #374151;
+  white-space: nowrap;
+}
+.native-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9ca3af;
+  flex: 0 0 auto;
+}
+.native-status[data-state="live"] .native-dot { background: #22c55e; }
+.native-status[data-state="gone"] .native-dot { background: #f59e0b; }
+.native-status[data-state="gone"] { border-color: #fcd34d; background: #fffbeb; }
+
+/* ...and it sits BETWEEN the title and the actions, in a slot of its own: the
+   head is `space-between`, so a third child would push Fold and Add entity
+   out of the place a reader has already learnt. The slot takes the leftover
+   width and centres the badge in it, and gives it up entirely when the head
+   wraps on a narrow screen. */
+.native-live { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+.native-live input { margin: 0; }
+
+.native-status-slot {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+}
+@media (max-width: 948px) {
+  .native-status-slot { flex: 1 1 100%; justify-content: flex-start; }
+}
