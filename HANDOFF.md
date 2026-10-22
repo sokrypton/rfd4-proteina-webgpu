@@ -32,9 +32,14 @@ Large binary tensors (`weights/model.safetensors`, `weights/int8/*.bin`, and `or
    # Or download via huggingface-cli:
    huggingface-cli download nvidia/RFD4-Proteina model.safetensors --local-dir weights
    ```
-2. Generate the 16 block-64 INT8 browser shards (`weights/int8/shard_000..010.bin` and `weights/int8/encoder_shard_000..004.bin`) from `weights/model.safetensors` (~3 seconds on CPU):
+2. Generate the 16 block-64 INT8 browser shards (`weights/int8/shard_000..010.bin` and `weights/int8/encoder_shard_000..004.bin`) from `weights/model.safetensors` (~3 seconds on CPU, requires only `numpy`):
    ```bash
-   python3 tools/export_rfd4p_model.py --weights weights/model.safetensors --config weights/config.json --out weights/int8
+   python3 tools/export_rfd4p_model.py \
+     --input ./weights/model.safetensors \
+     --config ./weights/config.json \
+     --output ./weights/int8 \
+     --format int8 \
+     --shard-mb 32
    ```
 
 ### 2.2. Copy `oracle-dumps/` (~455 MB) for Differential Verification
