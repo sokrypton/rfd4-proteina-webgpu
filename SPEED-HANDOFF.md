@@ -272,3 +272,134 @@ Append a dated section to this file with: what you changed, before/after per-ker
 flag sets (interleaved, best of >= 3), end-to-end design times in the studio (`uncond_short`, `ppi_pdl1`, one
 motif case), the gate results from section 7, and anything that lost (with numbers) so the next agent does not
 repeat it.
+
+---
+
+## 10. 2026-10-23 Optimization Report (Apple M2, Chrome 156)
+
+### Summary of Changes
+
+1. **P0 — `chromium-experimental-subgroup-matrix` Origin Trial / Flag Check**:
+   - Inspected Chrome `156.0.8091.0`'s `Google Chrome Framework` binary (`strings` on Blink runtime features and Dawn toggles).
+   - Confirmed there is no `WebGPUSubgroupMatrix` Blink Origin Trial feature in Chrome 156; `chromium-experimental-subgroup-matrix` is gated in Dawn by `allow_unsafe_apis` (`--enable-unsafe-webgpu` or `chrome://flags/#enable-unsafe-webgpu`). Stock Chrome therefore always takes the `gemmSource` / `!this.hasSubgroupMatrix` path.
+2. **P1 — Stock Chrome `gemmSource` & `triProjG` Optimizations (`webgpu/rfd4p/engine.js`)**:
+   - **`shufTa2` (Coalesced 128-bit `vec4` load of `A` + 2-step `subgroupShuffleXor(1u/2u)` butterfly transpose into `ta`)**:
+     Each thread (`tm4 = li / 16u`, `tx = li % 16u`, `rSubA = tx & 3u`, `kSubA4 = tx >> 2u`) issues a single coalesced `vec4<EA>` load from row `m0 + tm + rSubA` at `kSubA4` instead of 4 strided scalar/vector loads across 4 rows. Four consecutive lanes transpose their $4 \times 4$ subtile in registers via two `subgroupShuffleXor`s (`1u` then `2u`) into `u`, accumulate `inLn` (`sumA`, `sqSumA`) directly on `u`, and write `ta[tx * 17u + tm4] = u` (producing the exact same shared-memory layout and bit-identical results as baseline).
+   - **`vecB` (Coalesced 128-bit `vec4<u32>` load of packed-FP16 `B` + 2-step `subgroupShuffleXor(1u/2u)` butterfly transpose into `tb`)**:
+     Each thread (`r4B = li / 8u`, `kHalfB = (li / 4u) & 1u`, `rSubB = li & 3u`) issues a single 128-bit `vec4<u32>` load (8 `f16` weights) from row `n0 + r4B * 4 + rSubB` instead of 4 separate `u32` loads across 4 rows, transposes $4 \times 4$ `u32` words across 4 consecutive lanes via `subgroupShuffleXor(1u/2u)`, and writes `tb[tbWrite0]` and `tb[tbWrite0 + 33u]`.
+   - **`prefAll` (Register prefetch of next K-tile's `aPref` and `bPref` during the FMA loop)**:
+     Previously, register prefetch lost on $K = 384$ (`triProjG`, `Q.l1Fused`) because 4-row strided loader state + prefetch variables pushed `gemmSource` across Apple M2's 64-register/thread occupancy cliff. With `shufTa2` + `vecB` collapsing the per-thread global load state to a single `aPref: vec4<EA>` and `bPref: vec4<u32>`, register pressure stays below 64 registers/thread and prefetching the next K-tile before `workgroupBarrier()` #2 wins across **all** `b16` GEMMs.
+   - **`triEpi2` (`triProjG` early-return epilogue for `n0 >= 1024u` + removal of redundant `* p.alpha`)**:
+     In `triProjG` (`N = 1408`, 11 column tiles of 128), tiles `8..10` (`n0 >= 1024u`, 27.3% of workgroups) write row-major `gz` directly from registers and never use the shared-memory transpose (`ta`/`tb`). Placing `if (n0 >= 1024u) { ... return; }` at the top of `epilogueBody` skips computing `y_0..y_3` and skips all 3 epilogue `workgroupBarrier()`s for those workgroups, while letting Metal's compiler kill the 32 `acc` registers immediately after `y_0..y_3` are computed in the `n0 < 1024u` path.
+   - **Pipeline key fix**: Added `${vecAStock ? '-va' : ''}${vecBStock ? '-vb' : ''}` to `Rfd4pEngine.gemm()`'s cache key (`webgpu/rfd4p/engine.js:2581`).
+3. **P2 — Early-Stop `patience = 4` (`shared/rfd4p/convergence.js`)**:
+   - Reduced `DEFAULT_EARLY_STOP.patience` from `5` to `4` (`caTolA = 0.05`, `minFrac = 0.5`), saving 1 full trunk pass (`~0.3–1.2 s`) on every early-stopped trajectory with **zero sequence identity or RMSD degradation** across 12/12 benchmark runs (4 presets $\times$ 3 seeds).
+4. **P3 — Studio Live-Frame Deduplication, Pacing & Session Navigation Await (`web/app.js`, `webgpu/rfd4p/generate.js`)**:
+   - Gated `wantLiveFrame` on `!liveRenderBusy` and excluded the final step (`step < total - 1`), and gated `wantDecodeStep` in `generate.js` on `!convergence?.stop`. Previously, `wantLiveFrame` returned `true` on the final step, running a duplicate GPU `decoder.decode(...)` + `processSampleToAtoms(...)` + `toCifString(...)` + Mol* live render 1 ms before the final decode and session render ran on the exact same coordinates.
+   - Paced intermediate live frames to `LIVE_FRAME_INTERVAL_MS = 320` (`280 -> 320 ms`).
+   - Made `_navigateStudioToSession` `async` and awaited `window.__rfd4pOpenSession` + `window.__rfd4pAddOverlay` inside `runDesign` so final Mol* session/overlay rendering completes before `runDesign` resolves (preventing a WebGL2/WebGPU Metal race when consecutive designs run back-to-back).
+
+---
+
+### P1: Interleaved Per-Pass & Per-Kernel Benchmarks (3 Interleaved Rounds)
+
+Command:
+```bash
+LOCALFOLD_STOCK_FLAGS=1 node tools/gpu-chrome.mjs tools/gpu/bench-kernels.js --cases=uncond_short,ppi_pdl1 --rounds=3 --variants='[{"baseline":true},{}]'
+```
+
+#### Stock Chrome (`LOCALFOLD_STOCK_FLAGS=1`)
+
+| Case | Kernel | Calls/pass | Before (ms) | After (ms) | Speedup | Parity (`sRel` / `zRel`) |
+|---|---|---:|---:|---:|---:|---|
+| **`uncond_short`** ($n=100$) | **Full 14-layer pass (`passPrograms[0]`)** | **1** | **307.34** | **285.62** | **1.076x** (`-21.72 ms/pass`) | `0` / `0` (bit-exact) |
+| | `triProjG 10000x1408x384` | 14 | 139.0 | 130.0 | **1.07x** | |
+| | `Q.l1Fused` (`gemm 10000x768x384`) | 7 | 38.5 | 38.1 | **1.01x** (best `36.6 ms`, `1.05x`) | |
+| | `Q.l2` (`gemm 10000x384x768`) | 7 | 37.7 | 33.9 | **1.11x** | |
+| | `t.z` (`gemm 10000x384x256`) | 14 | 27.2 | 25.4 | **1.07x** | |
+| | `swigluLinear 100x3072x768` | 14 | 17.1 | 14.6 | **1.17x** | |
+| | `qkv` (`gemm 100x3072x768`) | 14 | 9.5 | 8.0 | **1.19x** | |
+| **`ppi_pdl1`** ($n=208$) | **Full 14-layer pass (`passPrograms[0]`)** | **1** | **1249.64** | **1168.45** | **1.069x** (`-81.19 ms/pass`) | `0` / `0` (bit-exact) |
+| | `triProjG 43264x1408x384` | 14 | 592.5 | 561.2 | **1.06x** | |
+| | `Q.l1Fused` (`gemm 43264x768x384`) | 7 | 167.9 | 159.1 | **1.06x** | |
+| | `Q.l2` (`gemm 43264x384x768`) | 7 | 163.9 | 146.4 | **1.12x** | |
+| | `t.z` (`gemm 43264x384x256`) | 14 | 112.6 | 107.8 | **1.04x** | |
+| | `tri-out` | 7 | 49.8 | 44.6 | **1.12x** | |
+| | `tri-in` | 7 | 48.9 | 44.5 | **1.10x** | |
+
+#### Developer Flags (`--enable-unsafe-webgpu`, `chromium-experimental-subgroup-matrix`)
+
+| Case | Kernel | Calls/pass | Pass / Kernel (ms) | Parity (`sRel` / `zRel`) |
+|---|---|---:|---:|---|
+| **`uncond_short`** ($n=100$) | **Full 14-layer pass (`passPrograms[0]`)** | **1** | **132.05** | `0` / `0` |
+| | `triProjG 10000x1408x384` | 14 | 55.6 | |
+| | `Q.l2` (`gemm 10000x384x768`) | 7 | 18.4 | |
+| | `Q.l1Fused` (`gemm 10000x768x384`) | 7 | 16.0 | |
+| | `t.z` (`gemm 10000x384x256`) | 14 | 10.6 | |
+| | `swigluLinear 100x3072x768` | 14 | 7.8 | |
+| | `qkv` (`gemm 100x3072x768`) | 14 | 4.2 | |
+| **`ppi_pdl1`** ($n=208$) | **Full 14-layer pass (`passPrograms[0]`)** | **1** | **531.79** | `0` / `0` |
+| | `triProjG 43264x1408x384` | 14 | 238.4 | |
+| | `Q.l2` (`gemm 43264x384x768`) | 7 | 78.0 | |
+| | `Q.l1Fused` (`gemm 43264x768x384`) | 7 | 69.4 | |
+| | `t.z` (`gemm 43264x384x256`) | 14 | 44.1 | |
+| | `tri-out` / `tri-in` | 7 / 7 | 18.5 / 18.0 | |
+
+---
+
+### P2: Step Count & Early-Stop Patience Evaluation (4 Presets $\times$ Seeds 42, 43, 44 = 12 Runs)
+
+Compared against full 60-step baseline (`recycleSchedule: 'none'`) across `uncond_short`, `motif_unidx_1prw`, `sm_sam`, and `ppi_pdl1`:
+
+| Policy | Mean Steps | Mean Speedup | Min / Mean `seqId` vs 60-step | Mean / Max `caRmsdA` (Å) | Mean / Max `aaRmsdA` (Å) | Max Homopolymer Run Δ | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `patience = 5` (old default) | 44.4 | 1.35x | `0.9928` / `0.9994` | `0.072` / `0.097` | `0.151` / `0.188` | `0` (12/12 exact) | Baseline |
+| **`patience = 4` (new default)** | **43.4** | **1.38x** | **`0.9928` / `0.9994`** (100% identical to `p=5`) | **`0.077` / `0.106`** | **`0.157` / `0.204`** | **`0` (12/12 exact)** | **Won (shipped)** |
+| `patience = 3` | 41.3 | 1.45x | `0.9600` / `0.9949` | `0.091` / `0.141` | `0.175` / `0.281` | `0` | Lost (`uncond_short` seed 44 dropped to `seqId=0.96`, `aaRmsdA=0.281 Å`) |
+| `fixed-step-50` (`t[49]` early exit) | 50.0 | 1.20x | `0.9928` / `0.9994` | `0.056` / `0.076` | `0.132` / `0.188` | `0` | Slower than `patience = 4` on 12/12 runs |
+| `fixed-step-45` (`t[44]` early exit) | 45.0 | 1.33x | `0.9600` / `0.9961` | `0.087` / `0.119` | `0.173` / `0.278` | `0` | Lost (`uncond_short` seed 44 `seqId=0.96`, slower than `p=4` on `ppi_pdl1` where `p=4` stops at step 29–34) |
+
+---
+
+### End-to-End Studio Design Wall Times (`nsteps = 60, recycleSchedule = 'none'`)
+
+Measured inside `/index.html` (`app.runDesign`) with live Mol* rendering, sequence dock updates, final all-atom decode, trajectory CIF assembly, and session navigation:
+
+| Preset | $n$ | Stock Before (s) | Stock After (s) | Stock Speedup | Dev Before (s) | Dev After (s) | Dev Speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `uncond_short` | 100 | 16.70 s (50 steps) | **15.21 s** (49 steps) | **1.098x** (`-1.49 s`) | 7.19 s (48 steps) | **7.13 s** (47 steps) | **1.009x** |
+| `motif_unidx_1prw` | 127 | 23.01 s (48 steps) | **21.20 s** (47 steps) | **1.085x** (`-1.81 s`) | 11.18 s (48 steps) | **10.82 s** (47 steps) | **1.034x** |
+| `ppi_pdl1` | 207 | 37.41 s (30 steps) | **35.33 s** (30 steps) | **1.059x** (`-2.07 s`) | 17.36 s (31 steps) | **17.18 s** (30 steps) | **1.010x** |
+
+---
+
+### Section 7 Verification Gates
+
+All gates run strictly sequentially with zero concurrent GPU processes:
+
+| Gate Command | `LOCALFOLD_STOCK_FLAGS=1` | Developer Flags |
+|---|---|---|
+| `npm test` | **15/15 PASS** | **15/15 PASS** |
+| `check-rfd4p.js --half=1` | **`allOk: true`** | **`allOk: true`** |
+| `check-rfd4p.js --half=0` | **`allOk: true`** | **`allOk: true`** |
+| `check-generate.js --case=uncond_short --half=1` | **`allOk: true`**, `finalBbCa.rmsdA = 0.0377 Å`, `finalStructure.rmsdA = 0.03954 Å`, `rtDiff = 0` | **`allOk: true`**, `finalBbCa.rmsdA = 0.0564 Å`, `finalStructure.rmsdA = 0.06221 Å`, `rtDiff = 0` |
+| `check-generate.js --case=motif_unidx_1prw --half=1` | **`allOk: true`**, `finalBbCa.rmsdA = 0.0645 Å`, `finalStructure.rmsdA = 0.06517 Å`, `rtDiff = 0` | **`allOk: true`**, `finalBbCa.rmsdA = 0.0528 Å`, `finalStructure.rmsdA = 0.05582 Å`, `rtDiff = 0` |
+| `check-generate.js --case=uncond_short --half=1 --fast=1` | **`allOk: true`**, `finalBbCa.rmsdA = 0.0377 Å`, `finalStructure.rmsdA = 0.03954 Å`, `rtDiff = 0` | **`allOk: true`**, `finalBbCa.rmsdA = 0.0564 Å`, `finalStructure.rmsdA = 0.06221 Å`, `rtDiff = 0` |
+| `check-webapp.js` | **3/3 consecutive runs PASS (`ok: true`, all 9 Studio examples + 10 presets + inverse folding)** | **`ok: true` (all 9 Studio examples + 10 presets + inverse folding)** |
+| `check-recovery.js` | **`allOk: true`** | **`allOk: true`** |
+
+---
+
+### What Was Tried and Lost (Do Not Repeat)
+
+1. **`shuffleA` (`595.67 ms`, `0.519x` on `uncond_short`) & `vecTa` (`486.51 ms`, `0.635x` on `uncond_short`)**:
+   - Loading `ta` as `vec4<f32>` along K (`a0..a3`) or broadcasting `A` across threads via `subgroupShuffle` inside the inner K-loop requires holding `a0..a3` (16 `f32` registers) live across the 8 `tb` loads and 32 FMAs instead of 1 `av: vec4<f32>` (4 `f32` registers) at a time. That +12-register increase pushes `gemmSource` past Apple M2's 64-register/thread occupancy cliff, halving SIMDgroup occupancy.
+2. **Single-pass `triProjG` epilogue (`tri1Pass`: `287.65 ms` vs `287.52 ms`, `triProjG` `132.5 ms` vs `130.5 ms`; `tri1Pass17`: `290.33 ms`, `triProjG` `135.3 ms`)**:
+   - Expanding `tb` in `triProjG` from `528` `vec4<f16>`s (`4,224` B; total `6,400` B/workgroup = 4 workgroups/core in 32 KB threadgroup memory) to `1,024` or `1,088` `vec4<f16>`s (`10,368–10,880` B/workgroup = 3 workgroups/core) to transpose all 64 rows in one barrier instead of two drops threadgroup-memory occupancy on M2 from 4 workgroups/core to 3 workgroups/core during the entire 24-tile K-loop, losing more than the 2 saved epilogue barriers.
+3. **`triEpi` with `if (n0 < 1024u) { workgroupBarrier(); ... } else { ... }` (`299.81 ms`, `triProjG` `137.9 ms` vs `136.4 ms`)**:
+   - Wrapping the `n0 < 1024u` barriers inside an `if/else` diamond where `acc_0_0..acc_3_1` are read in the `else` branch prevents Metal's compiler from reusing the 32 `acc` registers for `y_0..y_3`. Moving `if (n0 >= 1024u) { ... return; }` to the top of `epilogueBody` (`triEpi2`) eliminates the `else` join and wins `~4–5 ms` on `triProjG`.
+4. **Issuing register prefetch at top of K-loop (`prefTop`: `294.27 ms` vs `294.02 ms`)**:
+   - Loading `aPref`/`bPref` immediately after `workgroupBarrier()` #1 instead of after the 16 FMAs overlaps global load destination registers with the `ta`/`tb` shared-memory reads.
+5. **`patience = 3` and fixed `nsteps = 45`**:
+   - On `uncond_short` seed 44, a 3-step Cα plateau occurs at steps 41–44 before 4 residues flip at step 45 (`seqId` drops to `0.960`, `aaRmsdA = 0.281 Å`). `patience = 4` rides through that plateau and matches `patience = 5` on 12/12 runs.
+

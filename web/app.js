@@ -541,7 +541,7 @@ class Rfd4pStudioApp {
     });
   }
 
-  _navigateStudioToSession(sessionId, { withTrajectory = false } = {}) {
+  async _navigateStudioToSession(sessionId, { withTrajectory = false } = {}) {
     if (!sessionId) return;
     const trajUrl = withTrajectory
       ? `/api/v1/sessions/${encodeURIComponent(sessionId)}/trajectory.cif`
@@ -550,13 +550,15 @@ class Rfd4pStudioApp {
       console.warn('AtomWorks Studio is not ready; cannot open session', sessionId);
       return;
     }
-    const opened = window.__rfd4pOpenSession(sessionId, trajUrl);
-    // Display-only reference motif beside a finished motif-scaffolding design (not part of the saved document).
-    const overlayCif = this.generatedViews.get(sessionId)?.overlayCif;
-    if (overlayCif) {
-      Promise.resolve(opened)
-        .then(() => window.__rfd4pAddOverlay?.(overlayCif, 'motif.cif'))
-        .catch((err) => console.warn('Motif overlay failed:', err));
+    try {
+      await window.__rfd4pOpenSession(sessionId, trajUrl);
+      // Display-only reference motif beside a finished motif-scaffolding design (not part of the saved document).
+      const overlayCif = this.generatedViews.get(sessionId)?.overlayCif;
+      if (overlayCif) {
+        await window.__rfd4pAddOverlay?.(overlayCif, 'motif.cif');
+      }
+    } catch (err) {
+      console.warn('Motif overlay failed:', err);
     }
   }
 
@@ -985,8 +987,9 @@ class Rfd4pStudioApp {
         // Asked before the step's trunk pass, so predict whether a render will be due once it finishes.
         let lastStepEnd = performance.now();
         let lastStepMs = 0;
+        const LIVE_FRAME_INTERVAL_MS = 320;
         const wantLiveFrame = (step, total) =>
-          step === 0 || step === total - 1 || performance.now() + lastStepMs - lastLiveRenderTime >= 180;
+          !liveRenderBusy && (step === 0 || (step < total - 1 && performance.now() + lastStepMs - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS));
         const motifOverlay = buildMotifOverlayAtoms(atoms);
         const motifOverlayCif = motifOverlay.length
           ? toCifString(motifOverlay, { dataBlockName: 'motif' }) + entityCif(motifOverlay, new Set([0]))
@@ -1043,8 +1046,8 @@ class Rfd4pStudioApp {
           });
 
           const now = performance.now();
-          const isFirstOrLast = info.step === 0 || info.step === info.nsteps - 1;
-          if (!liveRenderBusy && (isFirstOrLast || now - lastLiveRenderTime >= 180)) {
+          const isStopping = info.step > 0 && (info.step === info.nsteps - 1 || Boolean(info.convergence?.stop));
+          if (!liveRenderBusy && !isStopping && (info.step === 0 || now - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS)) {
             if (typeof window.__rfd4pRenderLiveFrame === 'function') {
               const liveCif = liveAllAtomCif(info) ?? buildLiveFrameCifFromCa(alignedCaNm, tokens, null, UNIFIED_ATOM37_TOKENS);
               if (liveCif) {
@@ -1140,7 +1143,7 @@ class Rfd4pStudioApp {
         this._renderDesignResultsRow(viewChoices, firstDesignChoice.sessionId);
         this.studioSessionId = firstDesignChoice.sessionId;
         const viewInfo = this.generatedViews.get(firstDesignChoice.sessionId);
-        this._navigateStudioToSession(firstDesignChoice.sessionId, {
+        await this._navigateStudioToSession(firstDesignChoice.sessionId, {
           withTrajectory: Boolean(viewInfo?.hasTrajectory),
         });
       }

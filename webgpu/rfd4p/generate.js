@@ -332,7 +332,7 @@ export class Rfd4pGeneratorGpu {
         const convergence = monitor?.observe(s, out.x1.bb_ca, sequenceForDecoder(batch, n, lastLogits)) ?? null;
         if (opts.onStep) {
           let liveDecoded = null;
-          if (wantDecodeStep) {
+          if (wantDecodeStep && (!convergence?.stop || decodeEvery > 0)) {
             const liveSeq = sequenceForDecoder(batch, n, lastLogits);
             const dec = await this.decoder.decode(batch, { n, caNm: out.x1.bb_ca, z: out.x1.local_latents, seq: liveSeq });
             liveDecoded = formatSampleLocalLatents(batch, { n, caNm: out.x1.bb_ca, decoded: dec });
@@ -398,7 +398,7 @@ export class Rfd4pGeneratorGpu {
       const convergence = monitor?.observe(s, x1.bb_ca, sequenceForDecoder(batch, n, lastLogits)) ?? null;
       if (opts.onStep) {
         let liveDecoded = null;
-        if (wantDecodeStep) {
+        if (wantDecodeStep && (!convergence?.stop || decodeEvery > 0)) {
           const liveSeq = sequenceForDecoder(batch, n, lastLogits);
           const dec = await this.decoder.decode(batch, { n, caNm: x1.bb_ca, z: x1.local_latents, seq: liveSeq });
           liveDecoded = formatSampleLocalLatents(batch, { n, caNm: x1.bb_ca, decoded: dec });

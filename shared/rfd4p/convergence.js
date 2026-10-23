@@ -12,7 +12,7 @@ import { superimposeCoords3D } from './output.js';
 
 export const DEFAULT_EARLY_STOP = {
   /** consecutive converged steps required */
-  patience: 5,
+  patience: 4,
   /** max Kabsch Cα RMSD (Å) between consecutive x1 estimates to count as converged */
   caTolA: 0.05,
   /** never stop before this fraction of the schedule */

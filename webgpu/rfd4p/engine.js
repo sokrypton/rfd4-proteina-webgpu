@@ -30,14 +30,21 @@ export function fold2(groups) {
  * padded to 17 and 33 vec4s per k-row to eliminate shared-memory bank conflicts.
  * `half` B: float16 packed along k (sBk = 1, even offsets); `b16`: B panel staged as vec4<f16>.
  */
-function gemmSource(half, b16 = false, pair = null, gate = false, aF16 = false, cF16 = false, gF16 = false, fullK = false, vecEpilogue = false, addOnly = false, gSigm = true, hasAlpha = false, hasBias = false, actType = 0, acc = false, inLn = false) {
+function gemmSource(half, b16 = false, pair = null, gate = false, aF16 = false, cF16 = false, gF16 = false, fullK = false, vecEpilogue = false, addOnly = false, gSigm = true, hasAlpha = false, hasBias = false, actType = 0, acc = false, inLn = false, variant = null, vecA = false, vecB = false) {
   const rows = [0, 1, 2, 3];
   const EA = aF16 ? 'f16' : 'f32';
   const EB = b16 ? 'f16' : 'f32';
+  const isBase = Boolean(variant?.baseline);
+  const useShufTa2 = Boolean(!isBase && (variant?.shufTa2 ?? true) && vecA);
+  const useShufTa = useShufTa2;
+  const useVecB = Boolean(!isBase && (variant?.vecB ?? true) && vecB && half);
+  const usePrefA = Boolean(!isBase && (variant?.prefAll ?? true) && useShufTa && useVecB && b16);
+  const usePrefB = Boolean(!isBase && (variant?.prefAll ?? true) && useVecB && b16);
   const EC = (vecEpilogue || pair?.cVec4) ? ((pair?.cF16 ?? cF16) ? 'vec2<u32>' : 'vec4<f32>') : ((pair?.cF16 ?? cF16) ? 'f16' : 'f32');
   const EG = vecEpilogue ? (gF16 ? 'vec2<u32>' : 'vec4<f32>') : (gF16 ? 'f16' : 'f32');
   const useF16 = b16 || aF16 || cF16 || gF16 || Boolean(pair?.cF16);
-  return `${useF16 ? 'enable f16;\n' : ''}${inLn ? 'enable subgroups;\n' : ''}
+  const useSubgroups = inLn || useShufTa || useVecB;
+  return `${useF16 ? 'enable f16;\n' : ''}${useSubgroups ? 'enable subgroups;\n' : ''}
 struct P { m: u32, n: u32, k: u32, b1: u32,
   offA: u32, sA0: u32, sA1: u32, sAm: u32, sAk: u32,
   offB: u32, sB0: u32, sB1: u32, sBn: u32, sBk: u32,
@@ -45,8 +52,8 @@ struct P { m: u32, n: u32, k: u32, b1: u32,
   bias: u32, act: u32, accumulate: u32, alpha: f32, batches: u32,
   gOff: u32, gStride: u32, gSigm: u32, pad0: u32 };
 @group(0) @binding(0) var<uniform> p: P;
-@group(0) @binding(1) var<storage, read> a: array<${EA}>;
-@group(0) @binding(2) var<storage, read> b: array<${half ? 'u32' : 'f32'}>;
+@group(0) @binding(1) var<storage, read> a: array<${useShufTa ? `vec4<${EA}>` : EA}>;
+@group(0) @binding(2) var<storage, read> b: array<${useVecB ? 'vec4<u32>' : (half ? 'u32' : 'f32')}>;
 @group(0) @binding(3) var<storage, read_write> c: array<${EC}>;
 @group(0) @binding(4) var<storage, read> bias: array<${vecEpilogue ? 'vec4<f32>' : 'f32'}>;
 ${gate ? `@group(0) @binding(5) var<storage, read> gsc: array<${EG}>;` : ''}
@@ -59,8 +66,8 @@ fn pack4f16(v: vec4<f32>) -> vec2<u32> {
 ${pair ? `${pair.decls ?? ''}
 fn bRow(v: u32) -> u32 { ${pair.bRow ?? 'return v;'} }
 ${pair.body}` : 'fn bRow(v: u32) -> u32 { return v; }'}
-var<workgroup> ta: array<vec4<${EB}>, 272>;
-var<workgroup> tb: array<vec4<${EB}>, 528>;
+var<workgroup> ta: array<vec4<${EB}>, ${16 * 17}>;
+var<workgroup> tb: array<vec4<${EB}>, ${16 * 33}>;
 @compute @workgroup_size(256)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
   let tilesN = (p.n + 127u) / 128u;
@@ -86,13 +93,25 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   var acc_2_0 = vec4<f32>(0.0); var acc_2_1 = vec4<f32>(0.0);
   var acc_3_0 = vec4<f32>(0.0); var acc_3_1 = vec4<f32>(0.0);
   ${inLn ? 'var sumA = vec4<f32>(0.0);\n  var sqSumA = vec4<f32>(0.0);' : ''}
-  let kkA = li % 16u;
+  ${useShufTa2 ? `let rSubA = tx & 3u;
+  let kSubA4 = tx >> 2u;
+  let rowA = m0 + tm + rSubA;
+  let aValid = inBatch && (rowA < p.m);
+  let aBase4 = (baseA + min(rowA, p.m - 1u) * p.sAm) / 4u + kSubA4;
+  let taWrite = tx * 17u + tm4;` : `let kkA = li % 16u;
   let r4A = li / 16u;
   let rowA0 = m0 + r4A * 4u;
   let aBase0 = baseA + rowA0 * p.sAm + kkA * p.sAk;
   let fullA = rowA0 + 3u < p.m;
-  let taWrite = kkA * 17u + r4A;
-  ${half ? `let kkB = (li % 8u) * 2u;
+  let taWrite = kkA * 17u + r4A;`}
+  ${useVecB ? `let r4B = li / 8u;
+  let kHalfB = (li / 4u) & 1u;
+  let rSubB = li & 3u;
+  let rowB = n0 + r4B * 4u + rSubB;
+  let bValid = inBatch && (rowB < p.n);
+  let bBase8 = (baseB + bRow(min(rowB, p.n - 1u)) * p.sBn) / 8u + kHalfB;
+  let kkB = kHalfB * 8u + rSubB * 2u;
+  let tbWrite0 = kkB * 33u + r4B;` : half ? `let kkB = (li % 8u) * 2u;
   let r4B = li / 8u;
   let rowB0 = n0 + r4B * 4u;
   let bRowBase = baseB + bRow(rowB0) * p.sBn;
@@ -101,9 +120,22 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   let fullB = rowB0 + 3u < p.n;
   let tbWrite0 = kkB * 33u + r4B;
   let tbWrite1 = (kkB + 1u) * 33u + r4B;` : ''}
+  ${usePrefA ? `var aPref = select(vec4<${EA}>(0.0), a[aBase4], aValid);` : ''}
+  ${usePrefB ? `var bPref = select(vec4<u32>(0u), b[bBase8], bValid);` : ''}
   for (var k0 = 0u; k0 < p.k; k0 += 16u) {
     ${fullK ? '' : 'let fullK = inBatch && (k0 + 16u <= p.k);'}
-    {
+    ${useShufTa ? `{
+      let aVec = ${usePrefA ? 'aPref' : `select(vec4<${EA}>(0.0), a[aBase4 + k0 / 4u], aValid)`};
+      let av = vec4<${EB}>(aVec);
+      let s0 = select(vec2<${EB}>(av.x, av.z), vec2<${EB}>(av.y, av.w), (rSubA & 1u) == 0u);
+      let q0 = subgroupShuffleXor(s0, 1u);
+      let t = select(vec4<${EB}>(av.x, q0.x, av.z, q0.y), vec4<${EB}>(q0.x, av.y, q0.y, av.w), (rSubA & 1u) != 0u);
+      let s1 = select(t.xy, t.zw, (rSubA & 2u) == 0u);
+      let q1 = subgroupShuffleXor(s1, 2u);
+      let u = select(vec4<${EB}>(t.xy, q1), vec4<${EB}>(q1, t.zw), (rSubA & 2u) != 0u);
+      ${inLn ? 'let vf = vec4<f32>(u); sumA += vf; sqSumA += vf * vf;' : ''}
+      ta[taWrite] = u;
+    }` : `{
       var v = vec4<${EB}>(0.0);
       if (${fullK ? 'inBatch' : 'fullK || (inBatch && k0 + kkA < p.k)'}) {
         let aOff = aBase0 + k0${fullK ? '' : ' * p.sAk'};
@@ -118,8 +150,27 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
       }
       ${inLn ? 'let vf = vec4<f32>(v); sumA += vf; sqSumA += vf * vf;' : ''}
       ta[taWrite] = v;
-    }
-    ${half ? `{
+    }`}
+    ${useVecB ? `{
+      let w = ${usePrefB ? 'bPref' : `select(vec4<u32>(0u), b[bBase8 + k0 / 8u], bValid)`};
+      let s0 = select(vec2<u32>(w.x, w.z), vec2<u32>(w.y, w.w), (rSubB & 1u) == 0u);
+      let q0 = subgroupShuffleXor(s0, 1u);
+      let t = select(vec4<u32>(w.x, q0.x, w.z, q0.y), vec4<u32>(q0.x, w.y, q0.y, w.w), (rSubB & 1u) != 0u);
+      let s1 = select(t.xy, t.zw, (rSubB & 2u) == 0u);
+      let q1 = subgroupShuffleXor(s1, 2u);
+      let u = select(vec4<u32>(t.xy, q1), vec4<u32>(q1, t.zw), (rSubB & 2u) != 0u);
+      ${b16 ? `let p0 = bitcast<vec2<f16>>(u.x);
+      let p1 = bitcast<vec2<f16>>(u.y);
+      let p2 = bitcast<vec2<f16>>(u.z);
+      let p3 = bitcast<vec2<f16>>(u.w);
+      tb[tbWrite0] = vec4<f16>(p0.x, p1.x, p2.x, p3.x);
+      tb[tbWrite0 + 33u] = vec4<f16>(p0.y, p1.y, p2.y, p3.y);` : `let p0 = unpack2x16float(u.x);
+      let p1 = unpack2x16float(u.y);
+      let p2 = unpack2x16float(u.z);
+      let p3 = unpack2x16float(u.w);
+      tb[tbWrite0] = vec4<f32>(p0.x, p1.x, p2.x, p3.x);
+      tb[tbWrite0 + 33u] = vec4<f32>(p0.y, p1.y, p2.y, p3.y);`}
+    }` : half ? `{
       var lo = vec4<${EB}>(0.0);
       var hi = vec4<${EB}>(0.0);
       if (${fullK ? 'inBatch' : 'fullK'}) {
@@ -210,6 +261,12 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
       acc_2_0 = fma(vec4<f32>(av.z), bv0, acc_2_0); acc_2_1 = fma(vec4<f32>(av.z), bv1, acc_2_1);
       acc_3_0 = fma(vec4<f32>(av.w), bv0, acc_3_0); acc_3_1 = fma(vec4<f32>(av.w), bv1, acc_3_1);
     }`).join('\n    ')}
+    ${usePrefA || usePrefB ? `{
+      let nextK = k0 + 16u;
+      let hasNext = nextK < p.k;
+      ${usePrefA ? `aPref = select(vec4<${EA}>(0.0), a[aBase4 + nextK / 4u], aValid && hasNext);` : ''}
+      ${usePrefB ? `bPref = select(vec4<u32>(0u), b[bBase8 + nextK / 8u], bValid && hasNext);` : ''}
+    }` : ''}
     workgroupBarrier();
   }
   ${inLn ? `sumA += subgroupShuffleXor(sumA, 1u);
@@ -2481,6 +2538,9 @@ export class Rfd4pEngine {
     const cF16 = this.hasF16 && spec.cF16 === true;
     const gF16 = this.hasF16 && hasGate && spec.gate?.f16 === true;
     const wordB = half || (aF16 && B.k === 1 && B.n % 2 === 0 && B.off % 2 === 0 && B.s0 % 2 === 0 && B.s1 % 2 === 0);
+    const vecBStock = wordB &&
+      B.k === 1 && B.n % 8 === 0 && B.off % 8 === 0 && B.s0 % 8 === 0 && B.s1 % 8 === 0 &&
+      k % 16 === 0;
     const vecB = submat && half &&
       B.k === 1 && B.n % 8 === 0 && B.off % 8 === 0 && B.s0 % 8 === 0 && B.s1 % 8 === 0 &&
       (k % 16 === 0 || spec.b.stride === B.n);
@@ -2502,6 +2562,7 @@ export class Rfd4pEngine {
       (!hasGate || ((spec.gate.off ?? 0) % 4 === 0 && (spec.gate.stride ?? n) % 4 === 0));
     const vecEpilogue = vecC;
     const fullK = k % 16 === 0 && A.k === 1;
+    const vecAStock = fullK && A.m % 4 === 0 && A.off % 4 === 0 && A.s0 % 4 === 0 && A.s1 % 4 === 0;
     const useGemv = this.hasF16 && half && !aF16 && !cF16 && !gF16 && !spec.pair && vecC &&
       (m === 1 || m === 2) && k % 128 === 0 && k <= 1024 &&
       A.k === 1 && A.off % 4 === 0 && A.s0 % 4 === 0 && A.s1 % 4 === 0 && A.m % 4 === 0 &&
@@ -2516,10 +2577,11 @@ export class Rfd4pEngine {
         spec.label ?? `gemm ${m}x${n}x${k}${B0 * B1 > 1 ? `[${B0 * B1}]` : ''}`);
     }
     const inLn = (submat ? (vecIO && (vecEpilogue || Boolean(spec.pair))) : (fullK && vecEpilogue && !small)) && spec.inNorm === 'ln';
-    const key = `${small ? 'gemm-s' : 'gemm'}${submat ? `-sm${this.submat8 ? '8' : ''}${half ? '-h' : '-f'}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${vecIO ? '-v' : (vecB ? '-vb' : '')}${vecEpilogue ? '-ve' : ''}${inLn ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate && addOnly ? '-ga' : (hasGate && !gSigm ? '-gns' : '')}` : `${wordB ? '-h' : ''}${b16 ? '-b16' : ''}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${fullK ? '-fk' : ''}${vecEpilogue ? '-ve' : ''}${inLn ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate && addOnly ? '-ga' : (hasGate && !gSigm ? '-gns' : '')}`}${spec.pair ? `-p-${spec.pair.key}` : ''}${hasGate ? `-g${gF16 ? '16' : ''}` : ''}`;
+    const vKey = !submat && !small && this.gemmVariant ? `-v${JSON.stringify(this.gemmVariant)}` : '';
+    const key = `${small ? 'gemm-s' : 'gemm'}${submat ? `-sm${this.submat8 ? '8' : ''}${half ? '-h' : '-f'}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${vecIO ? '-v' : (vecB ? '-vb' : '')}${vecEpilogue ? '-ve' : ''}${inLn ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate && addOnly ? '-ga' : (hasGate && !gSigm ? '-gns' : '')}` : `${wordB ? '-h' : ''}${b16 ? '-b16' : ''}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${fullK ? '-fk' : ''}${vecAStock ? '-va' : ''}${vecBStock ? '-vb' : ''}${vecEpilogue ? '-ve' : ''}${inLn ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate && addOnly ? '-ga' : (hasGate && !gSigm ? '-gns' : '')}${vKey}`}${spec.pair ? `-p-${spec.pair.key}` : ''}${hasGate ? `-g${gF16 ? '16' : ''}` : ''}`;
     const src = submat
       ? gemmSubmatSource(spec.pair ?? null, hasGate, half, small ? 32 : 64, vecIO, aF16, gF16, cF16, addOnly, gSigm, hasAlpha, hasBias, actType, acc === 1, vecIO || vecB, vecEpilogue, inLn, this.submat8)
-      : (small ? gemmSmallSource(wordB, b16, hasGate, aF16, cF16, gF16) : gemmSource(wordB, b16, spec.pair ?? null, hasGate, aF16, cF16, gF16, fullK, vecEpilogue, addOnly, gSigm, hasAlpha, hasBias, actType, acc === 1, inLn));
+      : (small ? gemmSmallSource(wordB, b16, hasGate, aF16, cF16, gF16) : gemmSource(wordB, b16, spec.pair ?? null, hasGate, aF16, cF16, gF16, fullK, vecEpilogue, addOnly, gSigm, hasAlpha, hasBias, actType, acc === 1, inLn, this.gemmVariant, vecAStock, vecBStock));
     const bufs = [spec.a, spec.b, spec.c, spec.bias ?? this.dummy, ...(hasGate ? [spec.gate.sc] : []), ...(spec.pair?.buffers ?? [])];
     return this.step(key, src, groups, bufs, u,
       spec.label ?? `gemm ${m}x${n}x${k}${B0 * B1 > 1 ? `[${B0 * B1}]` : ''}`);
@@ -2768,6 +2830,7 @@ export class Rfd4pEngine {
       const shArr = useTbOut ? 'tb' : 'shOut';
       const shType = useTbOut ? 'f16' : t;
       const gzT = f16Out ? 'vec2<u32>' : 'vec4<f32>';
+      const triEpi2 = !this.gemmVariant?.baseline && (this.gemmVariant?.triEpi2 ?? true);
       return this.gemm({
         m: rows, n: 1408, k: 384, a: x, b: w, c: aT, bias: wSum ?? undefined, inNorm: inLn ? 'ln' : '', noSmall: true, aF16, pad0: incoming ? n : 0,
         A: { off: 0, m: 384, k: 1 }, B: { off: 0, n: 384, k: 1 }, C: { off: 0, s0: n * nPad, m: nPad, n },
@@ -2779,7 +2842,69 @@ export class Rfd4pEngine {
           decls: `@group(0) @binding(5) var<storage, read_write> gz: array<${gzT}>;
 @group(0) @binding(6) var<storage, read_write> bT: array<${t}>;${submat || useTbOut ? '' : `\nvar<workgroup> shOut: array<vec4<${t}>, 512>;`}`,
           body: '',
-          epilogueBody: submat ? undefined : `let y_0 = (acc_0_0 * p.alpha) / (vec4<f32>(1.0) + exp(-(acc_0_1 * p.alpha)));
+          epilogueBody: submat ? undefined : (triEpi2 ? `if (n0 >= 1024u) {
+    if (inBatch) {
+      let nColOff4 = (n0 - 1024u) / 4u + tx;
+      ${[0, 1, 2, 3].map((i) => `{
+        let mRow = m0 + tm + ${i}u;
+        if (mRow < p.m) {
+          let g0 = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-acc_${i}_0));
+          let g1 = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-acc_${i}_1));
+          let mOut = select(mRow, (mRow % p.pad0) * p.pad0 + (mRow / p.pad0), p.pad0 != 0u);
+          let base4 = mOut * 96u + nColOff4;
+          gz[base4] = ${f16Out ? 'vec2<u32>(bitcast<u32>(vec2<f16>(g0.xy)), bitcast<u32>(vec2<f16>(g0.zw)))' : 'g0'};
+          gz[base4 + 16u] = ${f16Out ? 'vec2<u32>(bitcast<u32>(vec2<f16>(g1.xy)), bitcast<u32>(vec2<f16>(g1.zw)))' : 'g1'};
+        }
+      }`).join('\n      ')}
+    }
+    return;
+  }
+  let y_0 = acc_0_0 / (vec4<f32>(1.0) + exp(-acc_0_1));
+  let y_1 = acc_1_0 / (vec4<f32>(1.0) + exp(-acc_1_1));
+  let y_2 = acc_2_0 / (vec4<f32>(1.0) + exp(-acc_2_1));
+  let y_3 = acc_3_0 / (vec4<f32>(1.0) + exp(-acc_3_1));
+  if (tx < 8u) {
+    let c0 = tx * 4u;
+    ${shArr}[c0 * 16u + tm4] = vec4<${shType}>(${shType}(y_0.x), ${shType}(y_1.x), ${shType}(y_2.x), ${shType}(y_3.x));
+    ${shArr}[(c0 + 1u) * 16u + tm4] = vec4<${shType}>(${shType}(y_0.y), ${shType}(y_1.y), ${shType}(y_2.y), ${shType}(y_3.y));
+    ${shArr}[(c0 + 2u) * 16u + tm4] = vec4<${shType}>(${shType}(y_0.z), ${shType}(y_1.z), ${shType}(y_2.z), ${shType}(y_3.z));
+    ${shArr}[(c0 + 3u) * 16u + tm4] = vec4<${shType}>(${shType}(y_0.w), ${shType}(y_1.w), ${shType}(y_2.w), ${shType}(y_3.w));
+  }
+  workgroupBarrier();
+  let mLocal = li % 64u;
+  let cSub = li / 64u;
+  let m = m0 + mLocal;
+  let mValid = inBatch && (m < p.m);
+  let mPad = select(m, (m / p.sCn) * p.sCm + (m % p.sCn), p.sCm != p.sCn);
+  let r4 = mLocal / 4u;
+  let comp = mLocal % 4u;
+  if (mValid) {
+    if (n0 < 512u) {
+      let cBase0 = (n0 / 2u) + cSub;
+      ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => `c[(cBase0 + ${k * 4}u) * p.sC0 + mPad] = ${t}(${shArr}[(cSub + ${k * 4}u) * 16u + r4][comp]);`).join('\n      ')}
+    } else {
+      let cBase0 = ((n0 - 512u) / 2u) + cSub;
+      ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => `bT[(cBase0 + ${k * 4}u) * p.sC0 + mPad] = ${t}(${shArr}[(cSub + ${k * 4}u) * 16u + r4][comp]);`).join('\n      ')}
+    }
+  }
+  workgroupBarrier();
+  if (tx >= 8u) {
+    let c0 = (tx - 8u) * 4u;
+    ${shArr}[c0 * 16u + tm4] = vec4<${shType}>(${shType}(y_0.x), ${shType}(y_1.x), ${shType}(y_2.x), ${shType}(y_3.x));
+    ${shArr}[(c0 + 1u) * 16u + tm4] = vec4<${shType}>(${shType}(y_0.y), ${shType}(y_1.y), ${shType}(y_2.y), ${shType}(y_3.y));
+    ${shArr}[(c0 + 2u) * 16u + tm4] = vec4<${shType}>(${shType}(y_0.z), ${shType}(y_1.z), ${shType}(y_2.z), ${shType}(y_3.z));
+    ${shArr}[(c0 + 3u) * 16u + tm4] = vec4<${shType}>(${shType}(y_0.w), ${shType}(y_1.w), ${shType}(y_2.w), ${shType}(y_3.w));
+  }
+  workgroupBarrier();
+  if (mValid) {
+    if (n0 < 512u) {
+      let cBase0 = (n0 / 2u) + 32u + cSub;
+      ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => `c[(cBase0 + ${k * 4}u) * p.sC0 + mPad] = ${t}(${shArr}[(cSub + ${k * 4}u) * 16u + r4][comp]);`).join('\n      ')}
+    } else {
+      let cBase0 = ((n0 - 512u) / 2u) + 32u + cSub;
+      ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => `bT[(cBase0 + ${k * 4}u) * p.sC0 + mPad] = ${t}(${shArr}[(cSub + ${k * 4}u) * 16u + r4][comp]);`).join('\n      ')}
+    }
+  }` : `let y_0 = (acc_0_0 * p.alpha) / (vec4<f32>(1.0) + exp(-(acc_0_1 * p.alpha)));
   let y_1 = (acc_1_0 * p.alpha) / (vec4<f32>(1.0) + exp(-(acc_1_1 * p.alpha)));
   let y_2 = (acc_2_0 * p.alpha) / (vec4<f32>(1.0) + exp(-(acc_2_1 * p.alpha)));
   let y_3 = (acc_3_0 * p.alpha) / (vec4<f32>(1.0) + exp(-(acc_3_1 * p.alpha)));
@@ -2838,7 +2963,7 @@ export class Rfd4pEngine {
         gz[base4 + 16u] = ${f16Out ? 'vec2<u32>(bitcast<u32>(vec2<f16>(g1.xy)), bitcast<u32>(vec2<f16>(g1.zw)))' : 'g1'};
       }
     }`).join('\n    ')}
-  }`,
+  }`),
           blockBody: (pIdx) => `if (n0 < 1024u) {
       let rr = li % 32u;
       let cSub = li / 32u;
