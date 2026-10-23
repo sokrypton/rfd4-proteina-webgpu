@@ -25,6 +25,8 @@ const P = 384; // pair dim
 const C = 256; // dim_cond
 const H = 12;
 const T = 256; // tri_mult_c
+/** Trunk layers per command buffer (see `Rfd4pEngine.encodePrograms`). */
+const LAYERS_PER_SUBMIT = 2;
 const OUT = 3 + 32 + 147;
 
 /**
@@ -350,6 +352,7 @@ export class Rfd4pTrunkGpu {
         adaln: { gb: B.condBuf, off: condOff, stride: condRowStride, postNorm: true },
       };
       const steps = [...(await this.recycleIn(firstCycle, layer0Norm))];
+      const chunks = [];
       for (let i = 0; i < this.nlayers; i += 1) {
         const nextL = i + 1 < this.nlayers ? w.layers[i + 1] : null;
         const nextNorm = nextL
@@ -370,8 +373,14 @@ export class Rfd4pTrunkGpu {
           nextNorm2,
         })));
         if (Q) steps.push(...(await this.pairUpdate(i, firstCycle && i === 0, true)));
+        // Bound each command buffer (macOS GPU watchdog): a cycle is several programs of LAYERS_PER_SUBMIT layers.
+        if ((i + 1) % LAYERS_PER_SUBMIT === 0 && i + 1 < this.nlayers) {
+          chunks.push(e.program(steps));
+          steps.length = 0;
+        }
       }
-      this.passPrograms.push(e.program(steps));
+      chunks.push(e.program(steps));
+      this.passPrograms.push(chunks);
     }
 
     // --- heads -------------------------------------------------------------------------------------------

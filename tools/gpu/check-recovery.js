@@ -38,6 +38,7 @@ export async function main() {
   out.newDevice = app.gpuDevice && app.gpuDevice !== dev1;
   // 3. Lose it between runs.
   const dev2 = app.gpuDevice;
+  if (!dev2) return { ...out, allOk: false, note: 'no device after the mid-run recovery', lostAfter: app.gpuDeviceLost };
   dev2.destroy();
   await sleep(200);
   app.lastResult = null;

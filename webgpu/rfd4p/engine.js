@@ -3101,18 +3101,32 @@ fn pairOut(m: u32, n0: u32, tn0: u32, r0: vec4<f32>, r1: vec4<f32>) {
     };
   }
 
-  /** Encode and submit programs, one compute pass. */
+  /**
+   * One command buffer per program (`copy` appended to the last). macOS kills a command buffer that runs for
+   * seconds ("Caused GPU Hang Error", device lost), and a whole trunk step in one buffer took 2.8 s (none) to 13.6 s
+   * (high thinking, n=280); callers record programs small enough (trunk: a few layers each) and they still go to
+   * the queue in one submit, in order.
+   */
+  encodePrograms(programs, copy = null) {
+    const list = [programs].flat(Infinity);
+    return list.map((p, k) => {
+      const encoder = this.device.createCommandEncoder({ label: 'rfd4p' });
+      const pass = encoder.beginComputePass({ label: 'rfd4p' });
+      p.run(pass);
+      pass.end();
+      if (copy && k === list.length - 1) copy(encoder);
+      return encoder.finish();
+    });
+  }
+
+  /** Encode and submit programs. */
   run(...programs) {
-    const encoder = this.device.createCommandEncoder({ label: 'rfd4p' });
-    const pass = encoder.beginComputePass({ label: 'rfd4p' });
-    for (const p of programs.flat()) p.run(pass);
-    pass.end();
-    this.device.queue.submit([encoder.finish()]);
+    this.device.queue.submit(this.encodePrograms(programs));
   }
 
   /** Per-dispatch GPU timing (diagnostic): returns Map(label -> {ms, calls}). Needs 'timestamp-query'. */
   async profile(program, into = new Map()) {
-    const steps = program.steps;
+    const steps = [program].flat(Infinity).flatMap((p) => p.steps);
     const query = this.device.createQuerySet({ type: 'timestamp', count: 2 * steps.length });
     const resolve = this.device.createBuffer({ size: 16 * steps.length, usage: 0x200 | COPY_SRC });
     const encoder = this.device.createCommandEncoder();
@@ -3163,12 +3177,14 @@ fn pairOut(m: u32, n0: u32, tn0: u32, r0: vec4<f32>, r1: vec4<f32>) {
       staging = this.device.createBuffer({ label: 'rfd4p.staging', size: Math.ceil(size / 4096) * 4096, usage: MAP_READ | COPY_DST });
       this.staging = staging;
     }
-    const encoder = this.device.createCommandEncoder({ label: 'rfd4p' });
-    const pass = encoder.beginComputePass({ label: 'rfd4p' });
-    for (const p of programs.flat()) p.run(pass);
-    pass.end();
-    encoder.copyBufferToBuffer(buffer, offsetFloats * 4, staging, 0, floats * 4);
-    this.device.queue.submit([encoder.finish()]);
+    const copy = (encoder) => encoder.copyBufferToBuffer(buffer, offsetFloats * 4, staging, 0, floats * 4);
+    const buffers = this.encodePrograms(programs, copy);
+    if (!buffers.length) {
+      const encoder = this.device.createCommandEncoder({ label: 'rfd4p' });
+      copy(encoder);
+      buffers.push(encoder.finish());
+    }
+    this.device.queue.submit(buffers);
     await staging.mapAsync(MAP_READ, 0, size);
     const out = new Type(staging.getMappedRange(0, size).slice(0, floats * 4));
     staging.unmap();

@@ -579,7 +579,7 @@ class Rfd4pStudioApp {
    * already in memory (`ensureWeightsLoaded`), instead of failing until the page is reloaded.
    */
   _watchDevice(device) {
-    device.lost.then((info) => {
+    this._deviceLost = device.lost.then((info) => {
       if (this.gpuDevice !== device) return;
       this.gpuDeviceLost = { reason: info.reason, message: info.message, at: new Date().toISOString() };
       console.error(`WebGPU device lost (${info.reason}): ${info.message}`);
@@ -1159,6 +1159,11 @@ class Rfd4pStudioApp {
         this.setStatus('Generation stopped. Your input is unchanged.', false);
       } else {
         console.error('RFD4-Proteina run failed:', err);
+        // A failed readback can surface before device.lost settles; give it a moment so a lost device is
+        // recognised (and dropped) now rather than failing the next Generate too.
+        if (this.gpuDevice && this._deviceLost) {
+          await Promise.race([this._deviceLost, new Promise((r) => setTimeout(r, 300))]);
+        }
         const lost = !this.gpuDevice && this.gpuDeviceLost;
         this.setStatus(lost
           ? `The GPU was reset during generation (${this.gpuDeviceLost.reason}: ${this.gpuDeviceLost.message || 'no details'}). Press Generate to retry; WebGPU restarts automatically. Your input is unchanged.`
