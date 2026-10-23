@@ -566,10 +566,26 @@ class Rfd4pStudioApp {
       if (res && res.device) {
         this.gpuDevice = res.device;
         this.gpuAdapterInfo = res.adapter?.info ?? null;
+        this._watchDevice(res.device);
       }
     } catch (err) {
       console.warn('WebGPU fallback to CPU:', err);
     }
+  }
+
+  /**
+   * A lost device (GPU reset, driver watchdog, memory pressure) takes every buffer and pipeline with it. Record why
+   * and drop the device and model; the next Generate requests a new device and rebuilds the model from the weights
+   * already in memory (`ensureWeightsLoaded`), instead of failing until the page is reloaded.
+   */
+  _watchDevice(device) {
+    device.lost.then((info) => {
+      if (this.gpuDevice !== device) return;
+      this.gpuDeviceLost = { reason: info.reason, message: info.message, at: new Date().toISOString() };
+      console.error(`WebGPU device lost (${info.reason}): ${info.message}`);
+      this.gpuDevice = null;
+      this.gpuModel = null;
+    });
   }
 
   async ensureWeightsLoaded(source = this.prevArchChoice, { needEncoder = false } = {}) {
@@ -896,6 +912,11 @@ class Rfd4pStudioApp {
         }
       }
 
+      if (!this.gpuDevice && this.gpuDeviceLost) {
+        // The previous device was lost: get a new one; ensureWeightsLoaded then rebuilds the model on it.
+        this.setStatus('Restarting WebGPU after a GPU reset...');
+        await this._initWebGpu();
+      }
       await this.ensureWeightsLoaded(this.prevArchChoice, { needEncoder });
 
       const useGpu = Boolean(this.gpuModel);
@@ -1138,7 +1159,10 @@ class Rfd4pStudioApp {
         this.setStatus('Generation stopped. Your input is unchanged.', false);
       } else {
         console.error('RFD4-Proteina run failed:', err);
-        this.setStatus(`Generation failed. ${err.message} Your input is unchanged.`, true);
+        const lost = !this.gpuDevice && this.gpuDeviceLost;
+        this.setStatus(lost
+          ? `The GPU was reset during generation (${this.gpuDeviceLost.reason}: ${this.gpuDeviceLost.message || 'no details'}). Press Generate to retry; WebGPU restarts automatically. Your input is unchanged.`
+          : `Generation failed. ${err.message} Your input is unchanged.`, true);
       }
     } finally {
       // A newer run (Generate pressed again) owns the strip once it has started.

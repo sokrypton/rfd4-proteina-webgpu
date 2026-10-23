@@ -243,7 +243,7 @@ export async function main() {
     const exElapsedMs = Math.round(performance.now() - tEx0);
     const exStatus = app.els.statusMessage.textContent;
     if (app.els.statusMessage.classList.contains('error') || !app.lastResult?.cif) {
-      throw new Error(`Studio example '${ex.id}' (${ex.label}) failed: ${exStatus}`);
+      throw new Error(`Studio example '${ex.id}' (${ex.label}) failed: ${exStatus} deviceLost=${JSON.stringify(app.gpuDeviceLost ?? null)}`);
     }
     const outAtoms = app.lastResult.structure?.atoms?.length ?? 0;
     if (outAtoms <= 0) {
