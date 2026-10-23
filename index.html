@@ -1,398 +1,478 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RFD4-Proteina · LocalFold WebGPU</title>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#202124" />
+    <title>AtomWorks Studio · RFD4-Proteina (WebGPU)</title>
+    <link rel="icon" type="image/svg+xml" href="./annotation-studio.svg" />
+    <link rel="manifest" href="./manifest.webmanifest" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
-        crossorigin="anonymous" referrerpolicy="no-referrer" />
-    <link rel="stylesheet" href="./web/vendor/py2Dmol.app.css">
-    <link rel="stylesheet" href="./web/localfold.css">
-    <link rel="stylesheet" href="./web/styles.css">
-    <script>window.py2dmolReadyMessage = "Ready. Pick a preset or enter a contig and press Design.";</script>
-</head>
+    <link rel="stylesheet" crossorigin href="./assets/index-DCmII2EW.css" />
+    <link rel="stylesheet" href="./web/styles.css" />
+    <!-- app.js first: its import of studio-api.js installs the /api/* fetch interceptor the Studio bundle boots against. -->
+    <script type="module" src="./web/app.js?v=7"></script>
+    <script type="module" crossorigin src="./assets/index-ChG0NGAU.js"></script>
+  </head>
+  <body>
+    <!-- RFD4-Proteina Generation Card (mounted directly into AtomWorks Studio's right sidebar) -->
+    <div id="rfd4p-card-staging" hidden>
+        <section id="rfd4p-studio-card" class="card rfd4p-card" aria-label="RFD4-Proteina generation controls">
+            <div class="card-title-row">
+                <h2>RFD4-Proteina</h2>
+                <span id="webgpu-badge" class="viewer-backend">WebGPU FP16</span>
+            </div>
 
-<body class="bg-gray-50 text-gray-800 font-sans p-4">
-
-    <div id="global-drop-overlay">
-        <p><i class="fa-solid fa-cloud-arrow-up mr-3"></i> Drop PDB, mmCIF or .safetensors Anywhere to Load</p>
-    </div>
-
-    <div class="mx-auto page-width" style="position: relative;">
-        <input type="checkbox" id="useGpuCheckbox" checked hidden aria-hidden="true">
-
-        <!-- Page Head: Title on the left, actions on the right (matching ../localfold) -->
-        <div class="page-head page-head-fold" style="padding-right: 0;">
-            <h1>RFD4-Proteina</h1>
-            <div class="fold-actions">
-                <label class="btn btn-grey btn-small" style="cursor: pointer; margin: 0;" title="Upload reference .pdb / .cif / .cif.zst or model.safetensors">
-                    <i class="fa-solid fa-upload"></i>
-                    <span>Upload</span>
-                    <input type="file" id="quick-upload-input" accept=".pdb,.cif,.mmcif,.zst,.safetensors" hidden>
+            <div class="rfd4p-compact-grid">
+                <label for="task-select">Mode
+                    <select id="task-select">
+                        <option value="unconditional" selected>Structure design</option>
+                        <option value="partial_diffusion">Partial diffusion (40%)</option>
+                        <option value="inverse_folding">Inverse folding</option>
+                    </select>
                 </label>
-                <button type="button" id="parity-btn" class="btn btn-grey btn-small" title="Verify WebGPU vs CPU numerical parity">
-                    <i class="fa-solid fa-check-double"></i>
-                    <span>Parity</span>
-                </button>
-                <button id="predict" class="btn btn-primary" disabled>
-                    <i class="fa-solid fa-cubes"></i>
-                    <span>Design</span>
-                </button>
-            </div>
-        </div>
 
-        <!-- THE DESIGN PANEL, in py2Dmol & LocalFold's exact idiom -->
-        <div id="fold-panel" class="container-box page-width" style="margin-bottom: 10px;">
-            <div class="fetch-panel">
-                <div class="fetch-row" id="fold-input-container">
-                    <div class="rfd4p-input-stack">
-                        <div class="rfd4p-contig-row">
-                            <span class="rfd4p-contig-label">Contig</span>
-                            <input type="text" id="contig-input" spellcheck="false"
-                                placeholder="e.g. A48-75,/0,binder:16-16P" />
-                        </div>
-                        <div class="rfd4p-condition-pills" id="active-condition-pills"></div>
-                    </div>
-                </div>
-
-                <!-- Settings Row (matching #foldOptions in ../localfold) -->
-                <div class="fetch-options" id="foldOptions">
-                    <div class="fetch-option-group" id="presetGroup">
-                        <span class="fetch-option-title">Preset</span>
-                        <select id="preset-select" title="Interactive RFD4-Proteina design task preset"></select>
-                    </div>
-
-                    <div class="fetch-option-group" id="stepsGroup">
-                        <span class="fetch-option-title">Steps</span>
-                        <select id="nsteps-input" title="Flow-matching Euler/SDE integration steps (bb_ca + local_latents)">
-                            <option value="10">10</option>
-                            <option value="20">20</option>
-                            <option value="30">30</option>
-                            <option value="60" selected>60</option>
-                        </select>
-                    </div>
-
-                    <div class="fetch-option-group" id="recyclesGroup">
-                        <span class="fetch-option-title">Recycles</span>
-                        <select id="recycle-select" title="Trunk recycling schedule across flow-matching steps">
-                            <option value="none">none (1x)</option>
-                            <option value="low" selected>low (2→1)</option>
-                            <option value="medium">medium (3→2→1)</option>
-                            <option value="high">high (3→2)</option>
-                        </select>
-                    </div>
-
-                    <div class="fetch-option-group" id="seedGroup">
-                        <span class="fetch-option-title">Seed</span>
-                        <input type="number" id="seed-input" value="42" min="0" max="2147483647" step="1"
-                            title="Deterministic PRNG seed for noise and length sampling">
-                    </div>
-
-                    <div class="fetch-option-group" id="backendGroup">
-                        <span class="fetch-option-title">Backend</span>
-                        <select id="backend-select" title="Compute backend & weight storage precision">
-                            <option value="webgpu-fp16" selected>WebGPU (FP16 Weights)</option>
-                            <option value="webgpu-fp32">WebGPU (FP32 Weights)</option>
-                            <option value="cpu">CPU Float32</option>
-                        </select>
-                    </div>
-
-                    <div class="fetch-option-group" id="msaModeGroup">
-                        <span class="fetch-option-title">Weights</span>
-                        <select id="arch-select" title="Model weights source (1,257 tensors)">
-                            <option value="int8-sharded" selected>Sharded INT8 (316 MiB)</option>
-                            <option value="local-default">Full FP32 (.safetensors)</option>
-                            <option value="hf">Stream HuggingFace…</option>
-                            <option value="local">Upload .safetensors…</option>
-                        </select>
-                        <input type="file" id="safetensors-file-input" accept=".safetensors" hidden>
-                    </div>
-                </div>
-
-                <!-- Collapsible Fine-Grained Conditioning & Reference Structure Editor -->
-                <details class="rfd4p-drawer" id="conditioning-drawer">
-                    <summary>Conditioning Rules (<code>condition_spec</code>) &amp; Reference Structure (PDB / mmCIF)</summary>
-                    <div class="rfd4p-drawer-grid">
-                        <div>
-                            <div class="rfd4p-box-label">
-                                <span>Selection Rules (<code>sel('A//56,64/CA,OH')</code>, <code>C_CRD</code>, <code>C_CRDGRP</code>, <code>C_HOT</code>, <code>C_MCOORD</code>, <code>C_SEC</code>, <code>C_CATH</code>)</span>
-                            </div>
-                            <textarea id="condition-spec-input" class="rfd4p-textarea" spellcheck="false"></textarea>
-                        </div>
-                        <div>
-                            <div class="rfd4p-box-label">
-                                <span>Reference Structure (<span id="structure-summary-text">Loaded</span>)</span>
-                                <label style="cursor: pointer; color: #2563eb;">
-                                    Load .pdb / .cif / .zst
-                                    <input type="file" id="structure-file-input" accept=".pdb,.cif,.mmcif,.ent,.zst" hidden>
-                                </label>
-                            </div>
-                            <textarea id="structure-input" class="rfd4p-textarea" spellcheck="false"
-                                placeholder="Paste reference PDB or mmCIF structure here..."></textarea>
-                        </div>
-                    </div>
-                </details>
-            </div>
-        </div>
-
-        <!-- Status & Progress Row (matching #upload-options-container in ../localfold) -->
-        <div id="upload-options-container" class="container-box page-width" style="margin-bottom: 10px;">
-            <!-- Required hidden py2Dmol hooks (see ../localfold/index.html) -->
-            <div class="fetch-panel" style="display: none;" aria-hidden="true">
-                <input type="text" id="fetch-id">
-                <button id="fetch-btn" type="button"></button>
-                <button id="upload-button" type="button"></button>
-                <input type="file" id="file-upload">
-                <input type="checkbox" id="loadAsFramesCheckbox" checked>
-                <input type="checkbox" id="alignFramesCheckbox" checked>
-                <input type="checkbox" id="loadMSACheckbox" checked>
+                <fieldset class="representation-mode rfd4p-thinking-group" id="thinking-radio-group" aria-label="Thinking">
+                    <legend>Thinking (recycles)</legend>
+                    <label><input type="radio" name="thinking-radio" value="none" checked />none</label>
+                    <label><input type="radio" name="thinking-radio" value="low" />low</label>
+                    <label><input type="radio" name="thinking-radio" value="medium" />med</label>
+                    <label><input type="radio" name="thinking-radio" value="high" />high</label>
+                </fieldset>
             </div>
 
-            <div id="status-row">
-                <div id="status-line">
-                    <div id="status-message">Initializing RFD4-Proteina WebGPU...</div>
-                    <div id="model-load" hidden>
-                        <span id="model-load-text"></span>
+            <details class="rfd4p-sampling-details" id="sampling-accordion">
+                <summary>Sampling &amp; seed</summary>
+                <div class="rfd4p-sampling-body">
+                    <div class="inline-fields">
+                        <label for="samples-input">Designs
+                            <input type="number" id="samples-input" value="1" min="1" max="8" step="1" />
+                        </label>
+                        <label for="seed-input">Seed
+                            <input type="number" id="seed-input" value="42" min="0" max="4294967295" step="1" />
+                        </label>
                     </div>
+                    <label for="backbone-noise">
+                        <span class="rfd4p-slider-head">
+                            <span>Backbone noise</span>
+                            <input type="number" id="backbone-noise-num" class="rfd4p-slider-num" min="0.01" max="1" step="0.01" value="0.3" />
+                        </span>
+                        <input type="range" id="backbone-noise" class="rfd4p-slider" min="0.01" max="1" step="0.01" value="0.3" />
+                    </label>
+                    <label for="latent-noise">
+                        <span class="rfd4p-slider-head">
+                            <span>Latent noise</span>
+                            <input type="number" id="latent-noise-num" class="rfd4p-slider-num" min="0.01" max="1" step="0.01" value="0.1" />
+                        </span>
+                        <input type="range" id="latent-noise" class="rfd4p-slider" min="0.01" max="1" step="0.01" value="0.1" />
+                    </label>
+                    <label class="checkbox" for="early-stop" title="Stop once the structure and sequence have both stopped changing for 5 steps (identical sequence, under 0.1 Å from a full run in testing)">
+                        <input type="checkbox" id="early-stop" checked /> Early stop when converged
+                    </label>
                 </div>
-                <progress id="progress" max="1" value="0" data-state="idle"></progress>
-            </div>
-        </div>
+            </details>
 
-        <!-- py2Dmol Viewer Shell (matching ../localfold) -->
-        <div id="viewer-container" class="py2dmol-viewer-instance" style="display: none;">
-            <div id="mainContainer">
-                <div id="viewerColumn">
-                    <div id="canvasContainer" class="container-box" data-autosize="css">
-                        <canvas id="canvas"></canvas>
-                        <div class="resize-handle"></div>
-                    </div>
-                    <div id="controlsContainer" class="container-box">
-                        <button id="playButton" class="btn btn-secondary btn-icon-only"><i
-                                class="fa-solid fa-play"></i></button>
-                        <input type="range" id="frameSlider" min="0" max="0" value="0">
-                        <span id="frameCounter">0 / 0</span>
-                        <button id="speedButton" class="btn btn-grey btn-icon-only"
-                            title="Cycle playback speed">1x</button>
-                        <button id="overlayButton" class="btn btn-secondary" title="Overlay all frames"
-                            style="font-weight: 400;">⧉</button>
-                    </div>
-                </div>
+            <button id="predict" class="primary rfd4p-generate-btn" type="button" disabled>
+                Generate design
+            </button>
 
-                <!-- Right side panels container -->
-                <div id="rightPanelsContainer">
-                    <div id="rightPanelContainer" class="container-box">
-                        <div id="navigationControls" class="toolbar" style="margin-bottom: 4px;">
-                            <div class="toolbar-row">
-                                <label class="btn-toggle btn-flex" id="orientToggle" title="Orient to best view">
-                                    <input type="checkbox" style="display: none;">
-                                    <span><i class="fa-solid fa-crosshairs"></i>Orient</span>
-                                </label>
-                                <button id="focusButton" class="btn-toggle btn-flex" aria-pressed="false"
-                                    title="Click a residue or ligand to focus and show neighbouring side chains">
-                                    <span><i class="fa-solid fa-magnifying-glass"></i>Focus</span>
-                                </button>
-                                <label class="btn-toggle btn-flex" id="rotateToggle" title="Toggle auto-rotation">
-                                    <input type="checkbox" id="rotationCheckbox">
-                                    <span><i class="fa-solid fa-rotate"></i>Rotate</span>
-                                </label>
-                            </div>
-
-                            <div class="toolbar-row">
-                                <button id="styleToggle" class="btn-toggle btn-flex" aria-expanded="false"
-                                    aria-controls="stylePanel" title="Render style and its settings">
-                                    <span><i class="fa-solid fa-palette"></i>Style</span>
-                                </button>
-                                <label class="btn-toggle btn-flex" id="clipToggle"
-                                    title="Clip the view to a slab, as in PyMOL">
-                                    <input type="checkbox" id="clipCheckbox">
-                                    <span><i class="fa-solid fa-cube"></i>Clip</span>
-                                </label>
-                                <button id="saveImageButton" class="btn-toggle btn-flex" aria-expanded="false"
-                                    aria-controls="savePanel" title="Capture an image or a video">
-                                    <span><i class="fa-solid fa-camera"></i>Capture</span>
-                                </button>
-                            </div>
-                        </div>
-
-                        <div id="objectRow" class="toggle-item object-row">
-                            <select id="objectSelect" class="object-picker" title="Which design run to show and edit"
-                                style="min-width: 110px; height: 28px; font-size: 12px; padding: 0 8px;">
-                            </select>
-                        </div>
-
-                        <style>
-                            #styleAppearanceContainer [hidden] { display: none !important; }
-                            #clipPanel[hidden] { display: none !important; }
-                            #clipPanel #clipRange { position: relative; height: 24px; flex: 1; min-width: 0; }
-                            #clipPanel #clipRange .track {
-                                position: absolute; left: 0; right: 0; top: 10px; height: 4px;
-                                background: #e5e7eb; border-radius: 2px;
-                            }
-                            #clipPanel #clipRange .span {
-                                position: absolute; top: 10px; height: 4px;
-                                background: #2563eb; border-radius: 2px;
-                            }
-                            #clipPanel #clipRange input[type=range] {
-                                position: absolute; left: 0; top: 0; width: 100%; height: 24px;
-                                margin: 0; padding: 0; background: transparent; pointer-events: none;
-                                border-radius: 0; outline: none;
-                                -webkit-appearance: none; appearance: none;
-                            }
-                            #clipPanel #clipRange input[type=range]::-webkit-slider-runnable-track {
-                                background: transparent; border: none; height: 24px;
-                            }
-                            #clipPanel #clipRange input[type=range]::-moz-range-track {
-                                background: transparent; border: none; height: 24px;
-                            }
-                            #clipPanel #clipRange input[type=range]::-webkit-slider-thumb {
-                                pointer-events: auto; -webkit-appearance: none; appearance: none;
-                                width: 14px; height: 14px; margin-top: 5px; border-radius: 50%;
-                                background: #fff; border: 2px solid #2563eb; box-shadow: none;
-                                cursor: pointer;
-                            }
-                        </style>
-                        <div id="clipPanel" hidden class="control-group"
-                            style="display: flex; flex-direction: column; align-items: stretch; gap: 6px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; padding: 8px; margin-bottom: 4px;">
-                            <div style="display: flex; flex-direction: row; align-items: center; gap: 8px;">
-                                <label for="clipNear" class="font-medium text-gray-700"
-                                    style="width: 34px; font-size: 11px; flex-shrink: 0;">Clip:</label>
-                                <div id="clipRange">
-                                    <div class="track"></div>
-                                    <div class="span" id="clipSpan"></div>
-                                    <input type="range" id="clipFar" aria-label="Far clipping plane">
-                                    <input type="range" id="clipNear" aria-label="Near clipping plane">
-                                </div>
-                                <button id="clipAutoButton" class="btn btn-grey btn-small"
-                                    style="font-size: 11px;">Auto</button>
-                            </div>
-                            <div style="display: flex; flex-direction: row; align-items: center; gap: 8px;">
-                                <label for="clipFadeSlider" class="font-medium text-gray-700"
-                                    style="width: 34px; font-size: 11px; flex-shrink: 0;">Fade:</label>
-                                <input type="range" id="clipFadeSlider" min="0" max="100" value="10" step="5"
-                                    style="flex: 1; min-width: 0; outline: none;">
-                                <span aria-hidden="true" id="clipResetSpacer"
-                                    style="width: 51px; flex-shrink: 0;"></span>
-                            </div>
-                        </div>
-
-                        <div id="styleAppearanceContainer" class="control-group">
-                            <div id="stylePanelMount"></div>
-                        </div>
-                    </div>
-
-                    <div id="selectionPanelMount"></div>
-
-                    <!-- Heatmap / Contact Map Panel -->
-                    <div id="heatmapContainer" class="container-box" style="display: none;">
-                        <canvas id="heatmapCanvas" style="cursor: crosshair;"></canvas>
-                    </div>
-
-                    <!-- Prediction / Design Telemetry Card -->
-                    <div id="predictionScoresBox" class="container-box" style="display: none;">
-                        <div class="scores-card-grid" id="scoresCardGrid">
-                            <div class="score-metric-cell">
-                                <div class="score-metric-label">Tokens</div>
-                                <div id="metric-tokens" class="score-metric-value">-</div>
-                            </div>
-                            <div class="score-metric-cell">
-                                <div class="score-metric-label">Atoms</div>
-                                <div id="metric-atoms" class="score-metric-value">-</div>
-                            </div>
-                            <div class="score-metric-cell">
-                                <div class="score-metric-label">Latency</div>
-                                <div id="metric-latency" class="score-metric-value">-</div>
-                            </div>
-                            <div class="score-metric-cell">
-                                <div class="score-metric-label">GPU Δ</div>
-                                <div id="metric-parity" class="score-metric-value">-</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Downloads Row -->
-                    <div id="downloads" class="container-box" style="display: none;">
-                        <button id="download-pdb-btn" class="btn btn-secondary"
-                            title="Download decoded all-atom PDB structure">
-                            <i class="fa-solid fa-download"></i><span>PDB</span>
-                        </button>
-                        <button id="download-cif-btn" class="btn btn-secondary"
-                            title="Download decoded all-atom mmCIF structure">
-                            <i class="fa-solid fa-download"></i><span>mmCIF</span>
-                        </button>
-                        <button id="saveStateButton" class="btn btn-secondary" type="button"
-                            title="Save everything the viewer is showing as a py2Dmol session (.json)">
-                            <i class="fa-solid fa-floppy-disk"></i><span>Session</span>
-                        </button>
-                    </div>
-
-                    <div id="plddtContainer" class="container-box" style="display: none;"></div>
-                    <div id="scatterContainer" class="container-box" style="display: none; position: relative;">
-                        <canvas id="scatterCanvas" style="cursor: pointer;"></canvas>
-                        <div class="resize-handle" aria-label="Resize scatter plot"></div>
-                    </div>
+            <div id="design-results" class="rfd4p-results-box" hidden>
+                <fieldset class="representation-mode rfd4p-view-group" aria-label="View">
+                    <legend>View</legend>
+                    <div id="design-view-radios" class="rfd4p-view-radios" role="radiogroup" aria-label="View"></div>
+                </fieldset>
+                <div class="button-row" id="downloads" hidden>
+                    <button id="download-cif-btn" class="secondary compact" type="button" hidden>Download CIF</button>
+                    <button id="download-all-btn" class="secondary compact" type="button">Download all (.zip)</button>
                 </div>
             </div>
-        </div>
 
-        <!-- Sequence Viewer Strip -->
-        <div id="sequence-viewer-container" class="container-box sequence-section-container page-width"
-            style="display: none;">
-            <div id="sequenceHeader" class="sequence-header">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <select id="sequenceModeSelect" class="btn btn-grey btn-small"
-                        style="min-width: 100px; height: 28px; font-size: 12px; padding: 0 8px;">
-                        <option value="sequence" selected>Sequence</option>
-                        <option value="chain">Chain</option>
-                    </select>
+            <div id="generation-status" class="rfd4p-status-box" hidden>
+                <p id="rfd4p-status-message" class="inline-feedback muted" aria-live="polite"></p>
+                <div id="rfd4p-model-load" class="rfd4p-model-load" hidden>
+                    <span id="rfd4p-model-load-text"></span>
                 </div>
-                <div id="frameNameLabel"
-                    style="flex: 1; min-width: 0; text-align: center; font-size: 12px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
-                <div class="sequence-actions" style="margin-left: auto;">
-                    <span id="selectionGlobalTools" class="selection-global-tools">
-                        <button id="selectAllResidues" class="btn btn-grey btn-small"
-                            title="Select every residue">Select all</button>
-                        <button id="clearAllResidues" class="btn btn-grey btn-small"
-                            title="Clear the selection">Unselect</button>
-                        <button id="invertSelection" class="btn btn-grey btn-small"
-                            title="Select everything that is not selected now">Invert</button>
-                    </span>
-                </div>
+                <progress id="rfd4p-progress" class="rfd4p-progress" max="1" value="0" data-state="idle" hidden></progress>
             </div>
-            <div id="sequenceView" class="sequence-content hidden"></div>
-        </div>
-
-        <!-- Hidden MSA container required by py2Dmol DOM bindings -->
-        <div id="msa-buttons" class="sequence-section-container" style="display: none;">
-            <div id="msaHeader" class="sequence-header">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <select id="msaModeSelect" class="btn btn-grey btn-small">
-                        <option value="msa" selected>MSA</option>
-                    </select>
-                </div>
-                <select id="msaChainSelect" class="btn btn-grey btn-small" style="display: none;"></select>
-            </div>
-        </div>
+        </section>
     </div>
 
-    <!-- Footer (matching ../localfold) -->
-    <footer style="margin-top: var(--container-gap); padding: 0; color: #6b7280; font-size: 11px;">
-        <div class="page-width"
-            style="margin: 0 auto; padding: 8px 0 0 0; border-top: 1px solid #e5e7eb; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 16px;">
-            <div id="footer-links" style="flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px;">
-                <a href="https://github.com/RosettaCommons/RFD4-Proteina" target="_blank" rel="noopener noreferrer" style="color: #3b82f6; text-decoration: none;"><i class="fab fa-github" style="margin-right: 5px;"></i>RosettaCommons/RFD4-Proteina</a>
-                <span>&middot;</span>
-                <a href="https://huggingface.co/nvidia/RFD4-Proteina" target="_blank" rel="noopener noreferrer" style="color: #3b82f6; text-decoration: none;">nvidia/RFD4-Proteina</a>
-            </div>
-            <div id="privacy-note" style="flex: 0 1 auto; min-width: 0;">Runs locally in your browser via WebGPU</div>
+    <main class="app-shell">
+      <header>
+        <div class="header-identity">
+          <img src="./annotation-studio.svg" alt="" class="header-logo" />
+          <h1>AtomWorks <span>Studio</span></h1>
         </div>
-    </footer>
+        <span id="document-name" class="document-name">No structure open</span>
+        <div class="header-actions">
+          <label class="file-button primary">
+            Open
+            <input id="file-input" type="file" accept=".cif,.mmcif,.pdb,.ent,.zst,chemical/x-mmcif,chemical/x-pdb" />
+          </label>
+          <details class="load-options">
+            <summary>Import options</summary>
+            <div class="load-options-popover">
+              <div id="import-settings">
+                <label>Parse settings
+                  <select id="parse-preset">
+                    <option value="auto">Infer</option>
+                    <option value="rcsb">Unannotated input</option>
+                    <option value="minimal">Annotated CIF</option>
+                    <option value="manual">Custom</option>
+                  </select>
+                </label>
+                <p id="parse-description"></p>
+                <div id="parse-manual" hidden>
+                  <label>Assembly<input id="parse-assembly" value="1" placeholder="1, first, all, or asym" /></label>
+                  <div id="parse-fields"></div>
+                </div>
+              </div>
+            </div>
+          </details>
+          <label class="file-button secondary">
+            Combine
+            <input id="combine-input" type="file" accept=".cif,.mmcif,.pdb,.ent,.zst,chemical/x-mmcif,chemical/x-pdb" disabled />
+          </label>
+          <button id="download" aria-label="Download annotated CIF" disabled>Save</button>
+        </div>
+      </header>
 
-    <script src="./web/vendor/py2Dmol.align.js"></script>
-    <script src="./web/vendor/py2Dmol.full.min.js"></script>
-    <script type="module" src="./web/app.js"></script>
-</body>
+      <div id="error-banner" role="alert" hidden>
+        <strong>Error</strong><span id="error-message"></span>
+        <button id="dismiss-error" class="secondary" aria-label="Dismiss error">Dismiss</button>
+      </div>
+      <section id="workspace" class="workspace">
+        <div class="viewer-column">
+          <div id="viewer-toolbar" class="viewer-toolbar">
+            <div class="viewer-menus-group">
+              <details id="style-menu" class="viewer-menu" data-menu="style">
+                <summary>Style</summary>
+                <div class="viewer-menu-popover viewer-menu-popover-wide">
+                  <p id="style-unavailable" class="muted">No atoms have coordinates to display.</p>
+                  <div class="inline-fields">
+                    <label>Target
+                      <select id="viewer-action-target">
+                        <option value="all">All atoms</option>
+                        <option value="selection">Selection</option>
+                      </select>
+                    </label>
+                    <fieldset class="representation-mode" data-capability="representations">
+                      <legend>Action</legend>
+                      <label><input type="radio" name="representation-action" value="show" checked />Show</label>
+                      <label><input type="radio" name="representation-action" value="hide" />Hide</label>
+                      <label><input type="radio" name="representation-action" value="replace" />Only</label>
+                    </fieldset>
+                  </div>
+                  <div class="viewer-menu-section-label" data-capability="representations">Representations</div>
+                  <div class="viewer-menu-grid viewer-menu-grid-3" id="representation-actions" data-capability="representations">
+                    <button type="button" data-representation="cartoon" disabled>Cartoon</button>
+                    <button type="button" data-representation="ribbon" disabled>Ribbon</button>
+                    <button type="button" data-representation="lines" disabled>Lines</button>
+                    <button type="button" data-representation="sticks" disabled>Sticks</button>
+                    <button type="button" data-representation="spheres" disabled>Spheres</button>
+                    <button type="button" data-representation="surface" disabled>Surface</button>
+                    <button type="button" data-representation="everything" data-action="hide" class="representation-hide-all secondary" disabled>Hide everything</button>
+                  </div>
+                  <div class="viewer-menu-section-label" data-capability="colors">Color scheme</div>
+                  <div class="viewer-menu-grid viewer-menu-grid-4" id="color-actions" data-capability="colors">
+                    <button type="button" data-color="atomic" disabled>Atom</button>
+                    <button type="button" data-color="chain" disabled>Chain</button>
+                    <button type="button" data-color="ss" disabled>Secondary</button>
+                    <button type="button" data-color="residue" disabled>Residue</button>
+                    <button type="button" data-color="rainbow" disabled>Rainbow</button>
+                    <button type="button" data-color="cyan" disabled>Cyan</button>
+                    <button type="button" data-color="yellow" disabled>Yellow</button>
+                    <button type="button" data-color="magenta" disabled>Magenta</button>
+                  </div>
+                </div>
+              </details>
+              <details class="viewer-menu" data-menu="analyze">
+                <summary>Analyze</summary>
+                <div class="viewer-menu-popover viewer-menu-popover-wide">
+                  <fieldset class="interaction-types">
+                    <legend>Non-covalent contacts</legend>
+                    <label><input type="checkbox" name="interaction-type" value="hbond" checked /> H-bonds</label>
+                    <label><input type="checkbox" name="interaction-type" value="hydrophobic" checked /> Hydrophobic</label>
+                    <label><input type="checkbox" name="interaction-type" value="pistacking" checked /> π-stacking</label>
+                    <label><input type="checkbox" name="interaction-type" value="pication" checked /> π-cation</label>
+                    <label><input type="checkbox" name="interaction-type" value="saltbridge" checked /> Salt bridges</label>
+                    <label><input type="checkbox" name="interaction-type" value="halogen" checked /> Halogen</label>
+                    <label><input type="checkbox" name="interaction-type" value="metal" checked /> Metal</label>
+                  </fieldset>
+                  <div class="inline-fields">
+                    <label>H-bond model
+                      <select id="hbond-model"><option value="rosetta">Rosetta</option><option value="plip">PLIP</option></select>
+                    </label>
+                    <label>Scope
+                      <select id="interaction-scope">
+                        <option value="all">Whole structure</option>
+                        <option value="touches-selection">Touches selection</option>
+                        <option value="within-selection">Within selection</option>
+                        <option value="selection-to-rest">Selection ↔ rest</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="inline-fields">
+                    <label class="checkbox"><input id="inter-chain-only" type="checkbox" checked /> Inter-chain only</label>
+                    <label class="checkbox"><input id="visualize-interactions" type="checkbox" checked /> Dashed lines</label>
+                  </div>
+                  <label>Max contacts
+                    <input id="interaction-visual-limit" type="number" min="1" max="500" value="25" />
+                  </label>
+                  <div class="button-row">
+                    <button id="run-analysis" type="button" class="compact primary" disabled>Find contacts</button>
+                    <button id="clear-analysis-visuals" type="button" class="secondary compact" data-capability="interactionOverlays">Clear</button>
+                  </div>
+                  <hr />
+                  <div class="viewer-menu-section-label">Geometry measurement</div>
+                  <div class="inline-fields viewer-measure-row">
+                    <select id="measurement-kind" aria-label="Measurement type">
+                      <option value="distance">Distance · 2 atoms</option>
+                      <option value="angle">Angle · 3 atoms</option>
+                      <option value="dihedral">Dihedral · 4 atoms</option>
+                    </select>
+                    <button id="add-measurement" type="button" class="secondary compact" data-capability="measurements" disabled>Add</button>
+                  </div>
+                </div>
+              </details>
+              <details class="viewer-menu" data-menu="overflow" hidden>
+                <summary>Renderer</summary>
+                <div class="viewer-menu-popover viewer-menu-popover-wide">
+                  <label class="viewer-choice compact-choice">3D Engine
+                    <select id="viewer-mode">
+                      <option value="molstar" selected>Mol* · WebGL</option>
+                    </select>
+                  </label>
+                  <div data-capability="commandCatalog" hidden>
+                    <label>Command catalog
+                      <input id="command-search" type="search" placeholder="Search commands…" />
+                    </label>
+                    <div id="command-catalog" class="command-catalog muted"></div>
+                  </div>
+                </div>
+              </details>
+            </div>
 
+            <span class="viewer-toolbar-divider" aria-hidden="true"></span>
+
+            <div class="picking-toolbar" role="group" aria-label="Selection controls">
+              <label class="pick-mode" data-capability="picking">Pick
+                <select id="pick-scope" aria-label="Picking mode">
+                  <option value="atom" selected>Atoms</option>
+                  <option value="residue">Residues</option>
+                  <option value="chain">Chains</option>
+                </select>
+              </label>
+              <span id="selection-count" class="selection-count">0 atoms selected</span>
+              <div class="selection-actions">
+                <button id="clear-selection" class="secondary compact" type="button">Clear</button>
+              </div>
+              <span id="picking-help" class="selection-help">Click to add · Click again to remove</span>
+            </div>
+
+            <span id="viewer-backend" class="viewer-backend">Mol* · WebGL</span>
+          </div>
+          <div id="sequence-dock" class="sequence-dock">
+            <div class="sequence-dock-heading">
+              <strong>Sequence</strong>
+              <span class="sequence-help">Click to toggle · Drag · Shift range</span>
+              <div class="button-row">
+                <button id="sequence-toggle" class="secondary compact" type="button" aria-expanded="true">
+                  Hide sequence
+                </button>
+              </div>
+            </div>
+            <div id="sequence-view" class="sequence-view muted">
+              Open a structure to select residues.
+            </div>
+          </div>
+          <div class="viewer-stage">
+          <div id="renderer-notice" class="renderer-notice" role="alert" hidden></div>
+          <div id="viewer">
+            <div id="renderer-prompt" class="renderer-prompt" hidden>
+              <p class="eyebrow">Renderer</p>
+              <strong>Open the Studio with Mol*</strong>
+              <div class="button-row">
+                <button class="renderer-prompt-choice secondary" data-renderer="molstar">Use Mol* · WebGL</button>
+              </div>
+            </div>
+          </div>
+          <div id="unpositioned-state" class="empty-state" role="status" hidden>
+            <div class="empty-state-inner">
+              <h2>No 3D coordinates to display</h2>
+              <p>This input contains only unpositioned atoms or expandable segments. Its sequence, bonds, and conditions remain editable.</p>
+              <p>Style controls need positioned atoms. Load a structure with coordinates to see it here.</p>
+            </div>
+          </div>
+          <div id="empty-state" class="empty-state">
+            <div class="empty-state-inner">
+              <h2>No structure loaded</h2>
+              <p>Pick an example on the right, or click <strong>Open</strong> in the top bar.</p>
+              <button id="empty-open" class="secondary" type="button" hidden>Open…</button>
+            </div>
+          </div>
+          </div>
+          <div id="trajectory-bar" class="trajectory-bar" hidden>
+            <button id="trajectory-toggle" class="secondary compact" aria-pressed="false">Show trajectory</button>
+            <div id="trajectory-controls" hidden>
+              <button id="trajectory-play" class="secondary compact">Play</button>
+              <input id="trajectory-frame" type="range" min="0" max="0" value="0" step="1" aria-label="Trajectory frame" />
+              <output id="trajectory-position" aria-live="off"></output>
+              <span class="muted">Backbone · view only</span>
+            </div>
+          </div>
+          <form id="viewer-command-form" class="viewer-command-bar">
+              <select id="selection-syntax" aria-label="Input syntax">
+                <option value="expression">AtomWorks query</option>
+              </select>
+              <input
+                id="viewer-command"
+                aria-label="PyMOL command or AtomWorks query"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="Enter command or selection"
+              />
+              <button id="run-viewer-command" type="submit" class="secondary compact">Run</button>
+          </form>
+        </div>
+
+        <aside id="atomworks-studio-popover" class="studio-menu-popover" aria-label="Studio controls">
+          <details id="examples-panel" class="card quick-start-card" data-editor-card="main" open>
+            <summary>Examples</summary>
+            <p class="muted">Annotated NIM inputs. Loading an example opens a new document.</p>
+            <div id="example-list" class="example-list"></div>
+          </details>
+
+          <section class="card editor-document">
+            <h2>Structure</h2>
+            <div id="structure-summary" class="muted">No structure loaded.</div>
+            <p id="coordinate-summary" class="muted" hidden></p>
+            <p id="structure-edit-feedback" class="inline-feedback muted" aria-live="polite"></p>
+            <div class="button-row">
+              <button id="validate" disabled>Validate</button>
+              <button id="undo" class="secondary" disabled>Undo</button>
+              <button id="reset-conditions" class="secondary" hidden disabled>Reset conditions to defaults</button>
+              <button id="close-structure" class="secondary" disabled>Close structure</button>
+            </div>
+          </section>
+
+          <section class="card" data-editor-card="annotations">
+            <h2>Annotations</h2>
+            <label>Type<select id="condition"></select></label>
+            <label class="checkbox"><input id="enabled" type="checkbox" checked /> Enable condition</label>
+            <div id="condition-value"></div>
+            <p id="condition-feedback" class="inline-feedback muted" aria-live="polite">Select one or more atoms.</p>
+            <button id="apply-condition" disabled>Apply to selection</button>
+            <hr />
+            <div class="card-title-row">
+              <h3>Conditions on this structure</h3>
+              <button id="clear-annotation-view" class="secondary compact" disabled>Clear colors</button>
+            </div>
+            <p class="muted">Click a condition to highlight it and see its values. Click again to restore the previous colors. This only changes the view.</p>
+            <div id="annotation-list" class="annotation-list muted">
+              Open a structure to see its conditions.
+            </div>
+            <div id="annotation-detail" class="annotation-detail muted">
+              Choose a condition above, or click an atom to see its conditions.
+            </div>
+          </section>
+
+          <details class="card" data-editor-card="structure">
+            <summary>Charges</summary>
+            <div class="inline-fields">
+              <label>Charge action
+                <select id="charge-action"><option value="value">Set</option><option value="delta">Add delta</option></select>
+              </label>
+              <label>Charge<input id="charge" type="number" min="-10" max="10" value="0" /></label>
+            </div>
+            <button id="apply-charge" disabled>Apply charge</button>
+          </details>
+
+          <details class="card" data-editor-card="structure">
+            <summary>Protonation</summary>
+            <div class="inline-fields protonation-fields">
+              <label>pH<input id="protonation-ph" type="number" min="0" max="14" step="0.1" value="7.4" /></label>
+              <button id="protonate" disabled>Protonate structure</button>
+            </div>
+            <p class="muted">Updates hydrogens and formal charges for the whole structure. Undo restores the previous state.</p>
+          </details>
+
+          <details class="card" data-editor-card="structure">
+            <summary>Bonds</summary>
+            <p class="muted">Select exactly two atoms to add or remove a bond.</p>
+            <label>Bond type<select id="bond-type"></select></label>
+            <div class="button-row">
+              <button id="add-bond" disabled>Add bond</button>
+              <button id="remove-bond" class="secondary" disabled>Remove bond</button>
+            </div>
+            <div class="button-row">
+              <button id="inspect-bonds" class="secondary" aria-expanded="false" aria-controls="bond-list" disabled>Inspect bonds</button>
+              <button id="infer-bonds" class="secondary" disabled>Infer CCD bonds</button>
+            </div>
+            <div id="bond-list" class="drawer-list muted" aria-live="polite" hidden></div>
+          </details>
+
+          <details class="card" data-editor-card="main">
+            <summary>Structure editing</summary>
+            <div class="button-row">
+              <button id="delete-atoms" class="danger" disabled>Delete selection</button>
+              <button id="reset-residues" class="secondary" disabled>Reset residue IDs</button>
+            </div>
+            <label class="checkbox"><input id="close-residue-gaps" type="checkbox" /> Close residue-ID gaps after delete</label>
+          </details>
+
+          <details class="card" data-editor-card="main">
+            <summary>Expandable segments</summary>
+            <div class="inline-fields">
+              <label>Min<input id="segment-min" type="number" min="1" value="5" /></label>
+              <label>Max<input id="segment-max" type="number" min="1" value="10" /></label>
+            </div>
+            <label class="checkbox"><input id="segment-before" type="checkbox" checked /> Insert before picked atom</label>
+            <label class="checkbox"><input id="segment-new-chain" type="checkbox" /> Create as a new chain</label>
+            <div id="segment-chain-options" class="inline-fields" hidden>
+              <label>Chain ID<input id="segment-chain-id" maxlength="8" placeholder="Next available" /></label>
+              <label>Chain type
+                <select id="segment-chain-type">
+                  <option value="polypeptide(L)">Polypeptide (L)</option>
+                  <option value="polypeptide(D)">Polypeptide (D)</option>
+                  <option value="polydeoxyribonucleotide">DNA</option>
+                  <option value="polyribonucleotide">RNA</option>
+                </select>
+              </label>
+            </div>
+            <button id="insert-segment" disabled>Insert expandable segment</button>
+          </details>
+
+          <section class="drawer-stack" data-editor-card="main" aria-label="Viewer data drawers">
+            <details id="objects-drawer" class="card drawer">
+              <summary>Objects</summary>
+              <div id="object-list" class="drawer-list muted">Open a structure to list objects.</div>
+            </details>
+            <details id="selections-drawer" class="card drawer">
+              <summary>Selections</summary>
+              <div id="active-selection-count" class="muted">0 atoms in active selection</div>
+              <div id="selection-list" class="drawer-list muted"></div>
+            </details>
+            <details id="measurements-drawer" class="card drawer">
+              <summary>Measurements</summary>
+              <div id="measurement-list" class="drawer-list muted">No measurements.</div>
+            </details>
+            <details id="interactions-drawer" class="card drawer">
+              <summary>Interactions</summary>
+              <div id="analysis-results" class="drawer-list"></div>
+            </details>
+          </section>
+
+          <details class="card log-card" data-editor-card="main">
+            <summary>Activity log</summary>
+            <pre id="status" tabindex="0">Starting Studio…</pre>
+          </details>
+        </aside>
+      </section>
+      <footer class="status-bar">
+        <span id="status-message" role="status">Starting Studio…</span>
+        <a id="guide-link" href="./guide/WEB.html" target="_blank" rel="noopener">Guide</a>
+      </footer>
+    </main>
+  </body>
 </html>

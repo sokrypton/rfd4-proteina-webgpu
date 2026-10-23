@@ -103,39 +103,39 @@ node tools/gpu-chrome.mjs tools/gpu/profile-rfd4p.js
 
 ### 4.1. End-to-End & Stage Wall-Clock Table (Fill in M2 & M5 Columns)
 
-| Benchmark / Metric | A100 Initial | A100 (`submat`) | A100 (`--no-submat=1`) | M2 (stock) | M5 (stock) |
-|---|---:|---:|---:|---:|---:|
-| `uncond_short_low_60steps` (`n = 100`, 120 passes) | `5,378.7 ms` | **`1,002.7 ms`** | `2,534.6 ms` | *measure* | *measure* |
-| `uncond_short_medium_60steps` (`n = 100`, 180 passes) | `7,620.4 ms` | **`1,475.9 ms`** | `3,698.8 ms` | *measure* | *measure* |
-| `ppi_pdl1_low_60steps` (`n = 207`, 120 passes) | `15,196.6 ms` | **`3,034.0 ms`** | `8,358.4 ms` | *measure* | *measure* |
-| `fwd3WallMs` (`n = 100`, 3 passes) | `71.02 ms` | **`34.96 ms`** | `90.10 ms` | *measure* | *measure* |
-| `fwd3WallMs` (`n = 207`, 3 passes) | `120.75 ms` | **`77.66 ms`** | `223.40 ms` | *measure* | *measure* |
-| `initGpu` (`n = 100` / `n = 207`) | `1.240 / 1.421 ms` | **`0.284 / 0.342 ms`** | `0.306 / 0.348 ms` | *measure* | *measure* |
-| `passGpu` 1 trunk pass (`n = 100` / `n = 207`) | `15.47 / 111.74 ms` | **`10.90 / 27.47 ms`** | `23.31 / 71.37 ms` | *measure* | *measure* |
-| `headGpu` (`n = 100` / `n = 207`) | `0.194 / 0.205 ms` | **`0.130 / 0.143 ms`** | `0.132 / 0.142 ms` | *measure* | *measure* |
-| `decoderGpu` (`n = 100` / `n = 207`) | `6.143 / 7.717 ms` | **`4.113 / 4.790 ms`** | `5.860 / 7.090 ms` | *measure* | *measure* |
+| Benchmark / Metric | A100 Initial | A100 (`submat`) | A100 (`--no-submat=1`) | M2 Baseline (stock) | M2 Optimized (stock) | M5 (stock) |
+|---|---:|---:|---:|---:|---:|---:|
+| `uncond_short_low_60steps` (`n = 100`, 120 passes) | `5,378.7 ms` | **`1,002.7 ms`** | `2,534.6 ms` | `59,749.6 ms` | **`37,009.1 ms`** (**1.61x**) | *measure* |
+| `uncond_short_medium_60steps` (`n = 100`, 180 passes) | `7,620.4 ms` | **`1,475.9 ms`** | `3,698.8 ms` | `89,379.7 ms` | **`55,755.0 ms`** (**1.60x**) | *measure* |
+| `ppi_pdl1_low_60steps` (`n = 207`, 120 passes) | `15,196.6 ms` | **`3,034.0 ms`** | `8,358.4 ms` | `233,728.1 ms` | **`150,769.4 ms`** (**1.55x**) | *measure* |
+| `fwd3WallMs` (`n = 100`, 3 passes) | `71.02 ms` | **`34.96 ms`** | `90.10 ms` | `1,495.88 ms` | **`920.02 ms`** (**1.63x**) | *measure* |
+| `fwd3WallMs` (`n = 207`, 3 passes) | `120.75 ms` | **`77.66 ms`** | `223.40 ms` | `5,818.46 ms` | **`3,723.64 ms`** (**1.56x**) | *measure* |
+| `initGpu` (`n = 100` / `n = 207`) | `1.240 / 1.421 ms` | **`0.284 / 0.342 ms`** | `0.306 / 0.348 ms` | `2.368 / 4.522 ms` | **`1.902 / 3.131 ms`** | *measure* |
+| `passGpu` 1 trunk pass (`n = 100` / `n = 207`) | `15.47 / 111.74 ms` | **`10.90 / 27.47 ms`** | `23.31 / 71.37 ms` | `494.97 / 1,934.04 ms` | **`303.86 / 1,227.32 ms`** (**1.63x / 1.58x**) | *measure* |
+| `headGpu` (`n = 100` / `n = 207`) | `0.194 / 0.205 ms` | **`0.130 / 0.143 ms`** | `0.132 / 0.142 ms` | `0.233 / 0.329 ms` | **`0.234 / 0.324 ms`** | *measure* |
+| `decoderGpu` (`n = 100` / `n = 207`) | `6.143 / 7.717 ms` | **`4.113 / 4.790 ms`** | `5.860 / 7.090 ms` | `65.067 / 114.385 ms` | **`38.027 / 69.295 ms`** (**1.71x / 1.65x**) | *measure* |
 
 ### 4.2. Per-Kernel Breakdown of 1 Trunk Pass (`passGpu`) at `n = 207` (`ppi_pdl1`, `nn = 42,849`)
 
 Look closely at the contrast between A100 `submat` (`27.47 ms/pass`) and A100 `--no-submat=1` (`71.37 ms/pass`), because **M2 and M5 currently run the `--no-submat=1` path**:
 
-| Kernel Label (`n = 207`, `nn = 42,849`) | Calls | A100 `submat` (ms) | A100 `--no-submat=1` (ms) | Why `--no-submat=1` is Slower (and How to Fix on M2/M5) |
-|---|---:|---:|---:|---|
-| `triProjG 42849x1408x384` | 14 | `6.535` | **`28.571`** | **40% of pass!** In `triProjG` (`engine.js:2543`), `submat=false` writes `c[(cBase + k) * sC0 + mPad]` directly to global memory with stride `sC0 = 42,849` floats (`171 KB` stride = uncoalesced scatter writes!) and `f32` outputs, whereas `submat` transposes via shared memory and fuses `t.lnIn`. |
-| `gemm 42849x384x768` (`Q.l2`) | 7 | `3.671` | **`8.559`** | Pair transition output GEMM; reads/writes `f32` `phid` and `z` instead of `f16` (`triF16 = false`). |
-| `gemm 42849x768x384` (`Q.l1`) | 7 | `3.575` | **`8.457`** | Pair transition input GEMM; reads/writes `f32` `zc` and `phid` instead of `f16`, and does not fuse `Q.trLnW` (`inNorm: 'ln'`). |
-| `gemm 42849x384x256` (`t.z`) | 14 | `3.600` | **`7.017`** | Triangle output linear `t.z`; reads `f32` `xc`, `gz`, `z` instead of `f16`. |
-| `tri-in` + `tri-out` (`207x207x207[256]`) | 14 | `2.659` | **`5.514`** | Batched `256 x [n, n] x [n, n]^T` contraction; reads/writes `f32` `aT`, `bT`, `x` instead of `f16`. |
-| `ln 42849x384` (`t.in.lnIn` + `Q.trLnW`) | 14 vs 7 | `0.606` (7 calls) | **`1.469`** (14 calls) | Under `--no-submat=1`, `z` and `zc` are `f32` (2x memory traffic) AND `Q.trLnW` is not fused into `Q.l1` (7 extra calls). |
-| `pairWriteLnIn 42849x384` | 7 | `0.858` | **`1.190`** | Reads/writes `f32` `z` and `zc` instead of `f16` (`outF16 = false`). |
-| `triLnOut 42849x256` | 14 | `0.785` | **`1.054`** | Reads/writes `f32` `x` and `xc` instead of `f16` (`inF16 = outF16 = false`). |
-| `pairToBias` | 7 | `0.761` | **`0.948`** | `pairToBiasSource` (32-lane subgroup dot product) is already very fast (`0.948 ms` vs `0.761 ms`)! |
-| `swigluLinear 207x3072x768` | 14 | `0.944` | **`2.114`** | Token transition SwiGLU (`gemmSource` `64x128` register FMA). |
-| `gemm 207x3072x768` (`qkvg` Split-K=2) | 14 | `0.781` | **`1.712`** | Token `qkvg` projection (`gemmSmallSource` / `gemmSource`). |
-| `gemm 207x768x3072` (`swOut` Split-K=8) | 14 | `0.713` | **`1.364`** | Token transition output projection (8-way Split-K). |
-| `gemm 207x768x768` (`L.out` + `Q.linX` Split-K=4) | 21 | `0.631` | **`0.943`** | Token attention output + pair `linX` (4-way Split-K). |
-| `splitReduce+norm 207x768` | 28 | `0.648` | **`0.665`** | Identical subgroup kernel on both paths (`hasF16`). |
-| `pv` + `qk` + `softmax` + `rms2` | 56 | `1.391` | **`1.776`** | Token self-attention (`n = 207`). |
+| Kernel Label (`n = 207`, `nn = 42,849`) | Calls | A100 `submat` (ms) | A100 `--no-submat=1` (ms) | M2 Baseline (ms) | M2 Optimized (ms) | Why `--no-submat=1` is Slower (and How to Fix on M2/M5) |
+|---|---:|---:|---:|---:|---:|---|
+| `triProjG 42849x1408x384` | 14 | `6.535` | **`28.571`** | `831.376` | **`578.419`** (**1.44x**) | **40% of pass!** In `triProjG` (`engine.js:2543`), `submat=false` writes `c[(cBase + k) * sC0 + mPad]` directly to global memory with stride `sC0 = 42,849` floats (`171 KB` stride = uncoalesced scatter writes!) and `f32` outputs, whereas `submat` transposes via shared memory and fuses `t.lnIn`. |
+| `gemm 42849x384x768` (`Q.l2`) | 7 | `3.671` | **`8.559`** | `243.137` | **`158.328`** (**1.54x**) | Pair transition output GEMM; reads/writes `f32` `phid` and `z` instead of `f16` (`triF16 = false`). |
+| `gemm 42849x768x384` (`Q.l1`) | 7 | `3.575` | **`8.457`** | `252.001` | **`163.055`** (**1.55x**) | Pair transition input GEMM; reads/writes `f32` `zc` and `phid` instead of `f16`, and does not fuse `Q.trLnW` (`inNorm: 'ln'`). |
+| `gemm 42849x384x256` (`t.z`) | 14 | `3.600` | **`7.017`** | `210.633` | **`111.507`** (**1.89x**) | Triangle output linear `t.z`; reads `f32` `xc`, `gz`, `z` instead of `f16`. |
+| `tri-in` + `tri-out` (`207x207x207[256]`) | 14 | `2.659` | **`5.514`** | `189.271` | **`102.341`** (**1.85x**) | Batched `256 x [n, n] x [n, n]^T` contraction; reads/writes `f32` `aT`, `bT`, `x` instead of `f16`. |
+| `ln 42849x384` (`t.in.lnIn` + `Q.trLnW`) | 14 vs 7 | `0.606` (7 calls) | **`1.469`** (14 calls) | `22.769` (14) | **`5.463`** (7, **4.17x**) | Under `--no-submat=1`, `z` and `zc` are `f32` (2x memory traffic) AND `Q.trLnW` is not fused into `Q.l1` (7 extra calls). |
+| `pairWriteLnIn 42849x384` | 7 | `0.858` | **`1.190`** | `16.321` | **`8.087`** (**2.02x**) | Reads/writes `f32` `z` and `zc` instead of `f16` (`outF16 = false`). |
+| `triLnOut 42849x256` | 14 | `0.785` | **`1.054`** | `16.996` | **`8.505`** (**2.00x**) | Reads/writes `f32` `x` and `xc` instead of `f16` (`inF16 = outF16 = false`). |
+| `pairToBias` | 7 | `0.761` | **`0.948`** | `7.717` | **`4.953`** (**1.56x**) | `pairToBiasSource` (32-lane subgroup dot product) is already very fast (`0.948 ms` vs `0.761 ms`)! |
+| `swigluLinear 207x3072x768` | 14 | `0.944` | **`2.114`** | `46.841` | **`31.659`** (**1.48x**) | Token transition SwiGLU (`gemmSource` `64x128` register FMA). |
+| `gemm 207x3072x768` (`qkvg` Split-K=2) | 14 | `0.781` | **`1.712`** | `40.395` | **`19.293`** (**2.09x**) | Token `qkvg` projection (`gemmSmallSource` / `gemmSource`). |
+| `gemm 207x768x3072` (`swOut` Split-K=8) | 14 | `0.713` | **`1.364`** | `26.296` | **`17.249`** (**1.52x**) | Token transition output projection (8-way Split-K). |
+| `gemm 207x768x768` (`L.out` + `Q.linX` Split-K=4) | 21 | `0.631` | **`0.943`** | `14.820` | **`7.147`** (**2.07x**) | Token attention output + pair `linX` (4-way Split-K). |
+| `splitReduce+norm 207x768` | 28 | `0.648` | **`0.665`** | `2.543` | **`1.980`** (**1.28x**) | Identical subgroup kernel on both paths (`hasF16`). |
+| `pv` + `qk` + `softmax` + `rms2` | 56 | `1.391` | **`1.776`** | `12.863` | **`9.178`** (**1.40x**) | Token self-attention (`n = 207`). |
 
 ---
 
@@ -250,3 +250,107 @@ Append a section **"## 9. Apple Silicon (M2 & M5) Reply"** at the end of this fi
 1. Step 1 gate results on M2 and M5 (`check-rfd4p.js`, `check-generate.js`, `check-webapp.js`).
 2. Step 2 baseline table (§4.1 and §4.2) with the M2 and M5 columns filled in.
 3. Each Step 3 optimization measured (interleaved before/after numbers on M2 and M5, plus gate verification).
+
+---
+
+## 9. Apple Silicon (M2 & M5) Reply
+
+### 9.1. Device & Adapter Profile (Apple M2)
+
+- **Host**: Apple M2 (`macOS 13.2.1`, 10-core GPU, 8-core CPU)
+- **Adapter**: `vendor: "apple"`, `architecture: "metal-3"`, `description: ""`
+- **Features**: `hasF16: true`, `hasSubgroups: true`, `hasSubgroupMatrix: false`, `subgroupMatrixConfigs: []` (identical under both `LOCALFOLD_STOCK_FLAGS=1` and `--enable-unsafe-webgpu` on Chrome on macOS 13.2.1).
+
+---
+
+### 9.2. Step 1 & Post-Optimization Gate Results on Apple M2
+
+All CPU and WebGPU oracle gates pass both before and after the Step 3 optimizations. In fact, switching the `gemmSource` and `gemmSmallSource` 16-step inner K-loop from `vec4<f16>` partial accumulation (`p_0_0..p_3_1`) to direct `vec4<f32>` `fma` accumulation (`acc_0_0..acc_3_1`) **significantly improved FP16 numerical parity** across the Trunk, Decoder, Encoder, and 60-step trajectory:
+
+| Gate Command | M2 Pre-Opt (`--half=1`) | M2 Post-Opt (`--half=1`) | M2 Post-Opt (`FP32`) | Status |
+|---|---|---|---|---|
+| `npm test` | `8/8 PASS (436.2 ms)` | `8/8 PASS (391.7 ms)` | — | **PASS** |
+| `node tools/oracle/check-batch.mjs` | `7/7 PASS (maxAbs <= 3.39e-6)` | `7/7 PASS (maxAbs <= 3.39e-6)` | — | **PASS** |
+| `node tools/oracle/check-features.mjs` | `PASS (maxAbs <= 1.19e-7)` | `PASS (maxAbs <= 1.19e-7)` | — | **PASS** |
+| `node tools/oracle/check-sampler.mjs` | `PASS (bb_ca relRms=4.64e-6, 85/85 randn)` | `PASS (bb_ca relRms=4.64e-6, 85/85 randn)` | — | **PASS** |
+| `node tools/oracle/check-output.mjs` | `6/6 PASS (<= 5.04e-4 Å maxAbs, 40/40 bij)` | `6/6 PASS (<= 5.04e-4 Å maxAbs, 40/40 bij)` | — | **PASS** |
+| `check-rfd4p.js`: Trunk `uncond_short` `v bb_ca x6` | `relRms = 4.37e-4` | **`relRms = 3.20e-4`** | `relRms = 1.94e-6` | **PASS** (`< 0.01`) |
+| `check-rfd4p.js`: Trunk `uncond_short` `v latents x6` | `relRms = 4.53e-4` | **`relRms = 2.64e-4`** | `relRms = 7.45e-7` | **PASS** (`< 0.01`) |
+| `check-rfd4p.js`: Trunk `uncond_short` `seq logits x6` | `relRms = 4.14e-4` | **`relRms = 1.98e-4`** | `relRms = 6.91e-7` | **PASS** (`< 0.01`) |
+| `check-rfd4p.js`: Trunk `motif_unidx_1prw` `v bb_ca x6` | `relRms = 5.50e-4` | **`relRms = 3.96e-4`** | `relRms = 1.14e-6` | **PASS** (`< 0.01`) |
+| `check-rfd4p.js`: Trunk `motif_unidx_1prw` `insertion x6` | `relRms = 1.28e-3` | **`relRms = 9.83e-4`** | `relRms = 2.41e-6` | **PASS** (`< 0.015`) |
+| `check-rfd4p.js`: Decoder (6/6 cases) | `rtDiff = 0`, `relRms = 8.34e-5 .. 1.23e-4` | **`rtDiff = 0`, `relRms = 6.60e-5 .. 8.80e-5`** | `rtDiff = 0`, `relRms <= 1.17e-7` | **PASS** (`< 0.005`) |
+| `check-rfd4p.js`: Encoder (3/3 cases) | `emitDiff = 0`, `zRelRms <= 5.06e-3` | **`emitDiff = 0`, `zRelRms <= 8.72e-4`** | `emitDiff = 0`, `zRelRms <= 3.97e-6` | **PASS** (`< 0.02`) |
+| `check-generate.js --half=1` (`uncond_short`, 60 steps) | `finalBbCa.rmsdA = 0.0369 Å`, `finalStructure.rmsdA = 0.04425 Å`, `maxAtomDistA = 0.2662 Å`, `rtDiff = 0` | **`finalBbCa.rmsdA = 0.0377 Å`, `finalStructure.rmsdA = 0.03954 Å`, `maxAtomDistA = 0.1212 Å`, `rtDiff = 0`** | — | **PASS** (`< 0.25 Å`) |
+| `check-webapp.js` (10 presets + inverse folding + py2Dmol) | `ok: true`, `11.16 s` (`127` tokens) / `6.07 s` (`89` tokens) | **`ok: true`, `7.43 s` (`127` tokens, 1.50x faster) / `6.04 s` (`89` tokens)** | — | **PASS** |
+
+---
+
+### 9.3. Step 2 & Step 3 Before/After Summary on Apple M2
+
+#### End-to-End & Stage Wall-Clock (`profile-rfd4p.js`)
+
+| Benchmark / Metric | M2 Baseline (Before) | M2 Optimized (After) | Speedup / Savings |
+|---|---:|---:|---:|
+| **`uncond_short_low_60steps`** (`n = 100`, 120 passes) | `59,749.6 ms` | **`37,009.1 ms`** | **1.61x** (`-22.74 s`) |
+| **`uncond_short_medium_60steps`** (`n = 100`, 180 passes) | `89,379.7 ms` | **`55,755.0 ms`** | **1.60x** (`-33.62 s`) |
+| **`ppi_pdl1_low_60steps`** (`n = 207`, 120 passes) | `233,728.1 ms` | **`150,769.4 ms`** | **1.55x** (`-82.96 s`) |
+| **`fwd3WallMs`** (`n = 100`, 3 passes) | `1,495.88 ms` | **`920.02 ms`** | **1.63x** (`-575.9 ms`) |
+| **`fwd3WallMs`** (`n = 207`, 3 passes) | `5,818.46 ms` | **`3,723.64 ms`** | **1.56x** (`-2,094.8 ms`) |
+| **`initGpu`** (`n = 100` / `n = 207`) | `2.368 / 4.522 ms` | **`1.902 / 3.131 ms`** | **1.25x / 1.44x** |
+| **`passGpu`** 1 trunk pass (`n = 100`) | `494.967 ms` | **`303.861 ms`** | **1.63x** (`-191.1 ms/pass`) |
+| **`passGpu`** 1 trunk pass (`n = 207`) | `1,934.036 ms` | **`1,227.324 ms`** | **1.58x** (`-706.7 ms/pass`) |
+| **`headGpu`** (`n = 100` / `n = 207`) | `0.233 / 0.329 ms` | **`0.234 / 0.324 ms`** | **1.00x / 1.02x** |
+| **`decoderGpu`** (`n = 100`) | `65.067 ms` | **`38.027 ms`** | **1.71x** (`-27.0 ms`) |
+| **`decoderGpu`** (`n = 207`) | `114.385 ms` | **`69.295 ms`** | **1.65x** (`-45.1 ms`) |
+
+#### Per-Kernel Breakdown of 1 Trunk Pass (`passGpu`) at `n = 100` (`10,000` pairs) and `n = 207` (`42,849` pairs) on M2
+
+| Kernel Category | Calls | `n = 100` Before (`ms`) | `n = 100` After (`ms`) | Speedup (`n=100`) | `n = 207` Before (`ms`) | `n = 207` After (`ms`) | Speedup (`n=207`) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `triProjG [nn]x1408x384` | 14 | `204.242` | **`140.470`** | **1.45x** | `831.376` | **`578.419`** | **1.44x** |
+| `gemm [nn]x768x384` (`Q.l1Fused`) | 7 | `60.625` | **`40.668`** | **1.49x** | `252.001` | **`163.055`** | **1.55x** |
+| `gemm [nn]x384x768` (`Q.l2`) | 7 | `59.406` | **`38.587`** | **1.54x** | `243.137` | **`158.328`** | **1.54x** |
+| `gemm [nn]x384x256` (`t.z`) | 14 | `50.610` | **`27.498`** | **1.84x** | `210.633` | **`111.507`** | **1.89x** |
+| `tri-in` + `tri-out` (`256x[n]x[n]x[nPad]`) | 14 | `31.838` | **`17.507`** | **1.82x** | `189.271` | **`102.341`** | **1.85x** |
+| `swigluLinear [n]x3072x768` | 14 | `23.516` | **`16.588`** | **1.42x** | `46.841` | **`31.659`** | **1.48x** |
+| `gemm [n]x3072x768` (`qkvg`) | 14 | `22.712` | **`10.351`** | **2.19x** | `40.395` | **`19.293`** | **2.09x** |
+| `gemm [n]x768x3072` (`swOut`) | 14 | `19.631` | **`9.532`** | **2.06x** | `26.296` | **`17.249`** | **1.52x** |
+| `gemm [n]x768x768` (`L.out` + `Q.linX`) | 21 | `9.291` | **`4.101`** | **2.27x** | `14.820` | **`7.147`** | **2.07x** |
+| `ln [nn]x384` (`t.in.lnIn` only; `Q.trLnW` fused) | 14 -> 7 | `5.349` | **`1.478`** | **3.62x** | `22.769` | **`5.463`** | **4.17x** |
+| `triLnOut [nn]x256` | 14 | `3.997` | **`1.999`** | **2.00x** | `16.996` | **`8.505`** | **2.00x** |
+| `pairWriteLnIn [nn]x384` | 7 | `3.829` | **`1.869`** | **2.05x** | `16.321` | **`8.087`** | **2.02x** |
+| `pairToBias` | 7 | `1.970` | **`1.309`** | **1.50x** | `7.717` | **`4.953`** | **1.56x** |
+| `pv` + `qk` + `softmax` + `rms2` | 56 | `3.309` | **`2.790`** | **1.19x** | `12.863` | **`9.178`** | **1.40x** |
+| `splitReduce+norm [n]x768` | 28 | `1.594` | **`1.425`** | **1.12x** | `2.543` | **`1.980`** | **1.28x** |
+| **Total 1 Trunk Pass (`passGpu`)** | **220 -> 213** | **`494.967`** | **`303.861`** | **1.63x** | **`1,934.036`** | **`1,227.324`** | **1.58x** |
+
+---
+
+### 9.4. Step 3 Optimization Breakdown & Architectural Findings on Apple M2
+
+1. **Priority 1 — Coalesced `triProjG` `aT`/`bT` Epilogue Transpose Reusing `tb` (`6.25 KB` total workgroup memory)**:
+   - **What we found**: Adding a separate `shOut` workgroup array (`16.5 KB` on top of `ta + tb = 6.25 KB`) cut threadgroup occupancy on Apple M2 and regressed the `k0` mainloop by `+155 ms`!
+   - **How we fixed it**: When `w.half === true && this.hasF16`, `tb` is `array<vec4<f16>, 528>` (`4,224` bytes, `2,112` `f16` scalars), which is completely unused after the `k0` loop finishes. We implemented a 2-pass `32 x 64` shared-memory transpose directly inside `tb` (`colLocal * 66 + mLocal`, padded stride `66` `f16`s = `33` `u32` words for bank-conflict-free access) where each lane `r = li & 63u` writes contiguous `m = m0 + r` to `c[(c0 + colLocal) * sC0 + mPad]`, while `gz` (`n0 >= 1024`) uses vectorized `vec2<u32>` (`pack4f16`) writes.
+   - **Impact**: Zero extra workgroup memory (`6.25 KB` total), reducing `triProjG` at `n = 207` from `831.38 ms` (`59.38 ms/call`) to **`578.42 ms` (`41.32 ms/call`, 1.44x speedup, `-253.0 ms/pass`)**, and at `n = 100` from `204.24 ms` to **`140.47 ms` (1.45x speedup)**.
+
+2. **Priority 2 — Full `triF16` Pair-Track Activations, `wordB`, Compile-Time `vecEpilogue`, and `inLn` (`Q.l1Fused`) on `hasF16`**:
+   - Enabled `aF16`, `cF16`, and `gF16` on `gemmSource` and `gemmSmallSource`, switching `triF16` (`zInitStatic`, `zInit`, `z`, `zc`, `aT`, `bT`, `x`, `xc`, `gz`, `phid`), `swF16` (`swigluLinear`), `xnF16` (`blocks.js`), and `outF16` (`splitReduceNorm`) from `this.hasSubgroupMatrix` to `this.hasF16`.
+   - Added `wordB` (`b: array<u32>` with `unpack2x16float`) for `bF16 && !bVec4` so `tri-in` and `tri-out` (`256 x 207 x 207 x 208`) load `bT` as `u32` pairs instead of scalar `f16` loads, cutting `tri-in` + `tri-out` at `n = 207` from `189.27 ms` to **`102.34 ms` (1.85x speedup, `-86.9 ms/pass`)**.
+   - Specialized `fullK` (`k % 16 === 0`) and `vecEpilogue` (`!pairOut && n % 4 === 0 && sC0 % 4 === 0 && sG0 % 4 === 0`) at WGSL compile time so `t.z`, `Q.l1`, and `Q.l2` emit `vec2<u32>` (`pack4f16`/`unpack4f16`) and `vec4<f32>` loads/stores instead of 4 scalar stores per row. `t.z` (`42849 x 384 x 256`) dropped from `210.63 ms` to **`111.51 ms` (1.89x speedup, `-99.1 ms/pass`)**.
+   - Added `inLn` (`Q.l1Fused` algebraic LayerNorm fusion) to `gemmSource` using 4 `subgroupShuffleXor` butterfly reductions across the 16 `tx` lanes (`delta = 1, 2, 4, 8`) with **zero extra workgroup memory**, cutting `ln 42849x384` from 14 calls (`22.77 ms`) to 7 calls (`5.46 ms`, **4.17x speedup**) and speeding up `Q.l1` (`252.00 ms` -> **`163.06 ms`, 1.55x**) and `Q.l2` (`243.14 ms` -> **`158.33 ms`, 1.54x**).
+   - `pairWriteLnIn` (`16.32 ms` -> **`8.09 ms`, 2.02x**), `triLnOut` (`17.00 ms` -> **`8.51 ms`, 2.00x**), and `pairToBias` (`7.72 ms` -> **`4.95 ms`, 1.56x**) all halved their memory traffic on the `f16` pair tensors.
+
+3. **Priority 3 — `gemmSmallSource` vs. `gemmSource` Tile Selector for Apple Silicon (10 GPU Cores)**:
+   - Previously, `const small = !submat && (m * B0 * B1 <= 1024 || n <= 64)` routed every token-track GEMM at `m = 100` and `m = 207` (`qkvg`, `swOut`, `L.out`, `Q.linX`, plus Decoder/Encoder token GEMMs) to `gemmSmallSource` (`32x64` tile, `2x4` per thread) instead of `gemmSource` (`64x128` tile, `4x4` per thread).
+   - Updating the selector to `const small = !submat && (m <= 32 || n <= 64 || tiles64 < 32)` routes `m = 100` and `m = 207` token projections (`tiles64 >= 36`) to `gemmSource` (`64x128`), where higher register reuse per shared-memory load more than doubles throughput on M2's 10 GPU cores:
+     - `qkvg` (`207x3072x768`): `40.40 ms` -> **`19.29 ms` (2.09x)**; at `n = 100`: `22.71 ms` -> **`10.35 ms` (2.19x)**
+     - `swOut` (`100x768x3072`): `19.63 ms` -> **`9.53 ms` (2.06x)**; at `n = 207`: `26.30 ms` -> **`17.25 ms` (1.52x)**
+     - `L.out` + `Q.linX` (`[n]x768x768`): `9.29 ms` -> **`4.10 ms` (2.27x)** at `n = 100`; `14.82 ms` -> **`7.15 ms` (2.07x)** at `n = 207`
+     - `decoderGpu`: `65.07 ms` -> **`38.03 ms` (1.71x)** at `n = 100`; `114.39 ms` -> **`69.30 ms` (1.65x)** at `n = 207`.
+
+4. **Priority 4 — Direct `vec4<f32>` `fma` Inner-Loop Accumulation & Register-Pressure Reduction in `gemmSource` / `gemmSmallSource`**:
+   - Eliminated the 8 intermediate `vec4<f16>` accumulators (`p_0_0..p_3_1`, 16 registers/thread) and accumulated `fma(vec4<f32>(av), vec4<f32>(bv), acc)` directly into `acc_0_0..acc_3_1` while keeping `ta` and `tb` staged as `vec4<f16>` in workgroup memory, and collapsed `aBase0..3` / `bBase0..3` into single base registers (`aBase0`, `bBase0`) with `r * sA0` / `r * sB0` offsets.
+   - This both accelerated every large pair GEMM (`triProjG`, `Q.l1`, `Q.l2`, `t.z`, `swigluLinear`) by an additional `~7–10%` on M2 and improved FP16 numerical accuracy across every benchmark (`check-generate.js` `maxAtomDistA` improved from `0.2662 Å` to **`0.1212 Å`**).
+   - **Note on `qkOutF16`**: We kept `qkOutF16` (`att.qk` -> `att.pv` packed `f16` attention weights) gated on `this.hasSubgroupMatrix` because `attPvSource` (`engine.js:1487`) uses `unpack2x16float` without `r0 < p.n` bounds checks on the tail of the 4-row tile when `n` is not a multiple of 4 (`n = 207`). Keeping `qkOutF16` on `hasSubgroupMatrix` preserves exact attention accuracy while `xnF16`, `swF16`, and `triF16` run in `f16` on `hasF16`.
+

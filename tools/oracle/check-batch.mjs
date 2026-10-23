@@ -60,11 +60,24 @@ function recordedRandperm(tensors, rngLog, call) {
   };
 }
 
+const EXAMPLE_FALLBACKS = {
+  'data/benchmarks/monomer/monomer-short.cif.zst': 'uncond_short.cif.zst',
+  'data/benchmarks/ppi/ppi_all_atom/pdl1.cif.zst': 'ppi_pdl1.cif.zst',
+  'data/benchmarks/small_molecule_binder/SAM_hbonds.cif.zst': 'sm_sam.cif.zst',
+  'data/benchmarks/dna_binder/dna_binder_denovo_val/7m5w_structure_context.cif.zst': 'dna_7m5w.cif.zst',
+  'data/benchmarks/motif_scaffolding/motif_indexed/1PRW_AA.cif.zst': 'motif_idx_1prw.cif.zst',
+  'data/benchmarks/motif_scaffolding/motif_unindexed/1PRW_AA.cif.zst': 'motif_unidx_1prw.cif.zst',
+};
+
 function resolveInputPath(rawPath, baseDir = RFD4_REPO_DIR) {
   if (isAbsolute(rawPath) && existsSync(rawPath)) return rawPath;
   const candidate = resolve(baseDir, rawPath);
   if (existsSync(candidate)) return candidate;
-  throw new Error(`Input file not found: ${rawPath} (tried ${candidate})`);
+  const examplesDir = join(ROOT_DIR, 'web/examples');
+  const mapped = EXAMPLE_FALLBACKS[rawPath] || rawPath.split('/').pop();
+  const fallback = join(examplesDir, mapped);
+  if (existsSync(fallback)) return fallback;
+  throw new Error(`Input file not found: ${rawPath} (tried ${candidate}, ${fallback})`);
 }
 
 function loadInputForMeta(meta) {

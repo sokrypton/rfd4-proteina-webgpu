@@ -1,164 +1,388 @@
 /*
- * RFD4-Proteina additions on top of py2Dmol.app.css + localfold.css.
- * Scoped strictly to RFD4-Proteina ids/classes so py2Dmol's light theme
- * and controls remain untouched.
+ * Full-screen AtomWorks Studio + integrated RFD4-Proteina sidebar card styles
  */
 
-#contig-input {
-  box-sizing: border-box;
-  flex-grow: 1;
-  min-width: 0;
-  height: 36px;
-  padding: 6px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
-  line-height: 1.35;
-  background: #fff;
-  color: #111827;
+body.studio-fullscreen-body {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  background: #1b1c1e;
 }
 
-#contig-input:hover {
-  border-color: #9ca3af;
+.studio-fullscreen-iframe {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  border: 0;
+  display: block;
 }
 
-#contig-input:focus {
-  outline: none;
-  border-color: #3b82f6;
+/* RFD4-Proteina card inside AtomWorks Studio's #atomworks-studio-popover */
+.rfd4p-card {
+  background: var(--surface-panel, #222326);
+  border-bottom: 1px solid var(--border, #383a3f);
+  padding: 12px 16px;
 }
 
-.rfd4p-input-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
+.rfd4p-card .card-title-row {
+  margin-bottom: 8px;
 }
 
-.rfd4p-contig-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-}
-
-.rfd4p-contig-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #6b7280;
-  flex-shrink: 0;
-}
-
-.rfd4p-condition-pills {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.rfd4p-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+.rfd4p-card .viewer-backend {
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 3px;
+  color: var(--accent, #82aaff);
+  background: var(--accent-soft, #26354c);
+  border: 1px solid var(--border-strong, #50535a);
   font-size: 11px;
   font-weight: 500;
-  background: #f3f4f6;
-  border: 1px solid #e5e7eb;
-  color: #374151;
 }
 
-.rfd4p-pill.pill-crd {
-  background: #ecfeff;
-  border-color: #a5f3fc;
-  color: #0e7490;
+.rfd4p-compact-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 8px;
 }
 
-.rfd4p-pill.pill-crdgrp {
-  background: #fffbeb;
-  border-color: #fde68a;
-  color: #b45309;
+.rfd4p-compact-grid > label {
+  margin: 0;
 }
 
-.rfd4p-pill.pill-hot {
-  background: #fff1f2;
-  border-color: #fecdd3;
-  color: #be123c;
-}
-
-.rfd4p-pill.pill-mcoord {
-  background: #ecfdf5;
-  border-color: #a7f3d0;
-  color: #047857;
-}
-
-.rfd4p-pill.pill-cath {
-  background: #f5f3ff;
-  border-color: #ddd6fe;
-  color: #6d28d9;
-}
-
-.rfd4p-drawer {
-  border-top: 1px solid #e5e7eb;
-  padding-top: 8px;
-  margin-top: 4px;
-}
-
-.rfd4p-drawer summary {
-  cursor: pointer;
+.rfd4p-Compact-select,
+.rfd4p-compact-grid select {
+  height: 30px;
+  padding: 4px 8px;
   font-size: 12px;
-  font-weight: 600;
-  color: #4b5563;
+}
+
+.rfd4p-thinking-group {
+  margin: 0;
+}
+
+.rfd4p-thinking-group legend,
+.rfd4p-view-group legend {
+  color: var(--text-secondary, #d1d2d5);
+  font-size: 12px;
+  margin-bottom: 5px;
+  padding: 0;
+}
+
+.rfd4p-thinking-group label,
+.rfd4p-view-radios label {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 30px;
+  margin: 0;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong, #50535a);
+  background: var(--surface-recessed, #191a1c);
+  color: var(--text-secondary, #d1d2d5);
+  font-size: 11.5px;
+  cursor: pointer;
+  position: relative;
   user-select: none;
 }
 
-.rfd4p-drawer summary:hover {
-  color: #1f2937;
+.rfd4p-thinking-group label:first-of-type,
+.rfd4p-view-radios label:first-of-type {
+  border-radius: 4px 0 0 4px;
 }
 
-.rfd4p-drawer-grid {
+.rfd4p-thinking-group label:last-of-type,
+.rfd4p-view-radios label:last-of-type {
+  border-radius: 0 4px 4px 0;
+}
+
+.rfd4p-thinking-group label + label,
+.rfd4p-view-radios label + label {
+  border-left: 0;
+}
+
+.rfd4p-thinking-group label:has(input:checked),
+.rfd4p-view-radios label:has(input:checked) {
+  background: var(--accent-soft, #26354c);
+  color: var(--accent-hover, #a9c4ff);
+  border-color: var(--accent, #82aaff);
+  font-weight: 600;
+}
+
+.rfd4p-thinking-group input,
+.rfd4p-view-radios input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.rfd4p-sampling-details {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, #383a3f);
+  border-radius: 4px;
+  background: var(--surface-recessed, #191a1c);
+}
+
+.rfd4p-sampling-details > summary {
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-muted, #b1b3b9);
+  cursor: pointer;
+  user-select: none;
+}
+
+.rfd4p-sampling-details[open] > summary {
+  margin-bottom: 8px;
+  color: var(--text-secondary, #d1d2d5);
+}
+
+.rfd4p-sampling-body {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-top: 8px;
+  gap: 8px;
 }
 
-@media (max-width: 760px) {
-  .rfd4p-drawer-grid {
-    grid-template-columns: 1fr;
-  }
+.rfd4p-sampling-body label {
+  margin: 0;
 }
 
-.rfd4p-box-label {
+.rfd4p-slider-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 11px;
-  font-weight: 600;
-  color: #4b5563;
-  margin-bottom: 4px;
+  gap: 8px;
 }
 
-.rfd4p-textarea {
-  box-sizing: border-box;
+.rfd4p-slider-num {
+  width: 58px;
+  height: 24px;
+  padding: 2px 6px;
+  font-size: 11px;
+  text-align: right;
+}
+
+.rfd4p-slider {
   width: 100%;
-  min-height: 108px;
-  padding: 8px 10px;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--accent, #82aaff);
+  cursor: pointer;
+}
+
+.rfd4p-generate-btn {
+  width: 100%;
+  min-height: 34px;
+  font-weight: 600;
+}
+
+.rfd4p-results-box {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border, #383a3f);
+  display: grid;
+  gap: 6px;
+}
+
+.rfd4p-view-group {
+  margin: 0;
+  display: block;
+}
+
+.rfd4p-view-radios {
+  display: flex;
+  width: 100%;
+}
+
+.rfd4p-status-box {
+  margin-top: 6px;
+  display: grid;
+  gap: 4px;
+}
+
+.rfd4p-status-box .inline-feedback {
+  margin: 0;
   font-size: 11.5px;
   line-height: 1.35;
-  background: #fff;
-  color: #111827;
-  resize: vertical;
 }
 
-.rfd4p-textarea:focus {
-  outline: none;
-  border-color: #3b82f6;
+.rfd4p-status-box .inline-feedback.error {
+  color: #f87171;
+  font-weight: 600;
+}
+
+.rfd4p-model-load {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--accent, #82aaff);
+}
+
+.rfd4p-progress {
+  width: 100%;
+  height: 4px;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface-recessed, #191a1c);
+  overflow: hidden;
+}
+
+.rfd4p-progress::-webkit-progress-bar {
+  background: var(--surface-recessed, #191a1c);
+  border-radius: 999px;
+}
+
+.rfd4p-progress::-webkit-progress-value {
+  background: var(--accent, #82aaff);
+  border-radius: 999px;
+  transition: width 0.15s ease;
+}
+
+/* ============================================================================
+ * Single-Row Viewer Toolbar & Organized Style / Analyze / Mol* Controls
+ * ========================================================================== */
+
+#viewer-toolbar.viewer-toolbar {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 4px 10px;
+}
+
+.viewer-menus-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.viewer-toolbar-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border, #383a3f);
+  flex-shrink: 0;
+}
+
+#viewer-toolbar .picking-toolbar {
+  flex: 1 1 auto;
+  flex-basis: auto;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+#viewer-toolbar .picking-toolbar > .selection-actions {
+  flex-basis: auto;
+  flex-shrink: 0;
+}
+
+#viewer-toolbar .picking-toolbar .selection-help {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#viewer-toolbar .viewer-backend {
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+/* Organized Style & Analyze Popovers */
+.viewer-menu-popover.viewer-menu-popover-wide {
+  width: 310px;
+  padding: 12px;
+}
+
+.viewer-menu-section-label {
+  margin: 8px 0 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted, #b1b3b9);
+  letter-spacing: 0.01em;
+}
+
+.viewer-menu-grid.viewer-menu-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.viewer-menu-grid.viewer-menu-grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.viewer-measure-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.viewer-measure-row > button {
+  margin-bottom: 0;
+}
+
+/* Clean up Mol* floating viewport controls inside #viewer */
+#viewer .msp-viewport-controls {
+  top: 10px;
+  right: 10px;
+}
+
+#viewer .msp-viewport-controls-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 6px;
+  background: rgba(25, 26, 28, 0.82);
+  border: 1px solid var(--border, #383a3f);
+  backdrop-filter: blur(6px);
+}
+
+#viewer .msp-viewport-controls-buttons .msp-semi-transparent-background {
+  display: none;
+}
+
+/* Hide redundant / layout-breaking Mol* internal buttons */
+#viewer .msp-viewport-controls-buttons > div:has(> button[title="Toggle Controls Panel"]),
+#viewer .msp-viewport-controls-buttons > div:has(> button[title="Toggle Expanded Viewport"]),
+#viewer .msp-viewport-controls-buttons > div:has(> button[title*="Augmented/Virtual Reality"]) {
+  display: none !important;
+}
+
+#empty-open,
+#structure-edit-feedback:empty {
+  display: none !important;
+}
+
+/* Live designed sequence in Studio's sequence dock while RFD4-Proteina runs (web/app.js LiveSequenceStrip) */
+.sequence-dock.rfd4p-live #sequence-view,
+.sequence-dock.collapsed #rfd4p-live-sequence {
+  display: none;
+}
+
+.sequence-dock #rfd4p-live-sequence {
+  max-height: 98px;
+  margin-top: 5px;
+}
+
+#rfd4p-live-sequence .sequence-token {
+  transition: background-color 0.4s ease, color 0.4s ease;
+}
+
+#rfd4p-live-sequence .sequence-token.rfd4p-changed {
+  color: var(--accent-ink, #142038);
+  background: var(--accent, #82aaff);
+  transition: none;
 }

@@ -30,10 +30,14 @@ export function fold2(groups) {
  * padded to 17 and 33 vec4s per k-row to eliminate shared-memory bank conflicts.
  * `half` B: float16 packed along k (sBk = 1, even offsets); `b16`: B panel staged as vec4<f16>.
  */
-function gemmSource(half, b16 = false, pair = null, gate = false) {
+function gemmSource(half, b16 = false, pair = null, gate = false, aF16 = false, cF16 = false, gF16 = false, fullK = false, vecEpilogue = false, addOnly = false, gSigm = true, hasAlpha = false, hasBias = false, actType = 0, acc = false, inLn = false) {
   const rows = [0, 1, 2, 3];
+  const EA = aF16 ? 'f16' : 'f32';
   const EB = b16 ? 'f16' : 'f32';
-  return `${b16 ? 'enable f16;\n' : ''}
+  const EC = (vecEpilogue || pair?.cVec4) ? ((pair?.cF16 ?? cF16) ? 'vec2<u32>' : 'vec4<f32>') : ((pair?.cF16 ?? cF16) ? 'f16' : 'f32');
+  const EG = vecEpilogue ? (gF16 ? 'vec2<u32>' : 'vec4<f32>') : (gF16 ? 'f16' : 'f32');
+  const useF16 = b16 || aF16 || cF16 || gF16 || Boolean(pair?.cF16);
+  return `${useF16 ? 'enable f16;\n' : ''}${inLn ? 'enable subgroups;\n' : ''}
 struct P { m: u32, n: u32, k: u32, b1: u32,
   offA: u32, sA0: u32, sA1: u32, sAm: u32, sAk: u32,
   offB: u32, sB0: u32, sB1: u32, sBn: u32, sBk: u32,
@@ -41,11 +45,17 @@ struct P { m: u32, n: u32, k: u32, b1: u32,
   bias: u32, act: u32, accumulate: u32, alpha: f32, batches: u32,
   gOff: u32, gStride: u32, gSigm: u32, pad0: u32 };
 @group(0) @binding(0) var<uniform> p: P;
-@group(0) @binding(1) var<storage, read> a: array<f32>;
+@group(0) @binding(1) var<storage, read> a: array<${EA}>;
 @group(0) @binding(2) var<storage, read> b: array<${half ? 'u32' : 'f32'}>;
-@group(0) @binding(3) var<storage, read_write> c: array<f32>;
-@group(0) @binding(4) var<storage, read> bias: array<f32>;
-${gate ? '@group(0) @binding(5) var<storage, read> gsc: array<f32>;' : ''}
+@group(0) @binding(3) var<storage, read_write> c: array<${EC}>;
+@group(0) @binding(4) var<storage, read> bias: array<${vecEpilogue ? 'vec4<f32>' : 'f32'}>;
+${gate ? `@group(0) @binding(5) var<storage, read> gsc: array<${EG}>;` : ''}
+${vecEpilogue && (cF16 || gF16) ? `fn unpack4f16(u: vec2<u32>) -> vec4<f32> {
+  return vec4<f32>(vec4<f16>(bitcast<vec2<f16>>(u.x), bitcast<vec2<f16>>(u.y)));
+}
+fn pack4f16(v: vec4<f32>) -> vec2<u32> {
+  return vec2<u32>(bitcast<u32>(vec2<f16>(v.xy)), bitcast<u32>(vec2<f16>(v.zw)));
+}` : ''}
 ${pair ? `${pair.decls ?? ''}
 fn bRow(v: u32) -> u32 { ${pair.bRow ?? 'return v;'} }
 ${pair.body}` : 'fn bRow(v: u32) -> u32 { return v; }'}
@@ -56,7 +66,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   let tilesN = (p.n + 127u) / 128u;
   let tilesM = (p.m + 63u) / 64u;
   let flat = wid.x + wid.y * 65535u;
-  ${pair ? '_ = bias[0];' : ''}
+  ${pair || !hasBias ? '_ = bias[0];' : ''}
   let batch = flat / (tilesN * tilesM);
   let inBatch = batch < p.batches;
   let tile = flat % (tilesN * tilesM);
@@ -75,13 +85,11 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   var acc_1_0 = vec4<f32>(0.0); var acc_1_1 = vec4<f32>(0.0);
   var acc_2_0 = vec4<f32>(0.0); var acc_2_1 = vec4<f32>(0.0);
   var acc_3_0 = vec4<f32>(0.0); var acc_3_1 = vec4<f32>(0.0);
+  ${inLn ? 'var sumA = vec4<f32>(0.0);\n  var sqSumA = vec4<f32>(0.0);' : ''}
   let kkA = li % 16u;
   let r4A = li / 16u;
   let rowA0 = m0 + r4A * 4u;
   let aBase0 = baseA + rowA0 * p.sAm + kkA * p.sAk;
-  let aBase1 = aBase0 + p.sAm;
-  let aBase2 = aBase0 + 2u * p.sAm;
-  let aBase3 = aBase0 + 3u * p.sAm;
   let fullA = rowA0 + 3u < p.m;
   let taWrite = kkA * 17u + r4A;
   ${half ? `let kkB = (li % 8u) * 2u;
@@ -90,88 +98,86 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   let bRowBase = baseB + bRow(rowB0) * p.sBn;
   let sBnHalf = p.sBn / 2u;
   let bBase0 = (bRowBase + kkB) / 2u;
-  let bBase1 = bBase0 + sBnHalf;
-  let bBase2 = bBase0 + 2u * sBnHalf;
-  let bBase3 = bBase0 + 3u * sBnHalf;
   let fullB = rowB0 + 3u < p.n;
   let tbWrite0 = kkB * 33u + r4B;
   let tbWrite1 = (kkB + 1u) * 33u + r4B;` : ''}
   for (var k0 = 0u; k0 < p.k; k0 += 16u) {
-    let fullK = inBatch && (k0 + 16u <= p.k);
+    ${fullK ? '' : 'let fullK = inBatch && (k0 + 16u <= p.k);'}
     {
-      var v = vec4<f32>(0.0);
-      if (fullK || (inBatch && k0 + kkA < p.k)) {
-        let aOff = k0 * p.sAk;
+      var v = vec4<${EB}>(0.0);
+      if (${fullK ? 'inBatch' : 'fullK || (inBatch && k0 + kkA < p.k)'}) {
+        let aOff = aBase0 + k0${fullK ? '' : ' * p.sAk'};
         if (fullA) {
-          v = vec4<f32>(a[aBase0 + aOff], a[aBase1 + aOff], a[aBase2 + aOff], a[aBase3 + aOff]);
+          v = vec4<${EB}>(${EB}(a[aOff]), ${EB}(a[aOff + p.sAm]), ${EB}(a[aOff + 2u * p.sAm]), ${EB}(a[aOff + 3u * p.sAm]));
         } else {
-          if (rowA0 < p.m) { v.x = a[aBase0 + aOff]; }
-          if (rowA0 + 1u < p.m) { v.y = a[aBase1 + aOff]; }
-          if (rowA0 + 2u < p.m) { v.z = a[aBase2 + aOff]; }
-          if (rowA0 + 3u < p.m) { v.w = a[aBase3 + aOff]; }
+          if (rowA0 < p.m) { v.x = ${EB}(a[aOff]); }
+          if (rowA0 + 1u < p.m) { v.y = ${EB}(a[aOff + p.sAm]); }
+          if (rowA0 + 2u < p.m) { v.z = ${EB}(a[aOff + 2u * p.sAm]); }
+          if (rowA0 + 3u < p.m) { v.w = ${EB}(a[aOff + 3u * p.sAm]); }
         }
       }
-      ta[taWrite] = vec4<${EB}>(v);
+      ${inLn ? 'let vf = vec4<f32>(v); sumA += vf; sqSumA += vf * vf;' : ''}
+      ta[taWrite] = v;
     }
     ${half ? `{
       var lo = vec4<${EB}>(0.0);
       var hi = vec4<${EB}>(0.0);
-      if (fullK) {
-        let bOff = k0 / 2u;
+      if (${fullK ? 'inBatch' : 'fullK'}) {
+        let bOff = bBase0 + (k0 / 2u);
         ${b16 ? `if (fullB) {
-          let p0 = bitcast<vec2<f16>>(b[bBase0 + bOff]);
-          let p1 = bitcast<vec2<f16>>(b[bBase1 + bOff]);
-          let p2 = bitcast<vec2<f16>>(b[bBase2 + bOff]);
-          let p3 = bitcast<vec2<f16>>(b[bBase3 + bOff]);
+          let p0 = bitcast<vec2<f16>>(b[bOff]);
+          let p1 = bitcast<vec2<f16>>(b[bOff + sBnHalf]);
+          let p2 = bitcast<vec2<f16>>(b[bOff + 2u * sBnHalf]);
+          let p3 = bitcast<vec2<f16>>(b[bOff + 3u * sBnHalf]);
           lo = vec4<f16>(p0.x, p1.x, p2.x, p3.x);
           hi = vec4<f16>(p0.y, p1.y, p2.y, p3.y);
         } else {
-          if (rowB0 < p.n) { let p0 = bitcast<vec2<f16>>(b[bBase0 + bOff]); lo.x = p0.x; hi.x = p0.y; }
-          if (rowB0 + 1u < p.n) { let p1 = bitcast<vec2<f16>>(b[bBase1 + bOff]); lo.y = p1.x; hi.y = p1.y; }
-          if (rowB0 + 2u < p.n) { let p2 = bitcast<vec2<f16>>(b[bBase2 + bOff]); lo.z = p2.x; hi.z = p2.y; }
-          if (rowB0 + 3u < p.n) { let p3 = bitcast<vec2<f16>>(b[bBase3 + bOff]); lo.w = p3.x; hi.w = p3.y; }
+          if (rowB0 < p.n) { let p0 = bitcast<vec2<f16>>(b[bOff]); lo.x = p0.x; hi.x = p0.y; }
+          if (rowB0 + 1u < p.n) { let p1 = bitcast<vec2<f16>>(b[bOff + sBnHalf]); lo.y = p1.x; hi.y = p1.y; }
+          if (rowB0 + 2u < p.n) { let p2 = bitcast<vec2<f16>>(b[bOff + 2u * sBnHalf]); lo.z = p2.x; hi.z = p2.y; }
+          if (rowB0 + 3u < p.n) { let p3 = bitcast<vec2<f16>>(b[bOff + 3u * sBnHalf]); lo.w = p3.x; hi.w = p3.y; }
         }` : `if (fullB) {
-          let p0 = unpack2x16float(b[bBase0 + bOff]);
-          let p1 = unpack2x16float(b[bBase1 + bOff]);
-          let p2 = unpack2x16float(b[bBase2 + bOff]);
-          let p3 = unpack2x16float(b[bBase3 + bOff]);
+          let p0 = unpack2x16float(b[bOff]);
+          let p1 = unpack2x16float(b[bOff + sBnHalf]);
+          let p2 = unpack2x16float(b[bOff + 2u * sBnHalf]);
+          let p3 = unpack2x16float(b[bOff + 3u * sBnHalf]);
           lo = vec4<f32>(p0.x, p1.x, p2.x, p3.x);
           hi = vec4<f32>(p0.y, p1.y, p2.y, p3.y);
         } else {
-          if (rowB0 < p.n) { let p0 = unpack2x16float(b[bBase0 + bOff]); lo.x = p0.x; hi.x = p0.y; }
-          if (rowB0 + 1u < p.n) { let p1 = unpack2x16float(b[bBase1 + bOff]); lo.y = p1.x; hi.y = p1.y; }
-          if (rowB0 + 2u < p.n) { let p2 = unpack2x16float(b[bBase2 + bOff]); lo.z = p2.x; hi.z = p2.y; }
-          if (rowB0 + 3u < p.n) { let p3 = unpack2x16float(b[bBase3 + bOff]); lo.w = p3.x; hi.w = p3.y; }
+          if (rowB0 < p.n) { let p0 = unpack2x16float(b[bOff]); lo.x = p0.x; hi.x = p0.y; }
+          if (rowB0 + 1u < p.n) { let p1 = unpack2x16float(b[bOff + sBnHalf]); lo.y = p1.x; hi.y = p1.y; }
+          if (rowB0 + 2u < p.n) { let p2 = unpack2x16float(b[bOff + 2u * sBnHalf]); lo.z = p2.x; hi.z = p2.y; }
+          if (rowB0 + 3u < p.n) { let p3 = unpack2x16float(b[bOff + 3u * sBnHalf]); lo.w = p3.x; hi.w = p3.y; }
         }`}
-      } else if (inBatch && k0 + kkB < p.k) {
+      }${fullK ? '' : ` else if (inBatch && k0 + kkB < p.k) {
         let hasHi = k0 + kkB + 1u < p.k;
-        let bOff = k0 / 2u;
+        let bOff = bBase0 + (k0 / 2u);
         ${b16 ? `if (fullB) {
-          let p0 = bitcast<vec2<f16>>(b[bBase0 + bOff]);
-          let p1 = bitcast<vec2<f16>>(b[bBase1 + bOff]);
-          let p2 = bitcast<vec2<f16>>(b[bBase2 + bOff]);
-          let p3 = bitcast<vec2<f16>>(b[bBase3 + bOff]);
+          let p0 = bitcast<vec2<f16>>(b[bOff]);
+          let p1 = bitcast<vec2<f16>>(b[bOff + sBnHalf]);
+          let p2 = bitcast<vec2<f16>>(b[bOff + 2u * sBnHalf]);
+          let p3 = bitcast<vec2<f16>>(b[bOff + 3u * sBnHalf]);
           lo = vec4<f16>(p0.x, p1.x, p2.x, p3.x);
           if (hasHi) { hi = vec4<f16>(p0.y, p1.y, p2.y, p3.y); }
         } else {
-          if (rowB0 < p.n) { let p0 = bitcast<vec2<f16>>(b[bBase0 + bOff]); lo.x = p0.x; if (hasHi) { hi.x = p0.y; } }
-          if (rowB0 + 1u < p.n) { let p1 = bitcast<vec2<f16>>(b[bBase1 + bOff]); lo.y = p1.x; if (hasHi) { hi.y = p1.y; } }
-          if (rowB0 + 2u < p.n) { let p2 = bitcast<vec2<f16>>(b[bBase2 + bOff]); lo.z = p2.x; if (hasHi) { hi.z = p2.y; } }
-          if (rowB0 + 3u < p.n) { let p3 = bitcast<vec2<f16>>(b[bBase3 + bOff]); lo.w = p3.x; if (hasHi) { hi.w = p3.y; } }
+          if (rowB0 < p.n) { let p0 = bitcast<vec2<f16>>(b[bOff]); lo.x = p0.x; if (hasHi) { hi.x = p0.y; } }
+          if (rowB0 + 1u < p.n) { let p1 = bitcast<vec2<f16>>(b[bOff + sBnHalf]); lo.y = p1.x; if (hasHi) { hi.y = p1.y; } }
+          if (rowB0 + 2u < p.n) { let p2 = bitcast<vec2<f16>>(b[bOff + 2u * sBnHalf]); lo.z = p2.x; if (hasHi) { hi.z = p2.y; } }
+          if (rowB0 + 3u < p.n) { let p3 = bitcast<vec2<f16>>(b[bOff + 3u * sBnHalf]); lo.w = p3.x; if (hasHi) { hi.w = p3.y; } }
         }` : `if (fullB) {
-          let p0 = unpack2x16float(b[bBase0 + bOff]);
-          let p1 = unpack2x16float(b[bBase1 + bOff]);
-          let p2 = unpack2x16float(b[bBase2 + bOff]);
-          let p3 = unpack2x16float(b[bBase3 + bOff]);
+          let p0 = unpack2x16float(b[bOff]);
+          let p1 = unpack2x16float(b[bOff + sBnHalf]);
+          let p2 = unpack2x16float(b[bOff + 2u * sBnHalf]);
+          let p3 = unpack2x16float(b[bOff + 3u * sBnHalf]);
           lo = vec4<f32>(p0.x, p1.x, p2.x, p3.x);
           if (hasHi) { hi = vec4<f32>(p0.y, p1.y, p2.y, p3.y); }
         } else {
-          if (rowB0 < p.n) { let p0 = unpack2x16float(b[bBase0 + bOff]); lo.x = p0.x; if (hasHi) { hi.x = p0.y; } }
-          if (rowB0 + 1u < p.n) { let p1 = unpack2x16float(b[bBase1 + bOff]); lo.y = p1.x; if (hasHi) { hi.y = p1.y; } }
-          if (rowB0 + 2u < p.n) { let p2 = unpack2x16float(b[bBase2 + bOff]); lo.z = p2.x; if (hasHi) { hi.z = p2.y; } }
-          if (rowB0 + 3u < p.n) { let p3 = unpack2x16float(b[bBase3 + bOff]); lo.w = p3.x; if (hasHi) { hi.w = p3.y; } }
+          if (rowB0 < p.n) { let p0 = unpack2x16float(b[bOff]); lo.x = p0.x; if (hasHi) { hi.x = p0.y; } }
+          if (rowB0 + 1u < p.n) { let p1 = unpack2x16float(b[bOff + sBnHalf]); lo.y = p1.x; if (hasHi) { hi.y = p1.y; } }
+          if (rowB0 + 2u < p.n) { let p2 = unpack2x16float(b[bOff + 2u * sBnHalf]); lo.z = p2.x; if (hasHi) { hi.z = p2.y; } }
+          if (rowB0 + 3u < p.n) { let p3 = unpack2x16float(b[bOff + 3u * sBnHalf]); lo.w = p3.x; if (hasHi) { hi.w = p3.y; } }
         }`}
-      }
+      }`}
       tb[tbWrite0] = lo;
       tb[tbWrite1] = hi;
     }` : `for (var e = 0u; e < 2u; e += 1u) {
@@ -180,7 +186,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
       let r4 = slot / 16u;
       let k = k0 + kk;
       var v = vec4<f32>(0.0);
-      if (inBatch && k < p.k) {
+      if (${fullK ? 'inBatch' : 'inBatch && k < p.k'}) {
         let row0 = n0 + r4 * 4u;
         let bAddr0 = baseB + bRow(row0) * p.sBn + k * p.sBk;
         if (row0 + 3u < p.n) {
@@ -195,49 +201,67 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
       tb[kk * 33u + r4] = vec4<${EB}>(v);
     }`}
     workgroupBarrier();
-    ${b16 ? `var p_0_0: vec4<f16>; var p_0_1: vec4<f16>;
-    var p_1_0: vec4<f16>; var p_1_1: vec4<f16>;
-    var p_2_0: vec4<f16>; var p_2_1: vec4<f16>;
-    var p_3_0: vec4<f16>; var p_3_1: vec4<f16>;
     ${Array.from({ length: 16 }, (_, kk) => `{
-      let av = ta[${kk * 17}u + tm4];
-      let bv0 = tb[${kk * 33}u + tx];
-      let bv1 = tb[${kk * 33 + 16}u + tx];
-      ${kk === 0 ? `p_0_0 = vec4<f16>(av.x) * bv0; p_0_1 = vec4<f16>(av.x) * bv1;
-      p_1_0 = vec4<f16>(av.y) * bv0; p_1_1 = vec4<f16>(av.y) * bv1;
-      p_2_0 = vec4<f16>(av.z) * bv0; p_2_1 = vec4<f16>(av.z) * bv1;
-      p_3_0 = vec4<f16>(av.w) * bv0; p_3_1 = vec4<f16>(av.w) * bv1;`
-      : `p_0_0 = fma(vec4<f16>(av.x), bv0, p_0_0); p_0_1 = fma(vec4<f16>(av.x), bv1, p_0_1);
-      p_1_0 = fma(vec4<f16>(av.y), bv0, p_1_0); p_1_1 = fma(vec4<f16>(av.y), bv1, p_1_1);
-      p_2_0 = fma(vec4<f16>(av.z), bv0, p_2_0); p_2_1 = fma(vec4<f16>(av.z), bv1, p_2_1);
-      p_3_0 = fma(vec4<f16>(av.w), bv0, p_3_0); p_3_1 = fma(vec4<f16>(av.w), bv1, p_3_1);`}
-    }`).join('\n    ')}
-    acc_0_0 += vec4<f32>(p_0_0); acc_0_1 += vec4<f32>(p_0_1);
-    acc_1_0 += vec4<f32>(p_1_0); acc_1_1 += vec4<f32>(p_1_1);
-    acc_2_0 += vec4<f32>(p_2_0); acc_2_1 += vec4<f32>(p_2_1);
-    acc_3_0 += vec4<f32>(p_3_0); acc_3_1 += vec4<f32>(p_3_1);` : Array.from({ length: 16 }, (_, kk) => `{
-      let av = ta[${kk * 17}u + tm4];
+      let av = vec4<f32>(ta[${kk * 17}u + tm4]);
       let bv0 = vec4<f32>(tb[${kk * 33}u + tx]);
       let bv1 = vec4<f32>(tb[${kk * 33 + 16}u + tx]);
-      acc_0_0 += av.x * bv0; acc_0_1 += av.x * bv1;
-      acc_1_0 += av.y * bv0; acc_1_1 += av.y * bv1;
-      acc_2_0 += av.z * bv0; acc_2_1 += av.z * bv1;
-      acc_3_0 += av.w * bv0; acc_3_1 += av.w * bv1;
+      acc_0_0 = fma(vec4<f32>(av.x), bv0, acc_0_0); acc_0_1 = fma(vec4<f32>(av.x), bv1, acc_0_1);
+      acc_1_0 = fma(vec4<f32>(av.y), bv0, acc_1_0); acc_1_1 = fma(vec4<f32>(av.y), bv1, acc_1_1);
+      acc_2_0 = fma(vec4<f32>(av.z), bv0, acc_2_0); acc_2_1 = fma(vec4<f32>(av.z), bv1, acc_2_1);
+      acc_3_0 = fma(vec4<f32>(av.w), bv0, acc_3_0); acc_3_1 = fma(vec4<f32>(av.w), bv1, acc_3_1);
     }`).join('\n    ')}
     workgroupBarrier();
   }
-  if (!inBatch) { return; }
-  ${pair ? `${rows.map((i) => `{
+  ${inLn ? `sumA += subgroupShuffleXor(sumA, 1u);
+  sumA += subgroupShuffleXor(sumA, 2u);
+  sumA += subgroupShuffleXor(sumA, 4u);
+  sumA += subgroupShuffleXor(sumA, 8u);
+  sqSumA += subgroupShuffleXor(sqSumA, 1u);
+  sqSumA += subgroupShuffleXor(sqSumA, 2u);
+  sqSumA += subgroupShuffleXor(sqSumA, 4u);
+  sqSumA += subgroupShuffleXor(sqSumA, 8u);
+  let invK = 1.0 / f32(p.k);
+  let mean4 = sumA * invK;
+  let invStd4 = inverseSqrt(max(sqSumA * invK - mean4 * mean4, vec4<f32>(0.0)) + vec4<f32>(1e-5));` : ''}
+  ${pair?.epilogueBody ? `${pair.epilogueBody}\n  return;` : pair ? `if (!inBatch) { return; }
+  ${rows.map((i) => `{
     let m = m0 + tm + ${i}u;
     if (m < p.m) { pairOut(m, n0, tn0, acc_${i}_0 * p.alpha, acc_${i}_1 * p.alpha); }
-  }`).join('\n  ')}
-  return;` : ''}
+  }`).join('\n  ')}` : vecEpilogue ? `if (!inBatch) { return; }
+  let baseC4 = (p.offC + b0 * p.sC0 + b1 * p.sC1) / 4u;
+  let sCm4 = p.sCm / 4u;
+  let col0 = n0 + tn0;
+  let col1 = n0 + tn1;
+  let valid0 = col0 < p.n;
+  let valid1 = col1 < p.n;
+  ${hasBias ? `let bVal0 = select(vec4<f32>(0.0), bias[(b0 * p.n + col0) / 4u], valid0);
+  let bVal1 = select(vec4<f32>(0.0), bias[(b0 * p.n + col1) / 4u], valid1);` : ''}
+  ${inLn ? `let wSum0 = select(vec4<f32>(0.0), bias[(p.n + col0) / 4u], valid0);
+  let wSum1 = select(vec4<f32>(0.0), bias[(p.n + col1) / 4u], valid1);` : ''}
+  ${gate ? `let baseG4 = (p.gOff + b0 * p.sC0 + b1 * p.sC1) / 4u;
+  let gStride4 = p.gStride / 4u;` : ''}
+  ${rows.map((i) => `{
+    let m = m0 + tm + ${i}u;
+    if (m < p.m) {
+      let rowC4 = baseC4 + m * sCm4;
+      ${[0, 1].map((h) => `if (valid${h}) {
+        ${inLn ? `var v = (acc_${i}_${h} - mean4[${i}] * wSum${h}) * invStd4[${i}]${hasAlpha ? ' * p.alpha' : ''}${hasBias ? ` + bVal${h}` : ''};` : `var v = acc_${i}_${h}${hasAlpha ? ' * p.alpha' : ''}${hasBias ? ` + bVal${h}` : ''};`}
+        ${actType === 1 ? 'v = max(v, vec4<f32>(0.0));' : actType === 2 ? 'v = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-v));' : ''}
+        let at4 = rowC4 + (col${h} / 4u);
+        ${gate ? `let gv = ${gF16 ? `unpack4f16(gsc[baseG4 + m * gStride4 + (col${h} / 4u)])` : `gsc[baseG4 + m * gStride4 + (col${h} / 4u)]`};
+        ${addOnly ? 'var res = v + gv;' : gSigm ? 'var res = v / (vec4<f32>(1.0) + exp(-gv));' : 'var res = v * gv;'}
+        ${!addOnly && acc ? `res += ${cF16 ? 'unpack4f16(c[at4])' : 'c[at4]'};` : ''}
+        c[at4] = ${cF16 ? 'pack4f16(res)' : 'res'};` : `${acc ? `v += ${cF16 ? 'unpack4f16(c[at4])' : 'c[at4]'};` : ''}
+        c[at4] = ${cF16 ? 'pack4f16(v)' : 'v'};`}
+      }`).join('\n      ')}
+    }
+  }`).join('\n  ')}` : `if (!inBatch) { return; }
   let baseC = p.offC + b0 * p.sC0 + b1 * p.sC1;
   ${rows.map((i) => `{
     let m = m0 + tm + ${i}u;
     if (m < p.m) {
-      let r0 = acc_${i}_0 * p.alpha;
-      let r1 = acc_${i}_1 * p.alpha;
+      let r0 = acc_${i}_0${hasAlpha ? ' * p.alpha' : ''};
+      let r1 = acc_${i}_1${hasAlpha ? ' * p.alpha' : ''};
       let rowC = baseC + m * p.sCm;
       ${[0, 1, 2, 3, 4, 5, 6, 7].map((j) => {
         const nExpr = j < 4 ? `n0 + tn0 + ${j}u` : `n0 + tn1 + ${j - 4}u`;
@@ -245,26 +269,20 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
         return `{
         let n = ${nExpr};
         if (n < p.n) {
-          var v = ${valExpr};
-          if (p.bias != 0u) { v += bias[b0 * p.n + n]; }
-          if (p.act == 1u) { v = max(v, 0.0); }
-          if (p.act == 2u) { v = 1.0 / (1.0 + exp(-v)); }
+          var v = ${valExpr}${hasBias ? ' + bias[b0 * p.n + n]' : ''};
+          ${actType === 1 ? 'v = max(v, 0.0);' : actType === 2 ? 'v = 1.0 / (1.0 + exp(-v));' : ''}
           let at = rowC + n * p.sCn;
-          ${gate ? `let gv = gsc[p.gOff + b0 * p.sC0 + b1 * p.sC1 + m * p.gStride + n];
-          if (p.gSigm == 2u) {
-            c[at] = v + gv;
-          } else {
-            let gf = select(gv, 1.0 / (1.0 + exp(-gv)), p.gSigm != 0u);
-            var vg = v * gf;
-            if (p.accumulate != 0u) { vg += c[at]; }
-            c[at] = vg;
-          }` : `if (p.accumulate != 0u) { v += c[at]; }
-          c[at] = v;`}
+          ${gate ? `let gv = f32(gsc[p.gOff + b0 * p.sC0 + b1 * p.sC1 + m * p.gStride + n]);
+          ${addOnly ? `c[at] = ${EC}(v + gv);` : `let gf = ${gSigm ? '1.0 / (1.0 + exp(-gv))' : 'gv'};
+          var vg = v * gf;
+          ${acc ? 'vg += f32(c[at]);' : ''}
+          c[at] = ${EC}(vg);`}` : `${acc ? 'v += f32(c[at]);' : ''}
+          c[at] = ${EC}(v);`}
         }
       }`;
       }).join('\n      ')}
     }
-  }`).join('\n  ')}
+  }`).join('\n  ')}`}
 }`;
 }
 
@@ -423,10 +441,14 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
  * Small-M GEMM: 32 x 64 tile, 256 lanes of 2 x 4 (one vec4 per row), K in steps of 16.
  * Used when `m * batches <= 512` to give 4x more workgroups and higher SM occupancy on token-track projections.
  */
-function gemmSmallSource(half, b16 = false, gate = false) {
+function gemmSmallSource(half, b16 = false, gate = false, aF16 = false, cF16 = false, gF16 = false) {
   const rows = [0, 1];
+  const EA = aF16 ? 'f16' : 'f32';
   const EB = b16 ? 'f16' : 'f32';
-  return `${b16 ? 'enable f16;\n' : ''}
+  const EC = cF16 ? 'f16' : 'f32';
+  const EG = gF16 ? 'f16' : 'f32';
+  const useF16 = b16 || aF16 || cF16 || gF16;
+  return `${useF16 ? 'enable f16;\n' : ''}
 struct P { m: u32, n: u32, k: u32, b1: u32,
   offA: u32, sA0: u32, sA1: u32, sAm: u32, sAk: u32,
   offB: u32, sB0: u32, sB1: u32, sBn: u32, sBk: u32,
@@ -434,11 +456,11 @@ struct P { m: u32, n: u32, k: u32, b1: u32,
   bias: u32, act: u32, accumulate: u32, alpha: f32, batches: u32,
   gOff: u32, gStride: u32, gSigm: u32, pad0: u32 };
 @group(0) @binding(0) var<uniform> p: P;
-@group(0) @binding(1) var<storage, read> a: array<f32>;
+@group(0) @binding(1) var<storage, read> a: array<${EA}>;
 @group(0) @binding(2) var<storage, read> b: array<${half ? 'u32' : 'f32'}>;
-@group(0) @binding(3) var<storage, read_write> c: array<f32>;
+@group(0) @binding(3) var<storage, read_write> c: array<${EC}>;
 @group(0) @binding(4) var<storage, read> bias: array<f32>;
-${gate ? '@group(0) @binding(5) var<storage, read> gsc: array<f32>;' : ''}
+${gate ? `@group(0) @binding(5) var<storage, read> gsc: array<${EG}>;` : ''}
 var<workgroup> ta: array<vec4<${EB}>, 144>;
 var<workgroup> tb: array<vec4<${EB}>, 272>;
 @compute @workgroup_size(256)
@@ -467,9 +489,6 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   let r4A = li / 16u;
   let rowA0 = m0 + r4A * 4u;
   let aBase0 = baseA + rowA0 * p.sAm + kkA * p.sAk;
-  let aBase1 = aBase0 + p.sAm;
-  let aBase2 = aBase0 + 2u * p.sAm;
-  let aBase3 = aBase0 + 3u * p.sAm;
   let fullA = rowA0 + 3u < p.m;
   let taWrite = kkA * 9u + r4A;
   ${half ? `let kkB = (li % 8u) * 2u;
@@ -478,9 +497,6 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   let bRowBase = baseB + rowB0 * p.sBn;
   let sBnHalf = p.sBn / 2u;
   let bBase0 = (bRowBase + kkB) / 2u;
-  let bBase1 = bBase0 + sBnHalf;
-  let bBase2 = bBase0 + 2u * sBnHalf;
-  let bBase3 = bBase0 + 3u * sBnHalf;
   let fullB = rowB0 + 3u < p.n;
   let tbWrite0 = kkB * 17u + r4B;
   let tbWrite1 = (kkB + 1u) * 17u + r4B;` : `let kkB = li % 16u;
@@ -492,77 +508,77 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   for (var k0 = 0u; k0 < p.k; k0 += 16u) {
     let fullK = inBatch && (k0 + 16u <= p.k);
     if (li < 128u) {
-      var v = vec4<f32>(0.0);
+      var v = vec4<${EB}>(0.0);
       if (fullK || (inBatch && k0 + kkA < p.k)) {
-        let aOff = k0 * p.sAk;
+        let aOff = aBase0 + k0 * p.sAk;
         if (fullA) {
-          v = vec4<f32>(a[aBase0 + aOff], a[aBase1 + aOff], a[aBase2 + aOff], a[aBase3 + aOff]);
+          v = vec4<${EB}>(${EB}(a[aOff]), ${EB}(a[aOff + p.sAm]), ${EB}(a[aOff + 2u * p.sAm]), ${EB}(a[aOff + 3u * p.sAm]));
         } else {
-          if (rowA0 < p.m) { v.x = a[aBase0 + aOff]; }
-          if (rowA0 + 1u < p.m) { v.y = a[aBase1 + aOff]; }
-          if (rowA0 + 2u < p.m) { v.z = a[aBase2 + aOff]; }
-          if (rowA0 + 3u < p.m) { v.w = a[aBase3 + aOff]; }
+          if (rowA0 < p.m) { v.x = ${EB}(a[aOff]); }
+          if (rowA0 + 1u < p.m) { v.y = ${EB}(a[aOff + p.sAm]); }
+          if (rowA0 + 2u < p.m) { v.z = ${EB}(a[aOff + 2u * p.sAm]); }
+          if (rowA0 + 3u < p.m) { v.w = ${EB}(a[aOff + 3u * p.sAm]); }
         }
       }
-      ta[taWrite] = vec4<${EB}>(v);
+      ta[taWrite] = v;
     }
     ${half ? `if (li < 128u) {
       var lo = vec4<${EB}>(0.0);
       var hi = vec4<${EB}>(0.0);
       if (fullK) {
-        let bOff = k0 / 2u;
+        let bOff = bBase0 + (k0 / 2u);
         ${b16 ? `if (fullB) {
-          let p0 = bitcast<vec2<f16>>(b[bBase0 + bOff]);
-          let p1 = bitcast<vec2<f16>>(b[bBase1 + bOff]);
-          let p2 = bitcast<vec2<f16>>(b[bBase2 + bOff]);
-          let p3 = bitcast<vec2<f16>>(b[bBase3 + bOff]);
+          let p0 = bitcast<vec2<f16>>(b[bOff]);
+          let p1 = bitcast<vec2<f16>>(b[bOff + sBnHalf]);
+          let p2 = bitcast<vec2<f16>>(b[bOff + 2u * sBnHalf]);
+          let p3 = bitcast<vec2<f16>>(b[bOff + 3u * sBnHalf]);
           lo = vec4<f16>(p0.x, p1.x, p2.x, p3.x);
           hi = vec4<f16>(p0.y, p1.y, p2.y, p3.y);
         } else {
-          if (rowB0 < p.n) { let p0 = bitcast<vec2<f16>>(b[bBase0 + bOff]); lo.x = p0.x; hi.x = p0.y; }
-          if (rowB0 + 1u < p.n) { let p1 = bitcast<vec2<f16>>(b[bBase1 + bOff]); lo.y = p1.x; hi.y = p1.y; }
-          if (rowB0 + 2u < p.n) { let p2 = bitcast<vec2<f16>>(b[bBase2 + bOff]); lo.z = p2.x; hi.z = p2.y; }
-          if (rowB0 + 3u < p.n) { let p3 = bitcast<vec2<f16>>(b[bBase3 + bOff]); lo.w = p3.x; hi.w = p3.y; }
+          if (rowB0 < p.n) { let p0 = bitcast<vec2<f16>>(b[bOff]); lo.x = p0.x; hi.x = p0.y; }
+          if (rowB0 + 1u < p.n) { let p1 = bitcast<vec2<f16>>(b[bOff + sBnHalf]); lo.y = p1.x; hi.y = p1.y; }
+          if (rowB0 + 2u < p.n) { let p2 = bitcast<vec2<f16>>(b[bOff + 2u * sBnHalf]); lo.z = p2.x; hi.z = p2.y; }
+          if (rowB0 + 3u < p.n) { let p3 = bitcast<vec2<f16>>(b[bOff + 3u * sBnHalf]); lo.w = p3.x; hi.w = p3.y; }
         }` : `if (fullB) {
-          let p0 = unpack2x16float(b[bBase0 + bOff]);
-          let p1 = unpack2x16float(b[bBase1 + bOff]);
-          let p2 = unpack2x16float(b[bBase2 + bOff]);
-          let p3 = unpack2x16float(b[bBase3 + bOff]);
+          let p0 = unpack2x16float(b[bOff]);
+          let p1 = unpack2x16float(b[bOff + sBnHalf]);
+          let p2 = unpack2x16float(b[bOff + 2u * sBnHalf]);
+          let p3 = unpack2x16float(b[bOff + 3u * sBnHalf]);
           lo = vec4<f32>(p0.x, p1.x, p2.x, p3.x);
           hi = vec4<f32>(p0.y, p1.y, p2.y, p3.y);
         } else {
-          if (rowB0 < p.n) { let p0 = unpack2x16float(b[bBase0 + bOff]); lo.x = p0.x; hi.x = p0.y; }
-          if (rowB0 + 1u < p.n) { let p1 = unpack2x16float(b[bBase1 + bOff]); lo.y = p1.x; hi.y = p1.y; }
-          if (rowB0 + 2u < p.n) { let p2 = unpack2x16float(b[bBase2 + bOff]); lo.z = p2.x; hi.z = p2.y; }
-          if (rowB0 + 3u < p.n) { let p3 = unpack2x16float(b[bBase3 + bOff]); lo.w = p3.x; hi.w = p3.y; }
+          if (rowB0 < p.n) { let p0 = unpack2x16float(b[bOff]); lo.x = p0.x; hi.x = p0.y; }
+          if (rowB0 + 1u < p.n) { let p1 = unpack2x16float(b[bOff + sBnHalf]); lo.y = p1.x; hi.y = p1.y; }
+          if (rowB0 + 2u < p.n) { let p2 = unpack2x16float(b[bOff + 2u * sBnHalf]); lo.z = p2.x; hi.z = p2.y; }
+          if (rowB0 + 3u < p.n) { let p3 = unpack2x16float(b[bOff + 3u * sBnHalf]); lo.w = p3.x; hi.w = p3.y; }
         }`}
       } else if (inBatch && k0 + kkB < p.k) {
         let hasHi = k0 + kkB + 1u < p.k;
-        let bOff = k0 / 2u;
+        let bOff = bBase0 + (k0 / 2u);
         ${b16 ? `if (fullB) {
-          let p0 = bitcast<vec2<f16>>(b[bBase0 + bOff]);
-          let p1 = bitcast<vec2<f16>>(b[bBase1 + bOff]);
-          let p2 = bitcast<vec2<f16>>(b[bBase2 + bOff]);
-          let p3 = bitcast<vec2<f16>>(b[bBase3 + bOff]);
+          let p0 = bitcast<vec2<f16>>(b[bOff]);
+          let p1 = bitcast<vec2<f16>>(b[bOff + sBnHalf]);
+          let p2 = bitcast<vec2<f16>>(b[bOff + 2u * sBnHalf]);
+          let p3 = bitcast<vec2<f16>>(b[bOff + 3u * sBnHalf]);
           lo = vec4<f16>(p0.x, p1.x, p2.x, p3.x);
           if (hasHi) { hi = vec4<f16>(p0.y, p1.y, p2.y, p3.y); }
         } else {
-          if (rowB0 < p.n) { let p0 = bitcast<vec2<f16>>(b[bBase0 + bOff]); lo.x = p0.x; if (hasHi) { hi.x = p0.y; } }
-          if (rowB0 + 1u < p.n) { let p1 = bitcast<vec2<f16>>(b[bBase1 + bOff]); lo.y = p1.x; if (hasHi) { hi.y = p1.y; } }
-          if (rowB0 + 2u < p.n) { let p2 = bitcast<vec2<f16>>(b[bBase2 + bOff]); lo.z = p2.x; if (hasHi) { hi.z = p2.y; } }
-          if (rowB0 + 3u < p.n) { let p3 = bitcast<vec2<f16>>(b[bBase3 + bOff]); lo.w = p3.x; if (hasHi) { hi.w = p3.y; } }
+          if (rowB0 < p.n) { let p0 = bitcast<vec2<f16>>(b[bOff]); lo.x = p0.x; if (hasHi) { hi.x = p0.y; } }
+          if (rowB0 + 1u < p.n) { let p1 = bitcast<vec2<f16>>(b[bOff + sBnHalf]); lo.y = p1.x; if (hasHi) { hi.y = p1.y; } }
+          if (rowB0 + 2u < p.n) { let p2 = bitcast<vec2<f16>>(b[bOff + 2u * sBnHalf]); lo.z = p2.x; if (hasHi) { hi.z = p2.y; } }
+          if (rowB0 + 3u < p.n) { let p3 = bitcast<vec2<f16>>(b[bOff + 3u * sBnHalf]); lo.w = p3.x; if (hasHi) { hi.w = p3.y; } }
         }` : `if (fullB) {
-          let p0 = unpack2x16float(b[bBase0 + bOff]);
-          let p1 = unpack2x16float(b[bBase1 + bOff]);
-          let p2 = unpack2x16float(b[bBase2 + bOff]);
-          let p3 = unpack2x16float(b[bBase3 + bOff]);
+          let p0 = unpack2x16float(b[bOff]);
+          let p1 = unpack2x16float(b[bOff + sBnHalf]);
+          let p2 = unpack2x16float(b[bOff + 2u * sBnHalf]);
+          let p3 = unpack2x16float(b[bOff + 3u * sBnHalf]);
           lo = vec4<f32>(p0.x, p1.x, p2.x, p3.x);
           if (hasHi) { hi = vec4<f32>(p0.y, p1.y, p2.y, p3.y); }
         } else {
-          if (rowB0 < p.n) { let p0 = unpack2x16float(b[bBase0 + bOff]); lo.x = p0.x; if (hasHi) { hi.x = p0.y; } }
-          if (rowB0 + 1u < p.n) { let p1 = unpack2x16float(b[bBase1 + bOff]); lo.y = p1.x; if (hasHi) { hi.y = p1.y; } }
-          if (rowB0 + 2u < p.n) { let p2 = unpack2x16float(b[bBase2 + bOff]); lo.z = p2.x; if (hasHi) { hi.z = p2.y; } }
-          if (rowB0 + 3u < p.n) { let p3 = unpack2x16float(b[bBase3 + bOff]); lo.w = p3.x; if (hasHi) { hi.w = p3.y; } }
+          if (rowB0 < p.n) { let p0 = unpack2x16float(b[bOff]); lo.x = p0.x; if (hasHi) { hi.x = p0.y; } }
+          if (rowB0 + 1u < p.n) { let p1 = unpack2x16float(b[bOff + sBnHalf]); lo.y = p1.x; if (hasHi) { hi.y = p1.y; } }
+          if (rowB0 + 2u < p.n) { let p2 = unpack2x16float(b[bOff + 2u * sBnHalf]); lo.z = p2.x; if (hasHi) { hi.z = p2.y; } }
+          if (rowB0 + 3u < p.n) { let p3 = unpack2x16float(b[bOff + 3u * sBnHalf]); lo.w = p3.x; if (hasHi) { hi.w = p3.y; } }
         }`}
       }
       tb[tbWrite0] = lo;
@@ -584,23 +600,13 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
       tb[tbWrite] = vec4<${EB}>(v);
     }`}
     workgroupBarrier();
-    ${b16 ? `var p_0: vec4<f16>; var p_1: vec4<f16>;
     ${Array.from({ length: 16 }, (_, kk) => `{
-      let av4 = ta[${kk * 9}u + r4Read];
-      let a0 = select(av4.x, av4.z, hiPair);
-      let a1 = select(av4.y, av4.w, hiPair);
-      let bv = tb[${kk * 17}u + tx];
-      ${kk === 0 ? `p_0 = vec4<f16>(a0) * bv; p_1 = vec4<f16>(a1) * bv;`
-      : `p_0 = fma(vec4<f16>(a0), bv, p_0); p_1 = fma(vec4<f16>(a1), bv, p_1);`}
-    }`).join('\n    ')}
-    acc_0 += vec4<f32>(p_0);
-    acc_1 += vec4<f32>(p_1);` : Array.from({ length: 16 }, (_, kk) => `{
-      let av4 = ta[${kk * 9}u + r4Read];
+      let av4 = vec4<f32>(ta[${kk * 9}u + r4Read]);
       let a0 = select(av4.x, av4.z, hiPair);
       let a1 = select(av4.y, av4.w, hiPair);
       let bv = vec4<f32>(tb[${kk * 17}u + tx]);
-      acc_0 += a0 * bv;
-      acc_1 += a1 * bv;
+      acc_0 = fma(vec4<f32>(a0), bv, acc_0);
+      acc_1 = fma(vec4<f32>(a1), bv, acc_1);
     }`).join('\n    ')}
     workgroupBarrier();
   }
@@ -619,16 +625,16 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
           if (p.act == 1u) { v = max(v, 0.0); }
           if (p.act == 2u) { v = 1.0 / (1.0 + exp(-v)); }
           let at = rowC + n * p.sCn;
-          ${gate ? `let gv = gsc[p.gOff + b0 * p.sC0 + b1 * p.sC1 + m * p.gStride + n];
+          ${gate ? `let gv = f32(gsc[p.gOff + b0 * p.sC0 + b1 * p.sC1 + m * p.gStride + n]);
           if (p.gSigm == 2u) {
-            c[at] = v + gv;
+            c[at] = ${EC}(v + gv);
           } else {
             let gf = select(gv, 1.0 / (1.0 + exp(-gv)), p.gSigm != 0u);
             var vg = v * gf;
-            if (p.accumulate != 0u) { vg += c[at]; }
-            c[at] = vg;
-          }` : `if (p.accumulate != 0u) { v += c[at]; }
-          c[at] = v;`}
+            if (p.accumulate != 0u) { vg += f32(c[at]); }
+            c[at] = ${EC}(vg);
+          }` : `if (p.accumulate != 0u) { v += f32(c[at]); }
+          c[at] = ${EC}(v);`}
         }
       }`).join('\n      ')}
     }
@@ -641,15 +647,78 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
  * Supports `tileM = 64` (4 row blocks per subgroup) and `tileM = 32` (2 row blocks per subgroup), as well as
  * packed `u32` (`vec2<f16>`) weights (`half = true`) and float32 activation `b` (`half = false`).
  */
-function gemmSubmatSource(pair = null, gate = false, half = true, tileM = 64, vecIO = false, aF16 = false, gF16 = false, cF16 = false, addOnly = false, gSigm = true, hasAlpha = false, hasBias = false, actType = 0, acc = false, vecB = vecIO, vecEpilogue = false, inLn = false) {
+function gemmSubmatSource(pair = null, gate = false, half = true, tileM = 64, vecIO = false, aF16 = false, gF16 = false, cF16 = false, addOnly = false, gSigm = true, hasAlpha = false, hasBias = false, actType = 0, acc = false, vecB = vecIO, vecEpilogue = false, inLn = false, sm8 = false) {
   const numBlocks = tileM / 16;
   const blocks = Array.from({ length: numBlocks }, (_, i) => i);
   const numPairs = tileM / 32;
   const pairs = Array.from({ length: numPairs }, (_, i) => i);
   const aPerThread = tileM / 16;
   const aThreadsPerRow = 16 / aPerThread;
-  const aVecType = aPerThread === 4 ? 'vec4<f16>' : 'vec2<f16>';
+  const sm8f32 = sm8 && pair?.colMajorStore !== 'cond1024' && !addOnly && actType !== 1 && (!gate || gSigm) && !(!pair && aF16 && cF16 && !acc);
+  const stType = sm8f32 ? 'f32' : 'f16';
+  const aVecType = aPerThread === 4 ? `vec4<${stType}>` : `vec2<${stType}>`;
   const cType = (pair?.cF16 || cF16) ? 'f16' : 'f32';
+  const scType = sm8 && !sm8f32 ? 'f16' : 'f32';
+  const stA = sm8 ? 'scratch' : 'staged_a';
+  const stB = sm8 ? 'scratch' : 'staged_b';
+  const aBaseOff = sm8 ? '2048u + ' : '';
+  const lnOff = 2048 + tileM * 24;
+  const scratchSize = sm8 && (!pair || pair.singleBlockBody) ? (inLn && sm8f32 ? lnOff + tileM * 2 : Math.max(lnOff, 2176)) : 4352;
+  const mmaTile = sm8
+    ? [0, 8].map((ks) => `{
+      let right0 = subgroupMatrixLoad<subgroup_matrix_right<${stType}, 8, 8>>(&${stB}, sg * 256u + ${ks}u, true, 16u);
+      let right1 = subgroupMatrixLoad<subgroup_matrix_right<${stType}, 8, 8>>(&${stB}, sg * 256u + ${128 + ks}u, true, 16u);
+      ${blocks.map((i) => `{
+        let left0 = subgroupMatrixLoad<subgroup_matrix_left<${stType}, 8, 8>>(&${stA}, ${2048 + i * 384 + ks}u, false, 24u);
+        let left1 = subgroupMatrixLoad<subgroup_matrix_left<${stType}, 8, 8>>(&${stA}, ${2048 + i * 384 + 192 + ks}u, false, 24u);
+        mAcc_${i}_00 = subgroupMatrixMultiplyAccumulate(left0, right0, mAcc_${i}_00);
+        mAcc_${i}_01 = subgroupMatrixMultiplyAccumulate(left0, right1, mAcc_${i}_01);
+        mAcc_${i}_10 = subgroupMatrixMultiplyAccumulate(left1, right0, mAcc_${i}_10);
+        mAcc_${i}_11 = subgroupMatrixMultiplyAccumulate(left1, right1, mAcc_${i}_11);
+      }`).join('\n      ')}
+    }`).join('\n    ')
+    : `let right = subgroupMatrixLoad<subgroup_matrix_right<f16, 16, 16>>(&staged_b, sg * 256u, true, 16u);
+    ${blocks.map((i) => `{
+      let left = subgroupMatrixLoad<subgroup_matrix_left<f16, 16, 16>>(&staged_a, ${i * 384}u, false, 24u);
+      mAcc_${i} = subgroupMatrixMultiplyAccumulate(left, right, mAcc_${i});
+    }`).join('\n    ')}`;
+  const stageNext = `${tileM === 32 ? 'if (li < 128u) {' : '{'}
+      ${aF16 ? `let av = vec4<${stType}>(vec4<f16>(bitcast<vec2<f16>>(next_a.x), bitcast<vec2<f16>>(next_a.y)));` : `let av = vec4<${stType}>(next_a);`}
+      ${inLn ? 'let af = vec4<f32>(av); sumA += af.x + af.y + af.z + af.w; sqSumA += dot(af, af);' : ''}
+      ${stA}[aWrite] = av.x;
+      ${stA}[aWrite + 1u] = av.y;
+      ${stA}[aWrite + 2u] = av.z;
+      ${stA}[aWrite + 3u] = av.w;
+    }
+    {
+      let p0 = ${sm8f32 ? 'unpack2x16float(next_b.x)' : 'bitcast<vec2<f16>>(next_b.x)'};
+      let p1 = ${sm8f32 ? 'unpack2x16float(next_b.y)' : 'bitcast<vec2<f16>>(next_b.y)'};
+      let p2 = ${sm8f32 ? 'unpack2x16float(next_b.z)' : 'bitcast<vec2<f16>>(next_b.z)'};
+      let p3 = ${sm8f32 ? 'unpack2x16float(next_b.w)' : 'bitcast<vec2<f16>>(next_b.w)'};
+      ${stB}[bDst] = p0.x;
+      ${stB}[bDst + 1u] = p0.y;
+      ${stB}[bDst + 2u] = p1.x;
+      ${stB}[bDst + 3u] = p1.y;
+      ${stB}[bDst + 4u] = p2.x;
+      ${stB}[bDst + 5u] = p2.y;
+      ${stB}[bDst + 6u] = p3.x;
+      ${stB}[bDst + 7u] = p3.y;
+    }`;
+  const storeMat16 = (i, base, colMajor, stride) => {
+    if (!sm8) {
+      return `subgroupMatrixStore(&scratch, ${base}, mAcc_${i}, ${colMajor}, ${stride}u);`;
+    }
+    if (colMajor) {
+      return `subgroupMatrixStore(&scratch, ${base}, mAcc_${i}_00, true, ${stride}u);
+    subgroupMatrixStore(&scratch, ${base} + ${8 * stride}u, mAcc_${i}_01, true, ${stride}u);
+    subgroupMatrixStore(&scratch, ${base} + 8u, mAcc_${i}_10, true, ${stride}u);
+    subgroupMatrixStore(&scratch, ${base} + ${8 * stride + 8}u, mAcc_${i}_11, true, ${stride}u);`;
+    }
+    return `subgroupMatrixStore(&scratch, ${base}, mAcc_${i}_00, false, ${stride}u);
+    subgroupMatrixStore(&scratch, ${base} + 8u, mAcc_${i}_01, false, ${stride}u);
+    subgroupMatrixStore(&scratch, ${base} + ${8 * stride}u, mAcc_${i}_10, false, ${stride}u);
+    subgroupMatrixStore(&scratch, ${base} + ${8 * stride + 8}u, mAcc_${i}_11, false, ${stride}u);`;
+  };
   return `enable f16;
 enable subgroups;
 enable chromium_experimental_subgroup_matrix;
@@ -674,9 +743,10 @@ fn pack4f16(v: vec4<f32>) -> vec2<u32> {
 ${pair ? `${pair.decls ?? ''}
 fn bRow(v: u32) -> u32 { ${pair.bRow ?? 'return v;'} }
 ${pair.body}` : 'fn bRow(v: u32) -> u32 { return v; }'}
-var<workgroup> staged_a: array<f16, ${tileM * 24}>;
-var<workgroup> staged_b: array<f16, 2048>;
-var<workgroup> scratch: array<f32, 4352>;
+${sm8 ? '' : `var<workgroup> staged_a: array<f16, ${tileM * 24}>;
+var<workgroup> staged_b: array<f16, 2048>;`}
+var<workgroup> scratch: array<${scType}, ${scratchSize}>;
+${inLn && sm8 && !sm8f32 ? `var<workgroup> lnStat: array<f32, ${tileM * 2}>;` : ''}
 @compute @workgroup_size(256)
 fn main(
   @builtin(workgroup_id) wid: vec3<u32>,
@@ -702,12 +772,12 @@ fn main(
   let kA4 = li % 4u;
   let rowA = min(m0 + rA, p.m - 1u);
   let aRowBase4 = (baseA + rowA * p.sAm) / 4u + kA4;
-  let aWrite = rA * 24u + kA4 * 4u;` : `let rA = li / ${aThreadsPerRow}u;
+  let aWrite = ${aBaseOff}rA * 24u + kA4 * 4u;` : `let rA = li / ${aThreadsPerRow}u;
   let kA = (li % ${aThreadsPerRow}u) * ${aPerThread}u;
   let rowA = m0 + rA;
   let aValid = inBatch && (rowA < p.m);
   let aRowBase = baseA + rowA * p.sAm;
-  let aWrite = rA * 24u + kA;`}
+  let aWrite = ${aBaseOff}rA * 24u + kA;`}
 
   let cB = li / 2u;
   let kkB = (li & 1u) * 8u;
@@ -717,98 +787,112 @@ fn main(
     ? 'let bRowBase8 = (baseB + bRow(rowB) * p.sBn) / 8u + (li & 1u);'
     : (half ? 'let bRowBase = (baseB + bRow(rowB) * p.sBn + kkB) / 2u;' : 'let bRowBase = baseB + bRow(rowB) * p.sBn;')}
 
-  ${blocks.map((i) => `var mAcc_${i} = subgroup_matrix_result<f32, 16, 16>();`).join('\n  ')}
+  ${blocks.map((i) => sm8
+    ? `var mAcc_${i}_00 = subgroup_matrix_result<${stType}, 8, 8>();
+  var mAcc_${i}_01 = subgroup_matrix_result<${stType}, 8, 8>();
+  var mAcc_${i}_10 = subgroup_matrix_result<${stType}, 8, 8>();
+  var mAcc_${i}_11 = subgroup_matrix_result<${stType}, 8, 8>();`
+    : `var mAcc_${i} = subgroup_matrix_result<f32, 16, 16>();`).join('\n  ')}
 
   let bDst = li * 8u;
   ${inLn ? 'var sumA = 0.0;\n  var sqSumA = 0.0;' : ''}
   ${vecIO ? `var next_a = ${aF16 ? 'vec2<u32>(0u)' : 'vec4<f32>(0.0)'};` : `var next_a = ${aVecType}(0.0);`}
-  ${vecB ? 'var next_b = vec4<u32>(0u);' : `var next_p0 = vec2<f16>(0.0);
-  var next_p1 = vec2<f16>(0.0);
-  var next_p2 = vec2<f16>(0.0);
-  var next_p3 = vec2<f16>(0.0);`}
+  ${vecB ? 'var next_b = vec4<u32>(0u);' : `var next_p0 = vec2<${stType}>(0.0);
+  var next_p1 = vec2<${stType}>(0.0);
+  var next_p2 = vec2<${stType}>(0.0);
+  var next_p3 = vec2<${stType}>(0.0);`}
   {
     ${vecIO ? `${tileM === 32 ? 'if (li < 128u) {' : '{'}
       let a0 = a[aRowBase4];
-      ${aF16 ? 'let av = vec4<f16>(bitcast<vec2<f16>>(a0.x), bitcast<vec2<f16>>(a0.y));' : 'let av = vec4<f16>(a0);'}
+      ${aF16 ? `let av = vec4<${stType}>(vec4<f16>(bitcast<vec2<f16>>(a0.x), bitcast<vec2<f16>>(a0.y)));` : `let av = vec4<${stType}>(a0);`}
       ${inLn ? 'let af = vec4<f32>(av); sumA += af.x + af.y + af.z + af.w; sqSumA += dot(af, af);' : ''}
-      staged_a[aWrite] = av.x;
-      staged_a[aWrite + 1u] = av.y;
-      staged_a[aWrite + 2u] = av.z;
-      staged_a[aWrite + 3u] = av.w;
+      ${stA}[aWrite] = av.x;
+      ${stA}[aWrite + 1u] = av.y;
+      ${stA}[aWrite + 2u] = av.z;
+      ${stA}[aWrite + 3u] = av.w;
     }` : `let fullK0 = 16u <= p.k;
     if (aValid) {
       ${aPerThread === 4 ? `if (fullK0 || kA + 3u < p.k) {
         let aAddr = aRowBase + kA * p.sAk;
-        next_a = vec4<f16>(f16(a[aAddr]), f16(a[aAddr + p.sAk]), f16(a[aAddr + 2u * p.sAk]), f16(a[aAddr + 3u * p.sAk]));
+        next_a = vec4<${stType}>(${stType}(a[aAddr]), ${stType}(a[aAddr + p.sAk]), ${stType}(a[aAddr + 2u * p.sAk]), ${stType}(a[aAddr + 3u * p.sAk]));
       } else {
-        if (kA < p.k) { next_a.x = f16(a[aRowBase + kA * p.sAk]); }
-        if (kA + 1u < p.k) { next_a.y = f16(a[aRowBase + (kA + 1u) * p.sAk]); }
-        if (kA + 2u < p.k) { next_a.z = f16(a[aRowBase + (kA + 2u) * p.sAk]); }
+        if (kA < p.k) { next_a.x = ${stType}(a[aRowBase + kA * p.sAk]); }
+        if (kA + 1u < p.k) { next_a.y = ${stType}(a[aRowBase + (k + 1u) * p.sAk]); }
+        if (kA + 2u < p.k) { next_a.z = ${stType}(a[aRowBase + (kA + 2u) * p.sAk]); }
       }` : `if (fullK0 || kA + 1u < p.k) {
         let aAddr = aRowBase + kA * p.sAk;
-        next_a = vec2<f16>(f16(a[aAddr]), f16(a[aAddr + p.sAk]));
+        next_a = vec2<${stType}>(${stType}(a[aAddr]), ${stType}(a[aAddr + p.sAk]));
       } else {
-        if (kA < p.k) { next_a.x = f16(a[aRowBase + kA * p.sAk]); }
+        if (kA < p.k) { next_a.x = ${stType}(a[aRowBase + kA * p.sAk]); }
       }`}
     }
-    staged_a[aWrite] = next_a.x;
-    staged_a[aWrite + 1u] = next_a.y;
-    ${aPerThread === 4 ? `staged_a[aWrite + 2u] = next_a.z;
-    staged_a[aWrite + 3u] = next_a.w;` : ''}`}
+    ${stA}[aWrite] = next_a.x;
+    ${stA}[aWrite + 1u] = next_a.y;
+    ${aPerThread === 4 ? `${stA}[aWrite + 2u] = next_a.z;
+    ${stA}[aWrite + 3u] = next_a.w;` : ''}`}
     ${vecB ? `{
       let w4 = b[bRowBase8];
-      let p0 = bitcast<vec2<f16>>(w4.x);
-      let p1 = bitcast<vec2<f16>>(w4.y);
-      let p2 = bitcast<vec2<f16>>(w4.z);
-      let p3 = bitcast<vec2<f16>>(w4.w);
-      staged_b[bDst] = p0.x;
-      staged_b[bDst + 1u] = p0.y;
-      staged_b[bDst + 2u] = p1.x;
-      staged_b[bDst + 3u] = p1.y;
-      staged_b[bDst + 4u] = p2.x;
-      staged_b[bDst + 5u] = p2.y;
-      staged_b[bDst + 6u] = p3.x;
-      staged_b[bDst + 7u] = p3.y;
+      let p0 = ${sm8f32 ? 'unpack2x16float(w4.x)' : 'bitcast<vec2<f16>>(w4.x)'};
+      let p1 = ${sm8f32 ? 'unpack2x16float(w4.y)' : 'bitcast<vec2<f16>>(w4.y)'};
+      let p2 = ${sm8f32 ? 'unpack2x16float(w4.z)' : 'bitcast<vec2<f16>>(w4.z)'};
+      let p3 = ${sm8f32 ? 'unpack2x16float(w4.w)' : 'bitcast<vec2<f16>>(w4.w)'};
+      ${stB}[bDst] = p0.x;
+      ${stB}[bDst + 1u] = p0.y;
+      ${stB}[bDst + 2u] = p1.x;
+      ${stB}[bDst + 3u] = p1.y;
+      ${stB}[bDst + 4u] = p2.x;
+      ${stB}[bDst + 5u] = p2.y;
+      ${stB}[bDst + 6u] = p3.x;
+      ${stB}[bDst + 7u] = p3.y;
     }` : `if (bValid) {
       ${half ? `if (fullK0) {
-        next_p0 = bitcast<vec2<f16>>(b[bRowBase]);
-        next_p1 = bitcast<vec2<f16>>(b[bRowBase + 1u]);
-        next_p2 = bitcast<vec2<f16>>(b[bRowBase + 2u]);
-        next_p3 = bitcast<vec2<f16>>(b[bRowBase + 3u]);
+        next_p0 = ${sm8f32 ? 'unpack2x16float(b[bRowBase])' : 'bitcast<vec2<f16>>(b[bRowBase])'};
+        next_p1 = ${sm8f32 ? 'unpack2x16float(b[bRowBase + 1u])' : 'bitcast<vec2<f16>>(b[bRowBase + 1u])'};
+        next_p2 = ${sm8f32 ? 'unpack2x16float(b[bRowBase + 2u])' : 'bitcast<vec2<f16>>(b[bRowBase + 2u])'};
+        next_p3 = ${sm8f32 ? 'unpack2x16float(b[bRowBase + 3u])' : 'bitcast<vec2<f16>>(b[bRowBase + 3u])'};
       } else {
-        if (kkB < p.k) { let t = bitcast<vec2<f16>>(b[bRowBase]); next_p0.x = t.x; if (kkB + 1u < p.k) { next_p0.y = t.y; } }
-        if (kkB + 2u < p.k) { let t = bitcast<vec2<f16>>(b[bRowBase + 1u]); next_p1.x = t.x; if (kkB + 3u < p.k) { next_p1.y = t.y; } }
-        if (kkB + 4u < p.k) { let t = bitcast<vec2<f16>>(b[bRowBase + 2u]); next_p2.x = t.x; if (kkB + 5u < p.k) { next_p2.y = t.y; } }
-        if (kkB + 6u < p.k) { let t = bitcast<vec2<f16>>(b[bRowBase + 3u]); next_p3.x = t.x; if (kkB + 7u < p.k) { next_p3.y = t.y; } }
+        if (kkB < p.k) { let t = ${sm8f32 ? 'unpack2x16float(b[bRowBase])' : 'bitcast<vec2<f16>>(b[bRowBase])'}; next_p0.x = t.x; if (kkB + 1u < p.k) { next_p0.y = t.y; } }
+        if (kkB + 2u < p.k) { let t = ${sm8f32 ? 'unpack2x16float(b[bRowBase + 1u])' : 'bitcast<vec2<f16>>(b[bRowBase + 1u])'}; next_p1.x = t.x; if (kkB + 3u < p.k) { next_p1.y = t.y; } }
+        if (kkB + 4u < p.k) { let t = ${sm8f32 ? 'unpack2x16float(b[bRowBase + 2u])' : 'bitcast<vec2<f16>>(b[bRowBase + 2u])'}; next_p2.x = t.x; if (kkB + 5u < p.k) { next_p2.y = t.y; } }
+        if (kkB + 6u < p.k) { let t = ${sm8f32 ? 'unpack2x16float(b[bRowBase + 3u])' : 'bitcast<vec2<f16>>(b[bRowBase + 3u])'}; next_p3.x = t.x; if (kkB + 7u < p.k) { next_p3.y = t.y; } }
       }` : `let bOff = bRowBase + kkB * p.sBk;
       if (fullK0 || kkB + 7u < p.k) {
-        next_p0 = vec2<f16>(f16(b[bOff]), f16(b[bOff + p.sBk]));
-        next_p1 = vec2<f16>(f16(b[bOff + 2u * p.sBk]), f16(b[bOff + 3u * p.sBk]));
-        next_p2 = vec2<f16>(f16(b[bOff + 4u * p.sBk]), f16(b[bOff + 5u * p.sBk]));
-        next_p3 = vec2<f16>(f16(b[bOff + 6u * p.sBk]), f16(b[bOff + 7u * p.sBk]));
+        next_p0 = vec2<${stType}>(${stType}(b[bOff]), ${stType}(b[bOff + p.sBk]));
+        next_p1 = vec2<${stType}>(${stType}(b[bOff + 2u * p.sBk]), ${stType}(b[bOff + 3u * p.sBk]));
+        next_p2 = vec2<${stType}>(${stType}(b[bOff + 4u * p.sBk]), ${stType}(b[bOff + 5u * p.sBk]));
+        next_p3 = vec2<${stType}>(${stType}(b[bOff + 6u * p.sBk]), ${stType}(b[bOff + 7u * p.sBk]));
       } else {
-        if (kkB < p.k) { next_p0.x = f16(b[bOff]); }
-        if (kkB + 1u < p.k) { next_p0.y = f16(b[bOff + p.sBk]); }
-        if (kkB + 2u < p.k) { next_p1.x = f16(b[bOff + 2u * p.sBk]); }
-        if (kkB + 3u < p.k) { next_p1.y = f16(b[bOff + 3u * p.sBk]); }
-        if (kkB + 4u < p.k) { next_p2.x = f16(b[bOff + 4u * p.sBk]); }
-        if (kkB + 5u < p.k) { next_p2.y = f16(b[bOff + 5u * p.sBk]); }
-        if (kkB + 6u < p.k) { next_p3.x = f16(b[bOff + 6u * p.sBk]); }
-        if (kkB + 7u < p.k) { next_p3.y = f16(b[bOff + 7u * p.sBk]); }
+        if (kkB < p.k) { next_p0.x = ${stType}(b[bOff]); }
+        if (kkB + 1u < p.k) { next_p0.y = ${stType}(b[bOff + p.sBk]); }
+        if (kkB + 2u < p.k) { next_p1.x = ${stType}(b[bOff + 2u * p.sBk]); }
+        if (kkB + 3u < p.k) { next_p1.y = ${stType}(b[bOff + 3u * p.sBk]); }
+        if (kkB + 4u < p.k) { next_p2.x = ${stType}(b[bOff + 4u * p.sBk]); }
+        if (kkB + 5u < p.k) { next_p2.y = ${stType}(b[bOff + 5u * p.sBk]); }
+        if (kkB + 6u < p.k) { next_p3.x = ${stType}(b[bOff + 6u * p.sBk]); }
+        if (kkB + 7u < p.k) { next_p3.y = ${stType}(b[bOff + 7u * p.sBk]); }
       }`}
     }
-    staged_b[bDst] = next_p0.x;
-    staged_b[bDst + 1u] = next_p0.y;
-    staged_b[bDst + 2u] = next_p1.x;
-    staged_b[bDst + 3u] = next_p1.y;
-    staged_b[bDst + 4u] = next_p2.x;
-    staged_b[bDst + 5u] = next_p2.y;
-    staged_b[bDst + 6u] = next_p3.x;
-    staged_b[bDst + 7u] = next_p3.y;`}
+    ${stB}[bDst] = next_p0.x;
+    ${stB}[bDst + 1u] = next_p0.y;
+    ${stB}[bDst + 2u] = next_p1.x;
+    ${stB}[bDst + 3u] = next_p1.y;
+    ${stB}[bDst + 4u] = next_p2.x;
+    ${stB}[bDst + 5u] = next_p2.y;
+    ${stB}[bDst + 6u] = next_p3.x;
+    ${stB}[bDst + 7u] = next_p3.y;`}
   }
   workgroupBarrier();
 
-  for (var k0 = 0u; k0 < p.k; k0 += 16u) {
+  ${vecIO && vecB ? `for (var kNext = 16u; kNext < p.k; kNext += 16u) {
+    next_a = a[aRowBase4 + kNext / 4u];
+    next_b = b[bRowBase8 + kNext / 8u];
+    ${mmaTile}
+    workgroupBarrier();
+    ${stageNext}
+    workgroupBarrier();
+  }
+  ${mmaTile}
+  workgroupBarrier();` : `for (var k0 = 0u; k0 < p.k; k0 += 16u) {
     let kNext = k0 + 16u;
     let hasNext = kNext < p.k;
     if (hasNext) {
@@ -818,96 +902,92 @@ fn main(
         let k = kNext + kA;
         ${aPerThread === 4 ? `if (fullK || k + 3u < p.k) {
           let aAddr = aRowBase + k * p.sAk;
-          next_a = vec4<f16>(f16(a[aAddr]), f16(a[aAddr + p.sAk]), f16(a[aAddr + 2u * p.sAk]), f16(a[aAddr + 3u * p.sAk]));
+          next_a = vec4<${stType}>(${stType}(a[aAddr]), ${stType}(a[aAddr + p.sAk]), ${stType}(a[aAddr + 2u * p.sAk]), ${stType}(a[aAddr + 3u * p.sAk]));
         } else {
-          if (k < p.k) { next_a.x = f16(a[aRowBase + k * p.sAk]); }
-          if (k + 1u < p.k) { next_a.y = f16(a[aRowBase + (k + 1u) * p.sAk]); }
-          if (k + 2u < p.k) { next_a.z = f16(a[aRowBase + (k + 2u) * p.sAk]); }
+          if (k < p.k) { next_a.x = ${stType}(a[aRowBase + k * p.sAk]); }
+          if (k + 1u < p.k) { next_a.y = ${stType}(a[aRowBase + (k + 1u) * p.sAk]); }
+          if (k + 2u < p.k) { next_a.z = ${stType}(a[aRowBase + (k + 2u) * p.sAk]); }
         }` : `if (fullK || k + 1u < p.k) {
           let aAddr = aRowBase + k * p.sAk;
-          next_a = vec2<f16>(f16(a[aAddr]), f16(a[aAddr + p.sAk]));
+          next_a = vec2<${stType}>(${stType}(a[aAddr]), ${stType}(a[aAddr + p.sAk]));
         } else {
-          if (k < p.k) { next_a.x = f16(a[aRowBase + k * p.sAk]); }
+          if (k < p.k) { next_a.x = ${stType}(a[aRowBase + k * p.sAk]); }
         }`}
       }`}
-      ${vecB ? `next_b = b[bRowBase8 + kNext / 8u];` : `next_p0 = vec2<f16>(0.0);
-      next_p1 = vec2<f16>(0.0);
-      next_p2 = vec2<f16>(0.0);
-      next_p3 = vec2<f16>(0.0);
+      ${vecB ? `next_b = b[bRowBase8 + kNext / 8u];` : `next_p0 = vec2<${stType}>(0.0);
+      next_p1 = vec2<${stType}>(0.0);
+      next_p2 = vec2<${stType}>(0.0);
+      next_p3 = vec2<${stType}>(0.0);
       if (bValid) {
         ${half ? `let bOff = bRowBase + kNext / 2u;
         if (fullK) {
-          next_p0 = bitcast<vec2<f16>>(b[bOff]);
-          next_p1 = bitcast<vec2<f16>>(b[bOff + 1u]);
-          next_p2 = bitcast<vec2<f16>>(b[bOff + 2u]);
-          next_p3 = bitcast<vec2<f16>>(b[bOff + 3u]);
+          next_p0 = ${sm8f32 ? 'unpack2x16float(b[bOff])' : 'bitcast<vec2<f16>>(b[bOff])'};
+          next_p1 = ${sm8f32 ? 'unpack2x16float(b[bOff + 1u])' : 'bitcast<vec2<f16>>(b[bOff + 1u])'};
+          next_p2 = ${sm8f32 ? 'unpack2x16float(b[bOff + 2u])' : 'bitcast<vec2<f16>>(b[bOff + 2u])'};
+          next_p3 = ${sm8f32 ? 'unpack2x16float(b[bOff + 3u])' : 'bitcast<vec2<f16>>(b[bOff + 3u])'};
         } else {
           let k = kNext + kkB;
-          if (k < p.k) { let t = bitcast<vec2<f16>>(b[bOff]); next_p0.x = t.x; if (k + 1u < p.k) { next_p0.y = t.y; } }
-          if (k + 2u < p.k) { let t = bitcast<vec2<f16>>(b[bOff + 1u]); next_p1.x = t.x; if (k + 3u < p.k) { next_p1.y = t.y; } }
-          if (k + 4u < p.k) { let t = bitcast<vec2<f16>>(b[bOff + 2u]); next_p2.x = t.x; if (k + 5u < p.k) { next_p2.y = t.y; } }
-          if (k + 6u < p.k) { let t = bitcast<vec2<f16>>(b[bOff + 3u]); next_p3.x = t.x; if (k + 7u < p.k) { next_p3.y = t.y; } }
+          if (k < p.k) { let t = ${sm8f32 ? 'unpack2x16float(b[bOff])' : 'bitcast<vec2<f16>>(b[bOff])'}; next_p0.x = t.x; if (k + 1u < p.k) { next_p0.y = t.y; } }
+          if (k + 2u < p.k) { let t = ${sm8f32 ? 'unpack2x16float(b[bOff + 1u])' : 'bitcast<vec2<f16>>(b[bOff + 1u])'}; next_p1.x = t.x; if (k + 3u < p.k) { next_p1.y = t.y; } }
+          if (k + 4u < p.k) { let t = ${sm8f32 ? 'unpack2x16float(b[bOff + 2u])' : 'bitcast<vec2<f16>>(b[bOff + 2u])'}; next_p2.x = t.x; if (k + 5u < p.k) { next_p2.y = t.y; } }
+          if (k + 6u < p.k) { let t = ${sm8f32 ? 'unpack2x16float(b[bOff + 3u])' : 'bitcast<vec2<f16>>(b[bOff + 3u])'}; next_p3.x = t.x; if (k + 7u < p.k) { next_p3.y = t.y; } }
         }` : `let k = kNext + kkB;
         let bOff = bRowBase + k * p.sBk;
         if (fullK || k + 7u < p.k) {
-          next_p0 = vec2<f16>(f16(b[bOff]), f16(b[bOff + p.sBk]));
-          next_p1 = vec2<f16>(f16(b[bOff + 2u * p.sBk]), f16(b[bOff + 3u * p.sBk]));
-          next_p2 = vec2<f16>(f16(b[bOff + 4u * p.sBk]), f16(b[bOff + 5u * p.sBk]));
-          next_p3 = vec2<f16>(f16(b[bOff + 6u * p.sBk]), f16(b[bOff + 7u * p.sBk]));
+          next_p0 = vec2<${stType}>(${stType}(b[bOff]), ${stType}(b[bOff + p.sBk]));
+          next_p1 = vec2<${stType}>(${stType}(b[bOff + 2u * p.sBk]), ${stType}(b[bOff + 3u * p.sBk]));
+          next_p2 = vec2<${stType}>(${stType}(b[bOff + 4u * p.sBk]), ${stType}(b[bOff + 5u * p.sBk]));
+          next_p3 = vec2<${stType}>(${stType}(b[bOff + 6u * p.sBk]), ${stType}(b[bOff + 7u * p.sBk]));
         } else {
-          if (k < p.k) { next_p0.x = f16(b[bOff]); }
-          if (k + 1u < p.k) { next_p0.y = f16(b[bOff + p.sBk]); }
-          if (k + 2u < p.k) { next_p1.x = f16(b[bOff + 2u * p.sBk]); }
-          if (k + 3u < p.k) { next_p1.y = f16(b[bOff + 3u * p.sBk]); }
-          if (k + 4u < p.k) { next_p2.x = f16(b[bOff + 4u * p.sBk]); }
-          if (k + 5u < p.k) { next_p2.y = f16(b[bOff + 5u * p.sBk]); }
-          if (k + 6u < p.k) { next_p3.x = f16(b[bOff + 6u * p.sBk]); }
-          if (k + 7u < p.k) { next_p3.y = f16(b[bOff + 7u * p.sBk]); }
+          if (k < p.k) { next_p0.x = ${stType}(b[bOff]); }
+          if (k + 1u < p.k) { next_p0.y = ${stType}(b[bOff + p.sBk]); }
+          if (k + 2u < p.k) { next_p1.x = ${stType}(b[bOff + 2u * p.sBk]); }
+          if (k + 3u < p.k) { next_p1.y = ${stType}(b[bOff + 3u * p.sBk]); }
+          if (k + 4u < p.k) { next_p2.x = ${stType}(b[bOff + 4u * p.sBk]); }
+          if (k + 5u < p.k) { next_p2.y = ${stType}(b[bOff + 5u * p.sBk]); }
+          if (k + 6u < p.k) { next_p3.x = ${stType}(b[bOff + 6u * p.sBk]); }
+          if (k + 7u < p.k) { next_p3.y = ${stType}(b[bOff + 7u * p.sBk]); }
         }`}
       }`}
     }
-    let right = subgroupMatrixLoad<subgroup_matrix_right<f16, 16, 16>>(&staged_b, sg * 256u, true, 16u);
-    ${blocks.map((i) => `{
-      let left = subgroupMatrixLoad<subgroup_matrix_left<f16, 16, 16>>(&staged_a, ${i * 384}u, false, 24u);
-      mAcc_${i} = subgroupMatrixMultiplyAccumulate(left, right, mAcc_${i});
-    }`).join('\n    ')}
+    ${mmaTile}
     workgroupBarrier();
     if (hasNext) {
       ${vecIO ? `${tileM === 32 ? 'if (li < 128u) {' : '{'}
-        ${aF16 ? 'let av = vec4<f16>(bitcast<vec2<f16>>(next_a.x), bitcast<vec2<f16>>(next_a.y));' : 'let av = vec4<f16>(next_a);'}
+        ${aF16 ? `let av = vec4<${stType}>(vec4<f16>(bitcast<vec2<f16>>(next_a.x), bitcast<vec2<f16>>(next_a.y)));` : `let av = vec4<${stType}>(next_a);`}
         ${inLn ? 'let af = vec4<f32>(av); sumA += af.x + af.y + af.z + af.w; sqSumA += dot(af, af);' : ''}
-        staged_a[aWrite] = av.x;
-        staged_a[aWrite + 1u] = av.y;
-        staged_a[aWrite + 2u] = av.z;
-        staged_a[aWrite + 3u] = av.w;
-      }` : `staged_a[aWrite] = next_a.x;
-      staged_a[aWrite + 1u] = next_a.y;
-      ${aPerThread === 4 ? `staged_a[aWrite + 2u] = next_a.z;
-      staged_a[aWrite + 3u] = next_a.w;` : ''}`}
+        ${stA}[aWrite] = av.x;
+        ${stA}[aWrite + 1u] = av.y;
+        ${stA}[aWrite + 2u] = av.z;
+        ${stA}[aWrite + 3u] = av.w;
+      }` : `${stA}[aWrite] = next_a.x;
+      ${stA}[aWrite + 1u] = next_a.y;
+      ${aPerThread === 4 ? `${stA}[aWrite + 2u] = next_a.z;
+      ${stA}[aWrite + 3u] = next_a.w;` : ''}`}
       ${vecB ? `{
-        let p0 = bitcast<vec2<f16>>(next_b.x);
-        let p1 = bitcast<vec2<f16>>(next_b.y);
-        let p2 = bitcast<vec2<f16>>(next_b.z);
-        let p3 = bitcast<vec2<f16>>(next_b.w);
-        staged_b[bDst] = p0.x;
-        staged_b[bDst + 1u] = p0.y;
-        staged_b[bDst + 2u] = p1.x;
-        staged_b[bDst + 3u] = p1.y;
-        staged_b[bDst + 4u] = p2.x;
-        staged_b[bDst + 5u] = p2.y;
-        staged_b[bDst + 6u] = p3.x;
-        staged_b[bDst + 7u] = p3.y;
-      }` : `staged_b[bDst] = next_p0.x;
-      staged_b[bDst + 1u] = next_p0.y;
-      staged_b[bDst + 2u] = next_p1.x;
-      staged_b[bDst + 3u] = next_p1.y;
-      staged_b[bDst + 4u] = next_p2.x;
-      staged_b[bDst + 5u] = next_p2.y;
-      staged_b[bDst + 6u] = next_p3.x;
-      staged_b[bDst + 7u] = next_p3.y;`}
+        let p0 = ${sm8f32 ? 'unpack2x16float(next_b.x)' : 'bitcast<vec2<f16>>(next_b.x)'};
+        let p1 = ${sm8f32 ? 'unpack2x16float(next_b.y)' : 'bitcast<vec2<f16>>(next_b.y)'};
+        let p2 = ${sm8f32 ? 'unpack2x16float(next_b.z)' : 'bitcast<vec2<f16>>(next_b.z)'};
+        let p3 = ${sm8f32 ? 'unpack2x16float(next_b.w)' : 'bitcast<vec2<f16>>(next_b.w)'};
+        ${stB}[bDst] = p0.x;
+        ${stB}[bDst + 1u] = p0.y;
+        ${stB}[bDst + 2u] = p1.x;
+        ${stB}[bDst + 3u] = p1.y;
+        ${stB}[bDst + 4u] = p2.x;
+        ${stB}[bDst + 5u] = p2.y;
+        ${stB}[bDst + 6u] = p3.x;
+        ${stB}[bDst + 7u] = p3.y;
+      }` : `${stB}[bDst] = next_p0.x;
+      ${stB}[bDst + 1u] = next_p0.y;
+      ${stB}[bDst + 2u] = next_p1.x;
+      ${stB}[bDst + 3u] = next_p1.y;
+      ${stB}[bDst + 4u] = next_p2.x;
+      ${stB}[bDst + 5u] = next_p2.y;
+      ${stB}[bDst + 6u] = next_p3.x;
+      ${stB}[bDst + 7u] = next_p3.y;`}
     }
     workgroupBarrier();
-  }
+  }`}
   ${inLn ? `{
     sumA += subgroupShuffleXor(sumA, 1u);
     sumA += subgroupShuffleXor(sumA, 2u);
@@ -916,11 +996,15 @@ fn main(
     if (kA4 == 0u && rA < ${tileM}u) {
       let invK = 1.0 / f32(p.k);
       let mean = sumA * invK;
-      let scIdx = ${pair?.colMajorStore === 'cond1024'
-        ? 'select((rA / 4u) * 136u + 128u + (rA % 4u) * 2u, rA * 34u + 32u, n0 < 1024u)'
-        : '(rA / 4u) * 136u + 128u + (rA % 4u) * 2u'};
+      let invStd = inverseSqrt(max(sqSumA * invK - mean * mean, 0.0) + 1e-5);
+      ${sm8 && !sm8f32 ? `lnStat[rA * 2u] = mean;
+      lnStat[rA * 2u + 1u] = invStd;` : `let scIdx = ${sm8f32
+        ? `${lnOff}u + rA * 2u`
+        : pair?.colMajorStore === 'cond1024'
+          ? 'select((rA / 4u) * 136u + 128u + (rA % 4u) * 2u, rA * 34u + 32u, n0 < 1024u)'
+          : '(rA / 4u) * 136u + 128u + (rA % 4u) * 2u'};
       scratch[scIdx] = mean;
-      scratch[scIdx + 1u] = inverseSqrt(max(sqSumA * invK - mean * mean, 0.0) + 1e-5);
+      scratch[scIdx + 1u] = invStd;`}
     }
   }` : ''}
   ${vecEpilogue ? `let rE = li / 32u;
@@ -942,22 +1026,86 @@ fn main(
     if (n0 + col < p.n) { bVal0 = bias[b0 * p.n + n0 + col]; }
     if (n0 + col + 64u < p.n) { bVal1 = bias[b0 * p.n + n0 + col + 64u]; }
   }`}`}
-  ${pairs.map((pIdx) => {
+  ${sm8 && (!pair || pair.singleBlockBody) ? blocks.map((bIdx) => {
+    const storeCode = pair?.colMajorStore === 'cond1024'
+      ? `if (n0 < 1024u) {
+    ${storeMat16(bIdx, 'sg * 288u', true, 18)}
+  } else {
+    ${storeMat16(bIdx, 'sg * 16u', false, 136)}
+  }`
+      : storeMat16(bIdx, 'sg * 16u', false, 136);
+    return `${storeCode}
+  workgroupBarrier();
+  ${bIdx + 1 === numBlocks ? 'if (!inBatch) { return; }\n  {' : 'if (inBatch) {'}
+    ${pair?.singleBlockBody ? pair.singleBlockBody(bIdx) : vecEpilogue ? `{
+      if (colValid) {
+        ${[0, 1].map((s) => `{
+          let rLocal = ${bIdx * 16 + s * 8}u + rE;
+          let m = m0 + rLocal;
+          if (m < p.m) {
+            let sb = (rE + ${s * 8}u) * 136u + c4 * 4u;
+            let raw4 = vec4<f32>(f32(scratch[sb]), f32(scratch[sb + 1u]), f32(scratch[sb + 2u]), f32(scratch[sb + 3u]));
+            ${inLn ? (sm8 && !sm8f32
+              ? `let v4 = (raw4 - lnStat[rLocal * 2u] * wSum4) * lnStat[rLocal * 2u + 1u]${hasAlpha ? ' * p.alpha' : ''}${hasBias ? ' + bVal4' : ''};`
+              : `let scIdx = ${lnOff}u + rLocal * 2u;
+            let v4 = (raw4 - f32(scratch[scIdx]) * wSum4) * f32(scratch[scIdx + 1u])${hasAlpha ? ' * p.alpha' : ''}${hasBias ? ' + bVal4' : ''};`) : `let v4 = raw4${hasAlpha ? ' * p.alpha' : ''}${hasBias ? ' + bVal4' : ''};`}
+            let v = ${actType === 1 ? 'max(v4, vec4<f32>(0.0))' : actType === 2 ? 'vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-v4))' : 'v4'};
+            let at4 = (baseC + m * p.sCm + nCol) / 4u;
+            ${gate ? `let gv = ${gF16 ? 'unpack4f16(gsc[(p.gOff + m * p.gStride + nCol) / 4u])' : 'gsc[(p.gOff + m * p.gStride + nCol) / 4u]'};
+            ${addOnly ? 'let res = v + gv;' : gSigm ? `let res = ${cF16 ? 'unpack4f16(c[at4])' : 'c[at4]'} + v / (vec4<f32>(1.0) + exp(-gv));` : `let res = ${cF16 ? 'unpack4f16(c[at4])' : 'c[at4]'} + v * gv;`}
+            c[at4] = ${cF16 ? 'pack4f16(res)' : 'res'};` : acc ? `let res = ${cF16 ? 'unpack4f16(c[at4])' : 'c[at4]'} + v;
+            c[at4] = ${cF16 ? 'pack4f16(res)' : 'res'};` : `c[at4] = ${cF16 ? 'pack4f16(v)' : 'v'};`}
+          }
+        }`).join('\n        ')}
+      }
+    }` : `{
+      ${[0, 1, 2, 3].map((s) => `let sb_${s} = (rBase + ${s * 4}u) * 136u + col;
+      let v0_${s} = f32(scratch[sb_${s}])${hasAlpha ? ' * p.alpha' : ''}${hasBias ? ' + bVal0' : ''};
+      let v1_${s} = f32(scratch[sb_${s} + 64u])${hasAlpha ? ' * p.alpha' : ''}${hasBias ? ' + bVal1' : ''};`).join('\n      ')}
+      ${[0, 1, 2, 3].map((s) => `{
+        let m = m0 + ${bIdx * 16 + s * 4}u + rBase;
+        if (m < p.m) {
+          let v0 = v0_${s};
+          let v1 = v1_${s};
+          let rowC = baseC + m * p.sCm;
+          let n_0 = n0 + col;
+          if (n_0 < p.n) {
+            let v = ${actType === 1 ? 'max(v0, 0.0)' : actType === 2 ? '1.0 / (1.0 + exp(-v0))' : 'v0'};
+            let at = rowC + n_0 * p.sCn;
+            ${gate ? (addOnly ? `let gv = f32(gsc[p.gOff + m * p.gStride + n_0]);
+            c[at] = ${cType}(v + gv);` : gSigm ? `let gv = f32(gsc[p.gOff + m * p.gStride + n_0]);
+            c[at] = ${cType}(f32(c[at]) + v / (1.0 + exp(-gv)));` : `let gv = f32(gsc[p.gOff + m * p.gStride + n_0]);
+            c[at] = ${cType}(f32(c[at]) + v * gv);`) : acc ? `c[at] = ${cType}(f32(c[at]) + v);` : `c[at] = ${cType}(v);`}
+          }
+          let n_1 = n_0 + 64u;
+          if (n_1 < p.n) {
+            let v = ${actType === 1 ? 'max(v1, 0.0)' : actType === 2 ? '1.0 / (1.0 + exp(-v1))' : 'v1'};
+            let at = rowC + n_1 * p.sCn;
+            ${gate ? (addOnly ? `let gv = f32(gsc[p.gOff + m * p.gStride + n_1]);
+            c[at] = ${cType}(v + gv);` : gSigm ? `let gv = f32(gsc[p.gOff + m * p.gStride + n_1]);
+            c[at] = ${cType}(f32(c[at]) + v / (1.0 + exp(-gv)));` : `let gv = f32(gsc[p.gOff + m * p.gStride + n_1]);
+            c[at] = ${cType}(f32(c[at]) + v * gv);`) : acc ? `c[at] = ${cType}(f32(c[at]) + v);` : `c[at] = ${cType}(v);`}
+          }
+        }
+      }`).join('\n      ')}
+    }`}
+  }${bIdx + 1 < numBlocks ? '\n  workgroupBarrier();' : ''}`;
+  }).join('\n  ') : pairs.map((pIdx) => {
     const i0 = pIdx * 2;
     const i1 = pIdx * 2 + 1;
     const storeCode = pair?.colMajorStore === 'cond1024'
       ? `if (n0 < 1024u) {
-    subgroupMatrixStore(&scratch, sg * 544u, mAcc_${i0}, true, 34u);
-    subgroupMatrixStore(&scratch, sg * 544u + 16u, mAcc_${i1}, true, 34u);
+    ${storeMat16(i0, 'sg * 544u', true, 34)}
+    ${storeMat16(i1, 'sg * 544u + 16u', true, 34)}
   } else {
-    subgroupMatrixStore(&scratch, sg * 16u, mAcc_${i0}, false, 136u);
-    subgroupMatrixStore(&scratch, 2176u + sg * 16u, mAcc_${i1}, false, 136u);
+    ${storeMat16(i0, 'sg * 16u', false, 136)}
+    ${storeMat16(i1, '2176u + sg * 16u', false, 136)}
   }`
       : pair?.colMajorStore
-        ? `subgroupMatrixStore(&scratch, sg * 544u, mAcc_${i0}, true, 34u);
-  subgroupMatrixStore(&scratch, sg * 544u + 16u, mAcc_${i1}, true, 34u);`
-        : `subgroupMatrixStore(&scratch, sg * 16u, mAcc_${i0}, false, 136u);
-  subgroupMatrixStore(&scratch, 2176u + sg * 16u, mAcc_${i1}, false, 136u);`;
+        ? `${storeMat16(i0, 'sg * 544u', true, 34)}
+  ${storeMat16(i1, 'sg * 544u + 16u', true, 34)}`
+        : `${storeMat16(i0, 'sg * 16u', false, 136)}
+  ${storeMat16(i1, '2176u + sg * 16u', false, 136)}`;
     return `${storeCode}
   workgroupBarrier();
   ${pIdx + 1 === numPairs ? 'if (!inBatch) { return; }\n  {' : 'if (inBatch) {'}
@@ -968,9 +1116,9 @@ fn main(
           let m = m0 + rLocal;
           if (m < p.m) {
             let sb = (rE + ${s * 8}u) * 136u + c4 * 4u;
-            let raw4 = vec4<f32>(scratch[sb], scratch[sb + 1u], scratch[sb + 2u], scratch[sb + 3u]);
-            ${inLn ? `let scIdx = (rLocal / 4u) * 136u + 128u + (rLocal % 4u) * 2u;
-            let v4 = (raw4 - scratch[scIdx] * wSum4) * scratch[scIdx + 1u]${hasAlpha ? ' * p.alpha' : ''}${hasBias ? ' + bVal4' : ''};` : `let v4 = raw4${hasAlpha ? ' * p.alpha' : ''}${hasBias ? ' + bVal4' : ''};`}
+            let raw4 = vec4<f32>(f32(scratch[sb]), f32(scratch[sb + 1u]), f32(scratch[sb + 2u]), f32(scratch[sb + 3u]));
+            ${inLn ? (sm8 ? `let v4 = (raw4 - lnStat[rLocal * 2u] * wSum4) * lnStat[rLocal * 2u + 1u]${hasAlpha ? ' * p.alpha' : ''}${hasBias ? ' + bVal4' : ''};` : `let scIdx = (rLocal / 4u) * 136u + 128u + (rLocal % 4u) * 2u;
+            let v4 = (raw4 - scratch[scIdx] * wSum4) * scratch[scIdx + 1u]${hasAlpha ? ' * p.alpha' : ''}${hasBias ? ' + bVal4' : ''};`) : `let v4 = raw4${hasAlpha ? ' * p.alpha' : ''}${hasBias ? ' + bVal4' : ''};`}
             let v = ${actType === 1 ? 'max(v4, vec4<f32>(0.0))' : actType === 2 ? 'vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-v4))' : 'v4'};
             let at4 = (baseC + m * p.sCm + nCol) / 4u;
             ${gate ? `let gv = ${gF16 ? 'unpack4f16(gsc[(p.gOff + m * p.gStride + nCol) / 4u])' : 'gsc[(p.gOff + m * p.gStride + nCol) / 4u]'};
@@ -982,8 +1130,8 @@ fn main(
       }
     }` : `{
       ${[0, 1, 2, 3, 4, 5, 6, 7].map((s) => `let sb_${s} = (rBase + ${s * 4}u) * 136u + col;
-      let v0_${s} = scratch[sb_${s}]${hasAlpha ? ' * p.alpha' : ''}${!pair && hasBias ? ' + bVal0' : ''};
-      let v1_${s} = scratch[sb_${s} + 64u]${hasAlpha ? ' * p.alpha' : ''}${!pair && hasBias ? ' + bVal1' : ''};`).join('\n      ')}
+      let v0_${s} = f32(scratch[sb_${s}])${hasAlpha ? ' * p.alpha' : ''}${!pair && hasBias ? ' + bVal0' : ''};
+      let v1_${s} = f32(scratch[sb_${s} + 64u])${hasAlpha ? ' * p.alpha' : ''}${!pair && hasBias ? ' + bVal1' : ''};`).join('\n      ')}
       ${[0, 1, 2, 3, 4, 5, 6, 7].map((s) => `{
         let m = m0 + ${pIdx * 32 + s * 4}u + rBase;
         if (m < p.m) {
@@ -1021,9 +1169,10 @@ fn main(
  * All 8 subgroups in the workgroup are 100% utilized across the 64 columns of a single head `h`, loading `V` (`[16, 64]`)
  * with 1 coalesced `vec4<f32>` per thread and writing `att` with 128-bit `vec4<f32>` stores.
  */
-function attPvSource(vgF16 = false) {
+function attPvSource(vgF16 = false, sm8 = false) {
   const lt = vgF16 ? 'f16' : 'f32';
   const vt = vgF16 ? 'vec2<u32>' : 'vec4<f32>';
+  const stType = sm8 ? 'f32' : 'f16';
   return `enable f16;
 enable subgroups;
 enable chromium_experimental_subgroup_matrix;
@@ -1032,8 +1181,8 @@ struct P { n: u32, nn: u32, pad0: u32, pad1: u32 };
 @group(0) @binding(1) var<storage, read> logits: array<${lt}>;
 @group(0) @binding(2) var<storage, read> qkv: array<${vt}>;
 @group(0) @binding(3) var<storage, read_write> att: array<${vt}>;
-var<workgroup> staged_a: array<f16, 768>;
-var<workgroup> staged_b: array<f16, 1152>;
+var<workgroup> staged_a: array<${stType}, 768>;
+var<workgroup> staged_b: array<${stType}, 1152>;
 var<workgroup> scratch: array<f32, 2304>;
 ${vgF16 ? `fn unpack4f16(u: vec2<u32>) -> vec4<f32> {
   return vec4<f32>(vec4<f16>(bitcast<vec2<f16>>(u.x), bitcast<vec2<f16>>(u.y)));
@@ -1067,23 +1216,26 @@ fn main(
   let vColBase4 = ${vgF16 ? '0u' : '384u'} + hClamped * 16u + cV4;
   let bWrite = rV * 72u + cV4 * 4u;
 
-  var mAcc = subgroup_matrix_result<f32, 16, 16>();
+  ${sm8 ? `var mAcc_00 = subgroup_matrix_result<f32, 8, 8>();
+  var mAcc_01 = subgroup_matrix_result<f32, 8, 8>();
+  var mAcc_10 = subgroup_matrix_result<f32, 8, 8>();
+  var mAcc_11 = subgroup_matrix_result<f32, 8, 8>();` : 'var mAcc = subgroup_matrix_result<f32, 16, 16>();'}
   var next_a0 = logits[aRowBase + min(kA, p.n - 1u)];
   var next_a1 = logits[aRowBase + min(kA + 1u, p.n - 1u)];
   var next_v4 = qkv[min(rV, p.n - 1u) * ${vgF16 ? '384u' : '768u'} + vColBase4];
-  staged_a[aWrite] = select(f16(0.0), f16(next_a0), kA < p.n);
-  staged_a[aWrite + 1u] = select(f16(0.0), f16(next_a1), kA + 1u < p.n);
+  staged_a[aWrite] = select(${stType}(0.0), ${stType}(next_a0), kA < p.n);
+  staged_a[aWrite + 1u] = select(${stType}(0.0), ${stType}(next_a1), kA + 1u < p.n);
   ${vgF16 ? `{
-    let pv0 = bitcast<vec2<f16>>(next_v4.x);
-    let pv1 = bitcast<vec2<f16>>(next_v4.y);
+    let pv0 = ${sm8 ? 'unpack2x16float(next_v4.x)' : 'bitcast<vec2<f16>>(next_v4.x)'};
+    let pv1 = ${sm8 ? 'unpack2x16float(next_v4.y)' : 'bitcast<vec2<f16>>(next_v4.y)'};
     staged_b[bWrite] = pv0.x;
     staged_b[bWrite + 1u] = pv0.y;
     staged_b[bWrite + 2u] = pv1.x;
     staged_b[bWrite + 3u] = pv1.y;
-  }` : `staged_b[bWrite] = f16(next_v4.x);
-  staged_b[bWrite + 1u] = f16(next_v4.y);
-  staged_b[bWrite + 2u] = f16(next_v4.z);
-  staged_b[bWrite + 3u] = f16(next_v4.w);`}
+  }` : `staged_b[bWrite] = ${stType}(next_v4.x);
+  staged_b[bWrite + 1u] = ${stType}(next_v4.y);
+  staged_b[bWrite + 2u] = ${stType}(next_v4.z);
+  staged_b[bWrite + 3u] = ${stType}(next_v4.w);`}
   workgroupBarrier();
 
   for (var k0 = 0u; k0 < p.n; k0 += 16u) {
@@ -1094,27 +1246,40 @@ fn main(
       next_a1 = logits[aRowBase + min(kNext + kA + 1u, p.n - 1u)];
       next_v4 = qkv[min(kNext + rV, p.n - 1u) * ${vgF16 ? '384u' : '768u'} + vColBase4];
     }
-    let left = subgroupMatrixLoad<subgroup_matrix_left<f16, 16, 16>>(&staged_a, sgM * 384u, false, 24u);
+    ${sm8 ? [0, 8].map((ks) => `{
+      let left0 = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&staged_a, sgM * 384u + ${ks}u, false, 24u);
+      let left1 = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&staged_a, sgM * 384u + ${192 + ks}u, false, 24u);
+      let right0 = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&staged_b, ${ks * 72}u + sgN * 16u, false, 72u);
+      let right1 = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&staged_b, ${ks * 72 + 8}u + sgN * 16u, false, 72u);
+      mAcc_00 = subgroupMatrixMultiplyAccumulate(left0, right0, mAcc_00);
+      mAcc_01 = subgroupMatrixMultiplyAccumulate(left0, right1, mAcc_01);
+      mAcc_10 = subgroupMatrixMultiplyAccumulate(left1, right0, mAcc_10);
+      mAcc_11 = subgroupMatrixMultiplyAccumulate(left1, right1, mAcc_11);
+    }`).join('\n    ') : `let left = subgroupMatrixLoad<subgroup_matrix_left<f16, 16, 16>>(&staged_a, sgM * 384u, false, 24u);
     let right = subgroupMatrixLoad<subgroup_matrix_right<f16, 16, 16>>(&staged_b, sgN * 16u, false, 72u);
-    mAcc = subgroupMatrixMultiplyAccumulate(left, right, mAcc);
+    mAcc = subgroupMatrixMultiplyAccumulate(left, right, mAcc);`}
     workgroupBarrier();
     if (hasNext) {
-      staged_a[aWrite] = select(f16(0.0), f16(next_a0), kNext + kA < p.n);
-      staged_a[aWrite + 1u] = select(f16(0.0), f16(next_a1), kNext + kA + 1u < p.n);
-      ${vgF16 ? `let pv0 = bitcast<vec2<f16>>(next_v4.x);
-      let pv1 = bitcast<vec2<f16>>(next_v4.y);
+      staged_a[aWrite] = select(${stType}(0.0), ${stType}(next_a0), kNext + kA < p.n);
+      staged_a[aWrite + 1u] = select(${stType}(0.0), ${stType}(next_a1), kNext + kA + 1u < p.n);
+      ${vgF16 ? `let pv0 = ${sm8 ? 'unpack2x16float(next_v4.x)' : 'bitcast<vec2<f16>>(next_v4.x)'};
+      let pv1 = ${sm8 ? 'unpack2x16float(next_v4.y)' : 'bitcast<vec2<f16>>(next_v4.y)'};
       staged_b[bWrite] = pv0.x;
       staged_b[bWrite + 1u] = pv0.y;
       staged_b[bWrite + 2u] = pv1.x;
-      staged_b[bWrite + 3u] = pv1.y;` : `staged_b[bWrite] = f16(next_v4.x);
-      staged_b[bWrite + 1u] = f16(next_v4.y);
-      staged_b[bWrite + 2u] = f16(next_v4.z);
-      staged_b[bWrite + 3u] = f16(next_v4.w);`}
+      staged_b[bWrite + 3u] = pv1.y;` : `staged_b[bWrite] = ${stType}(next_v4.x);
+      staged_b[bWrite + 1u] = ${stType}(next_v4.y);
+      staged_b[bWrite + 2u] = ${stType}(next_v4.z);
+      staged_b[bWrite + 3u] = ${stType}(next_v4.w);`}
     }
     workgroupBarrier();
   }
 
-  subgroupMatrixStore(&scratch, (sgM * 16u) * 72u + sgN * 16u, mAcc, false, 72u);
+  ${sm8 ? `let scBase = (sgM * 16u) * 72u + sgN * 16u;
+  subgroupMatrixStore(&scratch, scBase, mAcc_00, false, 72u);
+  subgroupMatrixStore(&scratch, scBase + 8u, mAcc_01, false, 72u);
+  subgroupMatrixStore(&scratch, scBase + 8u * 72u, mAcc_10, false, 72u);
+  subgroupMatrixStore(&scratch, scBase + 8u * 72u + 8u, mAcc_11, false, 72u);` : 'subgroupMatrixStore(&scratch, (sgM * 16u) * 72u + sgN * 16u, mAcc, false, 72u);'}
   workgroupBarrier();
   if (!inBatch) { return; }
 
@@ -1642,8 +1807,12 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
  * All 8 subgroups in the 256-thread workgroup compute one `16x16` tile (`sgM = sg / 2` in `0..3`, `sgN = sg % 2` in `0..1`),
  * accumulating `sqSum = sum(z^2)` on the fly during global loads and reducing each row across 4 lanes via 2 `subgroupShuffleXor`s.
  */
-function pairToBiasSubmatSource(dual = false, zF16 = true, bF16 = true) {
+function pairToBiasSubmatSource(dual = false, zF16 = true, bF16 = true, sm8 = false) {
   const bt = bF16 ? 'f16' : 'f32';
+  const stType = sm8 ? 'f32' : 'f16';
+  const stA = sm8 ? 'scratch' : 'staged_a';
+  const stB = sm8 ? 'scratch' : 'staged_b';
+  const aBaseOff = sm8 ? '512u + ' : '';
   const nHeads = dual ? 24 : 12;
   return `enable f16;
 enable subgroups;
@@ -1654,8 +1823,8 @@ struct P { rows: u32, nn: u32, r0: u32, eps384: f32, n: u32, seqStride: u32, pad
 @group(0) @binding(2) var<storage, read> wBias: array<vec4<u32>>;
 @group(0) @binding(3) var<storage, read_write> bias: array<${bt}>;
 ${dual ? `@group(0) @binding(4) var<storage, read_write> bias2: array<${bt}>;` : ''}
-var<workgroup> staged_a: array<f16, 1536>;
-var<workgroup> staged_b: array<f16, 512>;
+${sm8 ? '' : `var<workgroup> staged_a: array<f16, 1536>;
+var<workgroup> staged_b: array<f16, 512>;`}
 var<workgroup> scratch: array<f32, 2176>;
 var<workgroup> invRow: array<f32, 64>;
 @compute @workgroup_size(128)
@@ -1672,7 +1841,7 @@ fn main(
   let kA8 = li & 1u;
   let rowA = min(m0 + rA, p.rows - 1u);
   let zRowBase8 = (p.r0 + rowA) * 48u + kA8;
-  let aWrite = rA * 24u + kA8 * 8u;
+  let aWrite = ${aBaseOff}rA * 24u + kA8 * 8u;
 
   let hB = li / 2u;
   let kB8 = li & 1u;
@@ -1680,26 +1849,33 @@ fn main(
   let wRowBase8 = min(hB, ${nHeads - 1}u) * 48u + kB8;
   let bWrite = hB * 16u + kB8 * 8u;
 
-  var mAcc0 = subgroup_matrix_result<f32, 16, 16>();
-  ${dual ? 'var mAcc1 = subgroup_matrix_result<f32, 16, 16>();' : ''}
+  ${sm8 ? `var mAcc0_00 = subgroup_matrix_result<f32, 8, 8>();
+  var mAcc0_01 = subgroup_matrix_result<f32, 8, 8>();
+  var mAcc0_10 = subgroup_matrix_result<f32, 8, 8>();
+  var mAcc0_11 = subgroup_matrix_result<f32, 8, 8>();
+  ${dual ? `var mAcc1_00 = subgroup_matrix_result<f32, 8, 8>();
+  var mAcc1_01 = subgroup_matrix_result<f32, 8, 8>();
+  var mAcc1_10 = subgroup_matrix_result<f32, 8, 8>();
+  var mAcc1_11 = subgroup_matrix_result<f32, 8, 8>();` : ''}` : `var mAcc0 = subgroup_matrix_result<f32, 16, 16>();
+  ${dual ? 'var mAcc1 = subgroup_matrix_result<f32, 16, 16>();' : ''}`}
   var sqSum = 0.0;
 
   var next_z = z[zRowBase8];
   var next_w = vec4<u32>(0u);
   if (bValid) { next_w = wBias[wRowBase8]; }
   {
-    let av0 = vec4<f16>(bitcast<vec2<f16>>(next_z.x), bitcast<vec2<f16>>(next_z.y));
-    let av1 = vec4<f16>(bitcast<vec2<f16>>(next_z.z), bitcast<vec2<f16>>(next_z.w));
+    let av0 = vec4<${stType}>(vec4<f16>(bitcast<vec2<f16>>(next_z.x), bitcast<vec2<f16>>(next_z.y)));
+    let av1 = vec4<${stType}>(vec4<f16>(bitcast<vec2<f16>>(next_z.z), bitcast<vec2<f16>>(next_z.w)));
     let af0 = vec4<f32>(av0);
     let af1 = vec4<f32>(av1);
     sqSum += dot(af0, af0) + dot(af1, af1);
-    staged_a[aWrite] = av0.x; staged_a[aWrite + 1u] = av0.y; staged_a[aWrite + 2u] = av0.z; staged_a[aWrite + 3u] = av0.w;
-    staged_a[aWrite + 4u] = av1.x; staged_a[aWrite + 5u] = av1.y; staged_a[aWrite + 6u] = av1.z; staged_a[aWrite + 7u] = av1.w;
+    ${stA}[aWrite] = av0.x; ${stA}[aWrite + 1u] = av0.y; ${stA}[aWrite + 2u] = av0.z; ${stA}[aWrite + 3u] = av0.w;
+    ${stA}[aWrite + 4u] = av1.x; ${stA}[aWrite + 5u] = av1.y; ${stA}[aWrite + 6u] = av1.z; ${stA}[aWrite + 7u] = av1.w;
     if (bValid) {
-      let bv0 = vec4<f16>(bitcast<vec2<f16>>(next_w.x), bitcast<vec2<f16>>(next_w.y));
-      let bv1 = vec4<f16>(bitcast<vec2<f16>>(next_w.z), bitcast<vec2<f16>>(next_w.w));
-      staged_b[bWrite] = bv0.x; staged_b[bWrite + 1u] = bv0.y; staged_b[bWrite + 2u] = bv0.z; staged_b[bWrite + 3u] = bv0.w;
-      staged_b[bWrite + 4u] = bv1.x; staged_b[bWrite + 5u] = bv1.y; staged_b[bWrite + 6u] = bv1.z; staged_b[bWrite + 7u] = bv1.w;
+      let bv0 = vec4<${stType}>(vec4<f16>(bitcast<vec2<f16>>(next_w.x), bitcast<vec2<f16>>(next_w.y)));
+      let bv1 = vec4<${stType}>(vec4<f16>(bitcast<vec2<f16>>(next_w.z), bitcast<vec2<f16>>(next_w.w)));
+      ${stB}[bWrite] = bv0.x; ${stB}[bWrite + 1u] = bv0.y; ${stB}[bWrite + 2u] = bv0.z; ${stB}[bWrite + 3u] = bv0.w;
+      ${stB}[bWrite + 4u] = bv1.x; ${stB}[bWrite + 5u] = bv1.y; ${stB}[bWrite + 6u] = bv1.z; ${stB}[bWrite + 7u] = bv1.w;
     }
   }
   workgroupBarrier();
@@ -1711,25 +1887,40 @@ fn main(
       next_z = z[zRowBase8 + kNext8];
       if (bValid) { next_w = wBias[wRowBase8 + kNext8]; }
     }
-    let left = subgroupMatrixLoad<subgroup_matrix_left<f16, 16, 16>>(&staged_a, sg * 384u, false, 24u);
+    ${sm8 ? [0, 8].map((ks) => `{
+      let left0 = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&scratch, ${512 + ks}u + sg * 384u, false, 24u);
+      let left1 = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(&scratch, ${704 + ks}u + sg * 384u, false, 24u);
+      let right00 = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&scratch, ${ks}u, true, 16u);
+      let right01 = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&scratch, ${128 + ks}u, true, 16u);
+      mAcc0_00 = subgroupMatrixMultiplyAccumulate(left0, right00, mAcc0_00);
+      mAcc0_01 = subgroupMatrixMultiplyAccumulate(left0, right01, mAcc0_01);
+      mAcc0_10 = subgroupMatrixMultiplyAccumulate(left1, right00, mAcc0_10);
+      mAcc0_11 = subgroupMatrixMultiplyAccumulate(left1, right01, mAcc0_11);
+      ${dual ? `let right10 = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&scratch, ${192 + ks}u, true, 16u);
+      let right11 = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(&scratch, ${320 + ks}u, true, 16u);
+      mAcc1_00 = subgroupMatrixMultiplyAccumulate(left0, right10, mAcc1_00);
+      mAcc1_01 = subgroupMatrixMultiplyAccumulate(left0, right11, mAcc1_01);
+      mAcc1_10 = subgroupMatrixMultiplyAccumulate(left1, right10, mAcc1_10);
+      mAcc1_11 = subgroupMatrixMultiplyAccumulate(left1, right11, mAcc1_11);` : ''}
+    }`).join('\n    ') : `let left = subgroupMatrixLoad<subgroup_matrix_left<f16, 16, 16>>(&staged_a, sg * 384u, false, 24u);
     let right0 = subgroupMatrixLoad<subgroup_matrix_right<f16, 16, 16>>(&staged_b, 0u, true, 16u);
     mAcc0 = subgroupMatrixMultiplyAccumulate(left, right0, mAcc0);
     ${dual ? `let right1 = subgroupMatrixLoad<subgroup_matrix_right<f16, 16, 16>>(&staged_b, 192u, true, 16u);
-    mAcc1 = subgroupMatrixMultiplyAccumulate(left, right1, mAcc1);` : ''}
+    mAcc1 = subgroupMatrixMultiplyAccumulate(left, right1, mAcc1);` : ''}`}
     workgroupBarrier();
     if (hasNext) {
-      let av0 = vec4<f16>(bitcast<vec2<f16>>(next_z.x), bitcast<vec2<f16>>(next_z.y));
-      let av1 = vec4<f16>(bitcast<vec2<f16>>(next_z.z), bitcast<vec2<f16>>(next_z.w));
+      let av0 = vec4<${stType}>(vec4<f16>(bitcast<vec2<f16>>(next_z.x), bitcast<vec2<f16>>(next_z.y)));
+      let av1 = vec4<${stType}>(vec4<f16>(bitcast<vec2<f16>>(next_z.z), bitcast<vec2<f16>>(next_z.w)));
       let af0 = vec4<f32>(av0);
       let af1 = vec4<f32>(av1);
       sqSum += dot(af0, af0) + dot(af1, af1);
-      staged_a[aWrite] = av0.x; staged_a[aWrite + 1u] = av0.y; staged_a[aWrite + 2u] = av0.z; staged_a[aWrite + 3u] = av0.w;
-      staged_a[aWrite + 4u] = av1.x; staged_a[aWrite + 5u] = av1.y; staged_a[aWrite + 6u] = av1.z; staged_a[aWrite + 7u] = av1.w;
+      ${stA}[aWrite] = av0.x; ${stA}[aWrite + 1u] = av0.y; ${stA}[aWrite + 2u] = av0.z; ${stA}[aWrite + 3u] = av0.w;
+      ${stA}[aWrite + 4u] = av1.x; ${stA}[aWrite + 5u] = av1.y; ${stA}[aWrite + 6u] = av1.z; ${stA}[aWrite + 7u] = av1.w;
       if (bValid) {
-        let bv0 = vec4<f16>(bitcast<vec2<f16>>(next_w.x), bitcast<vec2<f16>>(next_w.y));
-        let bv1 = vec4<f16>(bitcast<vec2<f16>>(next_w.z), bitcast<vec2<f16>>(next_w.w));
-        staged_b[bWrite] = bv0.x; staged_b[bWrite + 1u] = bv0.y; staged_b[bWrite + 2u] = bv0.z; staged_b[bWrite + 3u] = bv0.w;
-        staged_b[bWrite + 4u] = bv1.x; staged_b[bWrite + 5u] = bv1.y; staged_b[bWrite + 6u] = bv1.z; staged_b[bWrite + 7u] = bv1.w;
+        let bv0 = vec4<${stType}>(vec4<f16>(bitcast<vec2<f16>>(next_w.x), bitcast<vec2<f16>>(next_w.y)));
+        let bv1 = vec4<${stType}>(vec4<f16>(bitcast<vec2<f16>>(next_w.z), bitcast<vec2<f16>>(next_w.w)));
+        ${stB}[bWrite] = bv0.x; ${stB}[bWrite + 1u] = bv0.y; ${stB}[bWrite + 2u] = bv0.z; ${stB}[bWrite + 3u] = bv0.w;
+        ${stB}[bWrite + 4u] = bv1.x; ${stB}[bWrite + 5u] = bv1.y; ${stB}[bWrite + 6u] = bv1.z; ${stB}[bWrite + 7u] = bv1.w;
       }
     }
     workgroupBarrier();
@@ -1739,8 +1930,15 @@ fn main(
   if (kA8 == 0u) {
     invRow[rA] = inverseSqrt(sqSum + p.eps384);
   }
-  subgroupMatrixStore(&scratch, sg * 16u, mAcc0, true, 68u);
-  ${dual ? 'subgroupMatrixStore(&scratch, 1088u + sg * 16u, mAcc1, true, 68u);' : ''}
+  ${sm8 ? `subgroupMatrixStore(&scratch, sg * 16u, mAcc0_00, true, 68u);
+  subgroupMatrixStore(&scratch, sg * 16u + 544u, mAcc0_01, true, 68u);
+  subgroupMatrixStore(&scratch, sg * 16u + 8u, mAcc0_10, true, 68u);
+  subgroupMatrixStore(&scratch, sg * 16u + 552u, mAcc0_11, true, 68u);
+  ${dual ? `subgroupMatrixStore(&scratch, 1088u + sg * 16u, mAcc1_00, true, 68u);
+  subgroupMatrixStore(&scratch, 1632u + sg * 16u, mAcc1_01, true, 68u);
+  subgroupMatrixStore(&scratch, 1096u + sg * 16u, mAcc1_10, true, 68u);
+  subgroupMatrixStore(&scratch, 1640u + sg * 16u, mAcc1_11, true, 68u);` : ''}` : `subgroupMatrixStore(&scratch, sg * 16u, mAcc0, true, 68u);
+  ${dual ? 'subgroupMatrixStore(&scratch, 1088u + sg * 16u, mAcc1, true, 68u);' : ''}`}
   workgroupBarrier();
   if (!live) { return; }
 
@@ -2148,11 +2346,15 @@ export class Rfd4pEngine {
     const has16x16x16 = this.subgroupMatrixConfigs.some(
       (c) => c.M === 16 && c.N === 16 && c.K === 16 && c.componentType === 'f16' && c.resultComponentType === 'f32',
     );
+    const has8x8x8 = this.subgroupMatrixConfigs.some(
+      (c) => c.M === 8 && c.N === 8 && c.K === 8 && c.componentType === 'f32' && c.resultComponentType === 'f32',
+    );
+    this.submat8 = !has16x16x16 && has8x8x8;
     this.hasSubgroupMatrix =
       !device.noSubmat &&
       this.hasF16 &&
       device.features?.has?.('chromium-experimental-subgroup-matrix') === true &&
-      (this.subgroupMatrixConfigs.length === 0 || has16x16x16);
+      (this.subgroupMatrixConfigs.length === 0 || has16x16x16 || has8x8x8);
     this.pipelines = new Map();
     this.dummy = device.createBuffer({ label: 'rfd4p.dummy', size: 16, usage: STORAGE });
     this.activations = [];
@@ -2274,10 +2476,11 @@ export class Rfd4pEngine {
     const submat = b16 && this.hasSubgroupMatrix;
     const tiles64 = Math.ceil(m / 64) * Math.ceil(n / 128) * B0 * B1;
     const small = (submat ? !spec.noSmall : !spec.pair && !spec.noSmall) &&
-      (submat ? (m <= 32 || tiles64 < (k <= 64 ? 100 : 80)) : (m * B0 * B1 <= 1024 || n <= 64));
-    const aF16 = submat && spec.aF16 === true;
-    const cF16 = submat && spec.cF16 === true;
-    const gF16 = submat && hasGate && spec.gate?.f16 === true;
+      (submat ? (m <= 32 || tiles64 < (k <= 64 ? 100 : 80)) : (m <= 32 || n <= 64 || tiles64 < 32));
+    const aF16 = this.hasF16 && spec.aF16 === true;
+    const cF16 = this.hasF16 && spec.cF16 === true;
+    const gF16 = this.hasF16 && hasGate && spec.gate?.f16 === true;
+    const wordB = half || (aF16 && B.k === 1 && B.n % 2 === 0 && B.off % 2 === 0 && B.s0 % 2 === 0 && B.s1 % 2 === 0);
     const vecB = submat && half &&
       B.k === 1 && B.n % 8 === 0 && B.off % 8 === 0 && B.s0 % 8 === 0 && B.s1 % 8 === 0 &&
       (k % 16 === 0 || spec.b.stride === B.n);
@@ -2297,7 +2500,8 @@ export class Rfd4pEngine {
     const vecC = !spec.pair &&
       C.n === 1 && n % 4 === 0 && C.m % 4 === 0 && C.off % 4 === 0 && C.s0 % 4 === 0 && C.s1 % 4 === 0 &&
       (!hasGate || ((spec.gate.off ?? 0) % 4 === 0 && (spec.gate.stride ?? n) % 4 === 0));
-    const vecEpilogue = submat && vecC;
+    const vecEpilogue = vecC;
+    const fullK = k % 16 === 0 && A.k === 1;
     const useGemv = this.hasF16 && half && !aF16 && !cF16 && !gF16 && !spec.pair && vecC &&
       (m === 1 || m === 2) && k % 128 === 0 && k <= 1024 &&
       A.k === 1 && A.off % 4 === 0 && A.s0 % 4 === 0 && A.s1 % 4 === 0 && A.m % 4 === 0 &&
@@ -2311,11 +2515,11 @@ export class Rfd4pEngine {
       return this.step(gemvKey, gemvSrc, gemvGroups, bufs, u,
         spec.label ?? `gemm ${m}x${n}x${k}${B0 * B1 > 1 ? `[${B0 * B1}]` : ''}`);
     }
-    const inLn = submat && vecIO && (vecEpilogue || Boolean(spec.pair)) && spec.inNorm === 'ln';
-    const key = `${small ? 'gemm-s' : 'gemm'}${submat ? `-sm${half ? '-h' : '-f'}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${vecIO ? '-v' : (vecB ? '-vb' : '')}${vecEpilogue ? '-ve' : ''}${inLn ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate && addOnly ? '-ga' : (hasGate && !gSigm ? '-gns' : '')}` : `${half ? '-h' : ''}${b16 ? '-b16' : ''}`}${spec.pair ? `-p-${spec.pair.key}` : ''}${hasGate ? `-g${gF16 ? '16' : ''}` : ''}`;
+    const inLn = (submat ? (vecIO && (vecEpilogue || Boolean(spec.pair))) : (fullK && vecEpilogue && !small)) && spec.inNorm === 'ln';
+    const key = `${small ? 'gemm-s' : 'gemm'}${submat ? `-sm${this.submat8 ? '8' : ''}${half ? '-h' : '-f'}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${vecIO ? '-v' : (vecB ? '-vb' : '')}${vecEpilogue ? '-ve' : ''}${inLn ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate && addOnly ? '-ga' : (hasGate && !gSigm ? '-gns' : '')}` : `${wordB ? '-h' : ''}${b16 ? '-b16' : ''}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${fullK ? '-fk' : ''}${vecEpilogue ? '-ve' : ''}${inLn ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate && addOnly ? '-ga' : (hasGate && !gSigm ? '-gns' : '')}`}${spec.pair ? `-p-${spec.pair.key}` : ''}${hasGate ? `-g${gF16 ? '16' : ''}` : ''}`;
     const src = submat
-      ? gemmSubmatSource(spec.pair ?? null, hasGate, half, small ? 32 : 64, vecIO, aF16, gF16, cF16, addOnly, gSigm, hasAlpha, hasBias, actType, acc === 1, vecIO || vecB, vecEpilogue, inLn)
-      : (small ? gemmSmallSource(half, b16, hasGate) : gemmSource(half, b16, spec.pair ?? null, hasGate));
+      ? gemmSubmatSource(spec.pair ?? null, hasGate, half, small ? 32 : 64, vecIO, aF16, gF16, cF16, addOnly, gSigm, hasAlpha, hasBias, actType, acc === 1, vecIO || vecB, vecEpilogue, inLn, this.submat8)
+      : (small ? gemmSmallSource(wordB, b16, hasGate, aF16, cF16, gF16) : gemmSource(wordB, b16, spec.pair ?? null, hasGate, aF16, cF16, gF16, fullK, vecEpilogue, addOnly, gSigm, hasAlpha, hasBias, actType, acc === 1, inLn));
     const bufs = [spec.a, spec.b, spec.c, spec.bias ?? this.dummy, ...(hasGate ? [spec.gate.sc] : []), ...(spec.pair?.buffers ?? [])];
     return this.step(key, src, groups, bufs, u,
       spec.label ?? `gemm ${m}x${n}x${k}${B0 * B1 > 1 ? `[${B0 * B1}]` : ''}`);
@@ -2351,6 +2555,7 @@ export class Rfd4pEngine {
         const hasW1 = Boolean(nextNorm.w);
         const hasLinB = Boolean(bias);
         const separateGb = Boolean(hasAdaln && nextNorm.adaln.gb !== gate.sc);
+        // Consumers (TokenBlocks.swiglu) only read an f16 `nextNorm.y` on the subgroup-matrix path.
         const outF16 = Boolean(hasAdaln && w.half && this.hasSubgroupMatrix && this.hasF16);
         const u = new Uint32Array(8);
         const f = new Float32Array(u.buffer);
@@ -2480,7 +2685,7 @@ export class Rfd4pEngine {
     if (half && this.hasSubgroupMatrix) {
       const f16Vg = Boolean(vgF16 && this.hasF16);
       const u = new Uint32Array([n, nn, 0, 0]);
-      return this.step(`att-pv-sm${f16Vg ? '-h' : ''}`, attPvSource(f16Vg), Math.ceil(n / 32) * 12, [logits, qkv, att], u, 'pv');
+      return this.step(`att-pv-sm${this.submat8 ? '8' : ''}${f16Vg ? '-h' : ''}`, attPvSource(f16Vg, this.submat8), Math.ceil(n / 32) * 12, [logits, qkv, att], u, 'pv');
     }
     return this.gemm({
       m: n, n: 64, k: n, a: logits, b: qkv, c: att, batches: [12, 1],
@@ -2495,7 +2700,7 @@ export class Rfd4pEngine {
    */
   swigluLinear({ x, w, y, rows, inC, inner, aF16 = false, cF16 = false, label }) {
     const submat = this.hasSubgroupMatrix && w.half === true;
-    const f16Out = submat && cF16;
+    const f16Out = this.hasF16 && w.half === true && cF16;
     if (this.hasF16 && w.half === true && !aF16 && !f16Out && (rows === 1 || rows === 2) && inner % 4 === 0 && inC % 128 === 0 && inC <= 1024) {
       const u = new Uint32Array([rows, inner, inC, 0]);
       const key = `swiglu-gemv-m${rows}-n${inner}-k${inC}`;
@@ -2507,13 +2712,27 @@ export class Rfd4pEngine {
       A: { off: 0, m: inC, k: 1 }, B: { off: 0, n: inC, k: 1 }, C: { off: 0, m: inner, n: 1 },
       pair: {
         key: `swiglu${inner}${f16Out ? '-h' : ''}`,
-        cVec4: submat,
+        cVec4: true,
+        cF16: f16Out,
         bRow: inner === 3072 ? undefined : `return ((v / 64u) % 2u) * ${inner}u + (v / 128u) * 64u + (v % 64u);`,
         body: submat ? '' : `fn pairOut(m: u32, n0: u32, tn0: u32, r0: vec4<f32>, r1: vec4<f32>) {
   let y = r1 / (vec4<f32>(1.0) + exp(-r1)) * r0;
-  let base = m * ${inner}u + (n0 / 2u) + tn0;
-  c[base] = y.x; c[base + 1u] = y.y; c[base + 2u] = y.z; c[base + 3u] = y.w;
+  let base4 = m * ${inner / 4}u + (n0 / 8u) + (tn0 / 4u);
+  c[base4] = ${f16Out ? 'vec2<u32>(bitcast<u32>(vec2<f16>(y.xy)), bitcast<u32>(vec2<f16>(y.zw)))' : 'y'};
 }`,
+        singleBlockBody: (bIdx) => `{
+      let rSw = li / 16u;
+      let cSw4 = li % 16u;
+      let cSw = cSw4 * 4u;
+      let m = m0 + ${bIdx * 16}u + rSw;
+      if (m < p.m) {
+        let sb = rSw * 136u + cSw;
+        let v0 = vec4<f32>(f32(scratch[sb]), f32(scratch[sb + 1u]), f32(scratch[sb + 2u]), f32(scratch[sb + 3u]));
+        let v1 = vec4<f32>(f32(scratch[sb + 64u]), f32(scratch[sb + 65u]), f32(scratch[sb + 66u]), f32(scratch[sb + 67u]));
+        let y = (v1 / (vec4<f32>(1.0) + exp(-v1))) * v0;
+        c[m * ${inner / 4}u + (n0 / 8u) + cSw4] = ${f16Out ? 'vec2<u32>(bitcast<u32>(vec2<f16>(y.xy)), bitcast<u32>(vec2<f16>(y.zw)))' : 'y'};
+      }
+    }`,
         blockBody: (pIdx) => `{
       let rSw = li / 16u;
       let cSw4 = li % 16u;
@@ -2522,8 +2741,8 @@ export class Rfd4pEngine {
         let m = m0 + ${pIdx * 32 + s * 16}u + rSw;
         if (m < p.m) {
           let sb = (rSw + ${s * 16}u) * 136u + cSw;
-          let v0 = vec4<f32>(scratch[sb], scratch[sb + 1u], scratch[sb + 2u], scratch[sb + 3u]);
-          let v1 = vec4<f32>(scratch[sb + 64u], scratch[sb + 65u], scratch[sb + 66u], scratch[sb + 67u]);
+          let v0 = vec4<f32>(f32(scratch[sb]), f32(scratch[sb + 1u]), f32(scratch[sb + 2u]), f32(scratch[sb + 3u]));
+          let v1 = vec4<f32>(f32(scratch[sb + 64u]), f32(scratch[sb + 65u]), f32(scratch[sb + 66u]), f32(scratch[sb + 67u]));
           let y = (v1 / (vec4<f32>(1.0) + exp(-v1))) * v0;
           c[m * ${inner / 4}u + (n0 / 8u) + cSw4] = ${f16Out ? 'vec2<u32>(bitcast<u32>(vec2<f16>(y.xy)), bitcast<u32>(vec2<f16>(y.zw)))' : 'y'};
         }
@@ -2541,11 +2760,14 @@ export class Rfd4pEngine {
    */
   triProjG({ x, w, wSum = null, proj, aT, bT, gz, rows, incoming = false, n = 0, nPad = n, aF16 = false, outF16 = false, label }) {
     if (aT && bT) {
-      const f16Out = outF16 && this.hasSubgroupMatrix && w.half === true;
+      const f16Out = outF16 && this.hasF16 && w.half === true;
       const submat = this.hasSubgroupMatrix && w.half === true;
+      const useTbOut = !submat && w.half === true && this.hasF16;
       const inLn = Boolean(wSum && submat);
       const t = f16Out ? 'f16' : 'f32';
-      const gzT = submat ? (f16Out ? 'vec2<u32>' : 'vec4<f32>') : t;
+      const shArr = useTbOut ? 'tb' : 'shOut';
+      const shType = useTbOut ? 'f16' : t;
+      const gzT = f16Out ? 'vec2<u32>' : 'vec4<f32>';
       return this.gemm({
         m: rows, n: 1408, k: 384, a: x, b: w, c: aT, bias: wSum ?? undefined, inNorm: inLn ? 'ln' : '', noSmall: true, aF16, pad0: incoming ? n : 0,
         A: { off: 0, m: 384, k: 1 }, B: { off: 0, n: 384, k: 1 }, C: { off: 0, s0: n * nPad, m: nPad, n },
@@ -2555,62 +2777,97 @@ export class Rfd4pEngine {
           cF16: f16Out,
           buffers: [gz, bT],
           decls: `@group(0) @binding(5) var<storage, read_write> gz: array<${gzT}>;
-@group(0) @binding(6) var<storage, read_write> bT: array<${t}>;`,
-          body: submat ? '' : `fn pairOut(m: u32, n0: u32, tn0: u32, r0: vec4<f32>, r1: vec4<f32>) {
-  if (n0 < 1024u) {
-    let y = r0 / (vec4<f32>(1.0) + exp(-r1));
-    let mPad = select(m, (m / p.sCn) * p.sCm + (m % p.sCn), p.sCm != p.sCn);
-    if (n0 < 512u) {
-      let cBase = (n0 / 2u) + tn0;
-      c[cBase * p.sC0 + mPad] = ${t}(y.x);
-      c[(cBase + 1u) * p.sC0 + mPad] = ${t}(y.y);
-      c[(cBase + 2u) * p.sC0 + mPad] = ${t}(y.z);
-      c[(cBase + 3u) * p.sC0 + mPad] = ${t}(y.w);
-    } else {
-      let cBase = ((n0 - 512u) / 2u) + tn0;
-      bT[cBase * p.sC0 + mPad] = ${t}(y.x);
-      bT[(cBase + 1u) * p.sC0 + mPad] = ${t}(y.y);
-      bT[(cBase + 2u) * p.sC0 + mPad] = ${t}(y.z);
-      bT[(cBase + 3u) * p.sC0 + mPad] = ${t}(y.w);
-    }
-  } else {
-    let g0 = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-r0));
-    let g1 = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-r1));
-    let mOut = select(m, (m % p.pad0) * p.pad0 + (m / p.pad0), p.pad0 != 0u);
-    let base0 = mOut * 384u + (n0 - 1024u) + tn0;
-    let base1 = base0 + 64u;
-    gz[base0] = ${t}(g0.x); gz[base0 + 1u] = ${t}(g0.y); gz[base0 + 2u] = ${t}(g0.z); gz[base0 + 3u] = ${t}(g0.w);
-    gz[base1] = ${t}(g1.x); gz[base1 + 1u] = ${t}(g1.y); gz[base1 + 2u] = ${t}(g1.z); gz[base1 + 3u] = ${t}(g1.w);
+@group(0) @binding(6) var<storage, read_write> bT: array<${t}>;${submat || useTbOut ? '' : `\nvar<workgroup> shOut: array<vec4<${t}>, 512>;`}`,
+          body: '',
+          epilogueBody: submat ? undefined : `let y_0 = (acc_0_0 * p.alpha) / (vec4<f32>(1.0) + exp(-(acc_0_1 * p.alpha)));
+  let y_1 = (acc_1_0 * p.alpha) / (vec4<f32>(1.0) + exp(-(acc_1_1 * p.alpha)));
+  let y_2 = (acc_2_0 * p.alpha) / (vec4<f32>(1.0) + exp(-(acc_2_1 * p.alpha)));
+  let y_3 = (acc_3_0 * p.alpha) / (vec4<f32>(1.0) + exp(-(acc_3_1 * p.alpha)));
+  if (tx < 8u) {
+    let c0 = tx * 4u;
+    ${shArr}[c0 * 16u + tm4] = vec4<${shType}>(${shType}(y_0.x), ${shType}(y_1.x), ${shType}(y_2.x), ${shType}(y_3.x));
+    ${shArr}[(c0 + 1u) * 16u + tm4] = vec4<${shType}>(${shType}(y_0.y), ${shType}(y_1.y), ${shType}(y_2.y), ${shType}(y_3.y));
+    ${shArr}[(c0 + 2u) * 16u + tm4] = vec4<${shType}>(${shType}(y_0.z), ${shType}(y_1.z), ${shType}(y_2.z), ${shType}(y_3.z));
+    ${shArr}[(c0 + 3u) * 16u + tm4] = vec4<${shType}>(${shType}(y_0.w), ${shType}(y_1.w), ${shType}(y_2.w), ${shType}(y_3.w));
   }
-}`,
+  workgroupBarrier();
+  let mLocal = li % 64u;
+  let cSub = li / 64u;
+  let m = m0 + mLocal;
+  let mValid = inBatch && (m < p.m) && (n0 < 1024u);
+  let mPad = select(m, (m / p.sCn) * p.sCm + (m % p.sCn), p.sCm != p.sCn);
+  let r4 = mLocal / 4u;
+  let comp = mLocal % 4u;
+  if (mValid) {
+    if (n0 < 512u) {
+      let cBase0 = (n0 / 2u) + cSub;
+      ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => `c[(cBase0 + ${k * 4}u) * p.sC0 + mPad] = ${t}(${shArr}[(cSub + ${k * 4}u) * 16u + r4][comp]);`).join('\n      ')}
+    } else {
+      let cBase0 = ((n0 - 512u) / 2u) + cSub;
+      ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => `bT[(cBase0 + ${k * 4}u) * p.sC0 + mPad] = ${t}(${shArr}[(cSub + ${k * 4}u) * 16u + r4][comp]);`).join('\n      ')}
+    }
+  }
+  workgroupBarrier();
+  if (tx >= 8u) {
+    let c0 = (tx - 8u) * 4u;
+    ${shArr}[c0 * 16u + tm4] = vec4<${shType}>(${shType}(y_0.x), ${shType}(y_1.x), ${shType}(y_2.x), ${shType}(y_3.x));
+    ${shArr}[(c0 + 1u) * 16u + tm4] = vec4<${shType}>(${shType}(y_0.y), ${shType}(y_1.y), ${shType}(y_2.y), ${shType}(y_3.y));
+    ${shArr}[(c0 + 2u) * 16u + tm4] = vec4<${shType}>(${shType}(y_0.z), ${shType}(y_1.z), ${shType}(y_2.z), ${shType}(y_3.z));
+    ${shArr}[(c0 + 3u) * 16u + tm4] = vec4<${shType}>(${shType}(y_0.w), ${shType}(y_1.w), ${shType}(y_2.w), ${shType}(y_3.w));
+  }
+  workgroupBarrier();
+  if (mValid) {
+    if (n0 < 512u) {
+      let cBase0 = (n0 / 2u) + 32u + cSub;
+      ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => `c[(cBase0 + ${k * 4}u) * p.sC0 + mPad] = ${t}(${shArr}[(cSub + ${k * 4}u) * 16u + r4][comp]);`).join('\n      ')}
+    } else {
+      let cBase0 = ((n0 - 512u) / 2u) + 32u + cSub;
+      ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => `bT[(cBase0 + ${k * 4}u) * p.sC0 + mPad] = ${t}(${shArr}[(cSub + ${k * 4}u) * 16u + r4][comp]);`).join('\n      ')}
+    }
+  }
+  if (inBatch && n0 >= 1024u) {
+    let nColOff4 = (n0 - 1024u) / 4u + tx;
+    ${[0, 1, 2, 3].map((i) => `{
+      let mRow = m0 + tm + ${i}u;
+      if (mRow < p.m) {
+        let g0 = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-(acc_${i}_0 * p.alpha)));
+        let g1 = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-(acc_${i}_1 * p.alpha)));
+        let mOut = select(mRow, (mRow % p.pad0) * p.pad0 + (mRow / p.pad0), p.pad0 != 0u);
+        let base4 = mOut * 96u + nColOff4;
+        gz[base4] = ${f16Out ? 'vec2<u32>(bitcast<u32>(vec2<f16>(g0.xy)), bitcast<u32>(vec2<f16>(g0.zw)))' : 'g0'};
+        gz[base4 + 16u] = ${f16Out ? 'vec2<u32>(bitcast<u32>(vec2<f16>(g1.xy)), bitcast<u32>(vec2<f16>(g1.zw)))' : 'g1'};
+      }
+    }`).join('\n    ')}
+  }`,
           blockBody: (pIdx) => `if (n0 < 1024u) {
       let rr = li % 32u;
       let cSub = li / 32u;
       let rLocal = ${pIdx * 32}u + rr;
       let m = m0 + rLocal;
       if (m < p.m) {
-        ${inLn ? `let mean = scratch[rLocal * 34u + 32u];
-        let inv = scratch[rLocal * 34u + 33u];` : ''}
+        ${inLn ? (this.submat8 ? `let mean = lnStat[rLocal * 2u];
+        let inv = lnStat[rLocal * 2u + 1u];` : `let mean = f32(scratch[rLocal * 34u + 32u]);
+        let inv = f32(scratch[rLocal * 34u + 33u]);`) : ''}
         let mPad = select(m, (m / p.sCn) * p.sCm + (m % p.sCn), p.sCm != p.sCn);
         let s8 = 8u * p.sC0;
         if (n0 < 512u) {
           let c0 = ((n0 / 2u) + cSub) * p.sC0 + mPad;
           ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => inLn
             ? `{
-            let vp = (scratch[(cSub + ${k * 8}u) * 34u + rr] - mean * bias[n0 + cSub + ${k * 8}u]) * inv;
-            let vg = (scratch[(cSub + ${k * 8 + 64}u) * 34u + rr] - mean * bias[n0 + cSub + ${k * 8 + 64}u]) * inv;
+            let vp = (f32(scratch[(cSub + ${k * 8}u) * 34u + rr]) - mean * bias[n0 + cSub + ${k * 8}u]) * inv;
+            let vg = (f32(scratch[(cSub + ${k * 8 + 64}u) * 34u + rr]) - mean * bias[n0 + cSub + ${k * 8 + 64}u]) * inv;
             c[c0 + ${k}u * s8] = ${t}(vp / (1.0 + exp(-vg)));
           }`
-            : `c[c0 + ${k}u * s8] = ${t}(scratch[(cSub + ${k * 8}u) * 34u + rr] / (1.0 + exp(-scratch[(cSub + ${k * 8 + 64}u) * 34u + rr])));`).join('\n          ')}
+            : `c[c0 + ${k}u * s8] = ${t}(f32(scratch[(cSub + ${k * 8}u) * 34u + rr]) / (1.0 + exp(-f32(scratch[(cSub + ${k * 8 + 64}u) * 34u + rr]))));`).join('\n          ')}
         } else {
           let c0 = (((n0 - 512u) / 2u) + cSub) * p.sC0 + mPad;
           ${[0, 1, 2, 3, 4, 5, 6, 7].map((k) => inLn
             ? `{
-            let vp = (scratch[(cSub + ${k * 8}u) * 34u + rr] - mean * bias[n0 + cSub + ${k * 8}u]) * inv;
-            let vg = (scratch[(cSub + ${k * 8 + 64}u) * 34u + rr] - mean * bias[n0 + cSub + ${k * 8 + 64}u]) * inv;
+            let vp = (f32(scratch[(cSub + ${k * 8}u) * 34u + rr]) - mean * bias[n0 + cSub + ${k * 8}u]) * inv;
+            let vg = (f32(scratch[(cSub + ${k * 8 + 64}u) * 34u + rr]) - mean * bias[n0 + cSub + ${k * 8 + 64}u]) * inv;
             bT[c0 + ${k}u * s8] = ${t}(vp / (1.0 + exp(-vg)));
           }`
-            : `bT[c0 + ${k}u * s8] = ${t}(scratch[(cSub + ${k * 8}u) * 34u + rr] / (1.0 + exp(-scratch[(cSub + ${k * 8 + 64}u) * 34u + rr])));`).join('\n          ')}
+            : `bT[c0 + ${k}u * s8] = ${t}(f32(scratch[(cSub + ${k * 8}u) * 34u + rr]) / (1.0 + exp(-f32(scratch[(cSub + ${k * 8 + 64}u) * 34u + rr]))));`).join('\n          ')}
         }
       }
     } else {
@@ -2624,9 +2881,9 @@ export class Rfd4pEngine {
         let m = m0 + rLocal;
         if (m < p.m) {
           let sb = (rE + ${s * 8}u) * 136u + c4 * 4u;
-          let raw4 = vec4<f32>(scratch[sb], scratch[sb + 1u], scratch[sb + 2u], scratch[sb + 3u]);
-          ${inLn ? `let scIdx = (rLocal / 4u) * 136u + 128u + (rLocal % 4u) * 2u;
-          let vg4 = (raw4 - scratch[scIdx] * wSum4) * scratch[scIdx + 1u];` : 'let vg4 = raw4;'}
+          let raw4 = vec4<f32>(f32(scratch[sb]), f32(scratch[sb + 1u]), f32(scratch[sb + 2u]), f32(scratch[sb + 3u]));
+          ${inLn ? (this.submat8 ? `let vg4 = (raw4 - lnStat[rLocal * 2u] * wSum4) * lnStat[rLocal * 2u + 1u];` : `let scIdx = (rLocal / 4u) * 136u + 128u + (rLocal % 4u) * 2u;
+          let vg4 = (raw4 - f32(scratch[scIdx]) * wSum4) * f32(scratch[scIdx + 1u]);`) : 'let vg4 = raw4;'}
           let g = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-vg4));
           let mOut = select(m, (m % p.pad0) * p.pad0 + (m / p.pad0), p.pad0 != 0u);
           let at4 = mOut * 96u + nColOff4;
@@ -2722,9 +2979,9 @@ fn pairOut(m: u32, n0: u32, tn0: u32, r0: vec4<f32>, r1: vec4<f32>) {
     u[4] = zInitAda?.n ?? 0;
     u[5] = zInitAda?.seqStride ?? 0;
     return this.step(
-      `pair-to-bias${useSubmat ? '-sm' : ''}${half ? '-h' : ''}${f16Z ? '-z16' : ''}${bF16 ? '-b16' : ''}${dual ? '-d' : ''}${hasZInitAda ? '-za' : ''}${hasOutZc ? `-zc${zcF16 ? '16' : ''}` : ''}`,
+      `pair-to-bias${useSubmat ? `-sm${this.submat8 ? '8' : ''}` : ''}${half ? '-h' : ''}${f16Z ? '-z16' : ''}${bF16 ? '-b16' : ''}${dual ? '-d' : ''}${hasZInitAda ? '-za' : ''}${hasOutZc ? `-zc${zcF16 ? '16' : ''}` : ''}`,
       useSubmat
-        ? pairToBiasSubmatSource(dual, f16Z, bF16)
+        ? pairToBiasSubmatSource(dual, f16Z, bF16, this.submat8)
         : pairToBiasSource(half, dual, hasZInitAda, hasOutZc, zcF16, f16Z, bF16),
       groups,
       [

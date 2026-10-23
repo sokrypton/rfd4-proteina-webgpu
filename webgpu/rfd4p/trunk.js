@@ -267,7 +267,7 @@ export class Rfd4pTrunkGpu {
     const R = Math.max(1, Math.min(nn, Math.floor(this.chunkFloats / (2 * T))));
     this.R = R;
     const b = (label, floats) => e.buffer(label, floats);
-    const triF16 = this.half && e.hasSubgroupMatrix && R === nn;
+    const triF16 = this.half && e.hasF16 && R === nn;
     this.triF16 = triF16;
     const B = (this.buf = {
       seqF: b('seqF', n * seqStride), condF: b('condF', batchCondRows * condStride),
@@ -451,7 +451,7 @@ export class Rfd4pTrunkGpu {
     }
     const dual = Boolean(L.toBiasDual);
     const outZc = i === this.nlayers - 1 && opts.hasNextCycle && this.chunks.length === 1
-      ? { wZc: this.w.zCycNormScaled, zc: B.zc, f16: this.half && e.hasSubgroupMatrix }
+      ? { wZc: this.w.zCycNormScaled, zc: B.zc, f16: this.triF16 }
       : null;
     const biasSteps = [];
     for (const [r0, rows] of this.chunks) {
@@ -479,7 +479,7 @@ export class Rfd4pTrunkGpu {
     const nnPad = n * nPad;
     const B = this.buf;
     if (this.chunks.length === 1) {
-      const triF16 = this.half && e.hasSubgroupMatrix;
+      const triF16 = this.triF16;
       const stride = triF16 ? nPad : n;
       const batchStride = triF16 ? nnPad : nn;
       const xBatchStride = Math.ceil(nn / 4) * 4;
@@ -537,7 +537,7 @@ export class Rfd4pTrunkGpu {
       ...(await this.triangle(Q.out, false, true, useZInit ? B.zInit : null, splitPp)),
       ...(await this.triangle(Q.in, true, false)),
     ];
-    const triF16 = this.half && e.hasSubgroupMatrix && this.chunks.length === 1;
+    const triF16 = this.triF16;
     for (const [r0, rows] of this.chunks) {
       if (triF16 && Q.l1Fused) {
         steps.push(
@@ -568,7 +568,7 @@ export class Rfd4pTrunkGpu {
       await e.linear({ x: B.sT, w: w.sCycProj, y: B.s, rows: n, inC: D, outC: D,
         gate: { sc: B.sInit, off: 0, stride: D, addOnly: true }, nextNorm }),
     ];
-    const triF16 = this.half && e.hasSubgroupMatrix && this.chunks.length === 1;
+    const triF16 = this.triF16;
     for (const [r0, rows] of this.chunks) {
       if (this.chunks.length > 1) {
         steps.push(

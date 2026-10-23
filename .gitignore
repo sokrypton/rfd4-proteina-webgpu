@@ -6,4 +6,4 @@ notes.txt
 /runs/
 /oracle-dumps/
 /weights/*.safetensors
-/weights/int8/*.bin
+# INT8 browser shards are committed: GitHub Pages serves them to the studio.

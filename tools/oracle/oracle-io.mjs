@@ -3,10 +3,10 @@
  * released checkpoint, and for comparing tensors.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { readdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const DTYPES = {
   F32: Float32Array,
@@ -44,8 +44,13 @@ export function readSafetensors(path) {
   return out;
 }
 
-/** Path of the released `model.safetensors` in the Hugging Face cache. */
+/** Path of the released `model.safetensors` in `weights/` or the Hugging Face cache. */
 export function releasedWeightsPath() {
+  const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+  const localWeights = join(rootDir, 'weights/model.safetensors');
+  if (existsSync(localWeights)) {
+    return { weights: localWeights, config: join(rootDir, 'weights/config.json') };
+  }
   const snaps = join(homedir(), '.cache/huggingface/hub/models--nvidia--RFD4-Proteina/snapshots');
   for (const rev of readdirSync(snaps)) {
     const p = join(snaps, rev, 'model.safetensors');

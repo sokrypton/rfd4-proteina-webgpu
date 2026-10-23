@@ -1015,7 +1015,10 @@ export function parseCifToAtomArray(cifInput, opts = {}) {
     atoms.is_aromatic[k] = ccaAromMap.has(ccaKey)
       ? ccaAromMap.get(ccaKey)
       : Boolean(STD_RESIDUE_AROMATIC[atoms.res_name[k]]?.has(atoms.atom_name[k]));
-    atoms.is_leaving_atom[k] = ccaLeavingMap.get(ccaKey) || false;
+    atoms.is_leaving_atom[k] = ccaLeavingMap.has(ccaKey)
+      ? ccaLeavingMap.get(ccaKey)
+      : (AA_RESIDUES.has(atoms.res_name[k]) && atoms.atom_name[k] === 'OXT') ||
+        ((RNA_RESIDUES.has(atoms.res_name[k]) || DNA_RESIDUES.has(atoms.res_name[k])) && atoms.atom_name[k] === 'OP3');
 
     const elUpper = atoms.element[k].toUpperCase();
     atoms.atomic_number[k] = ELEMENT_TO_ATOMIC_NUMBER[elUpper] ?? 0;
@@ -1094,6 +1097,9 @@ export function parseCifToAtomArray(cifInput, opts = {}) {
     }
     if (!spec && colName.startsWith('mask_sequence-probability-')) {
       spec = { type: 'bool', default: false };
+    }
+    if (!spec && colName === 'condition_cath-label_1_residue' && !block['condition_cath-label_1_residue']) {
+      spec = { type: 'str', default: 'x.x.x.x' };
     }
     if (!spec) continue;
 

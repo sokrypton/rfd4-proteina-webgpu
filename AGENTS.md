@@ -17,7 +17,7 @@ Operational guide for coding agents working in `rfd4p` (WebGPU implementation of
      - `safetensors.js` & `presets.js`: Zero-copy `parseSafetensors`, streaming + Cache API `fetchSafetensors`, and 10 interactive benchmark presets (`RFD4P_PRESETS`).
    - `cpu/rfd4p/`: Deterministic float32 CPU reference implementations (`trunk.js`, `decoder.js`, `encoder.js`, `reference.js`).
    - `webgpu/rfd4p/`: Recorded-command-list WebGPU engine (`engine.js` with `64x128` and `32x64` bank-conflict-free `vec4` GEMMs, `16x16` `triGate`, 64M-float triangle chunking, and FP16 weight packing), shared token blocks (`blocks.js`), `Rfd4pTrunkGpu` (`trunk.js`), `Rfd4pDecoderGpu` (`decoder.js`), `Rfd4pEncoderGpu` (`encoder.js`), and `Rfd4pGeneratorGpu` (`generate.js`).
-   - `web/`: Interactive browser studio (`index.html`, `web/app.js`, `web/examples/*.cif.zst`) with `py2Dmol` 3D molecular viewer, live trajectory playback, conditioning drawer, and PDB/mmCIF export.
+   - `web/`: Interactive browser studio (`index.html`, `studio.html`, `web/app.js`, `web/studio-api.js`, `web/studio/`, `web/examples/*.cif.zst`) embedding the `nvidia/rfd4-proteina-zerogpu` / `AtomWorks Studio` interface (Mol* WebGL & Patinae WebGPU 3D viewers, sequence dock, condition popovers, live trajectory playback, and PDB/mmCIF/ZIP export) backed 100% client-side by WebGPU.
    - `tools/`: Headless Chrome WebGPU runner (`tools/gpu-chrome.mjs`), GPU differential test suites (`tools/gpu/check-{rfd4p,trunk,decoder,encoder,generate,webapp}.js`), and PyTorch oracle verifiers (`tools/oracle/check-{batch,features,sampler,cpu-trunk,decoder,encoder,output}.mjs`).
    - `test/`: Deterministic Node unit tests (`npm test`).
 

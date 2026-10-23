@@ -1,6 +1,8 @@
 /**
- * RFD4-Proteina interactive browser studio on py2Dmol's application shell
- * (matching ../localfold/web/app.js).
+ * RFD4-Proteina interactive browser host — exact match to `nvidia/rfd4-proteina-zerogpu`
+ * (`RFD4GenerationProvider` top controls + embedded `AtomWorks Studio` editor with
+ * Mol* WebGL, Patinae WebGPU, Sequence dock, Annotations popover, and trajectory playback)
+ * powered 100% client-side by `Rfd4pGeneratorGpu` on WebGPU.
  */
 
 import {
@@ -9,6 +11,7 @@ import {
   DEFAULT_LOCAL_CONFIG_URL,
   DEFAULT_LOCAL_SHARDED_DIR,
   DEFAULT_LOCAL_WEIGHTS_URL,
+  DEFAULT_SAMPLING,
   RFD4P_PRESETS,
   Rfd4pGeneratorGpu,
   UNIFIED_ATOM37_TOKENS,
@@ -19,25 +22,25 @@ import {
   fetchShardedWeights,
   generateRfd4pCpu,
   getRfd4pPresetById,
-  parseSafetensors,
-  recycleDepths,
   requestWebGpuDevice,
+  processSampleToAtoms,
+  superimposeCoords3D,
+  toCifString,
+  toPdbString,
 } from '../webgpu/index.js';
+import {
+  buildLiveFrameCifFromCa,
+  caSecondaryStructureCif,
+  buildTrajectoryCifFromFrames,
+  getSharedStudioStore,
+  installStudioApiInterceptor,
+} from './studio-api.js';
 
-function maxAbsDiff(a, b) {
-  let maxErr = 0;
-  const len = Math.min(a.length, b.length);
-  for (let i = 0; i < len; i += 1) {
-    if (!Number.isFinite(a[i]) && !Number.isFinite(b[i])) continue;
-    const err = Math.abs(a[i] - b[i]);
-    if (err > maxErr) maxErr = err;
-  }
-  return maxErr;
-}
+installStudioApiInterceptor();
 
 /**
- * Extract per-token viewer metadata (`chainId`, `resId`, `resName`, `atomName`, `element`, `isAtomized`)
- * from `batch` and `batch.__atoms`.
+ * Extract per-token metadata (`chainId`, `resId`, `resName`, `atomName`, `element`, `isAtomized`)
+ * from `batch` and `batch.__atoms` for building multi-model Cα trajectory CIFs.
  */
 function extractTokenMetadata(batch) {
   const pad = batch.padding_mask.data;
@@ -77,139 +80,300 @@ function extractTokenMetadata(batch) {
   return tokens;
 }
 
-/**
- * Format an intermediate CA trajectory frame (`caCoordsNm` in nanometers) into a 4-atom backbone PDB
- * so `py2Dmol` renders smooth cartoon ribbons and scrubbing across flow-matching steps.
- */
-function formatCaFrameToPdb(caCoordsNm, tokens, bFactors, finalResidueType = null) {
-  const n = tokens.length;
-  const lines = [];
-  let serial = 1;
+function normalizeTaskMode(task) {
+  if (task === 'partial_diffusion' || task === 'inverse_folding') return task;
+  return 'unconditional';
+}
 
-  const fmtAtomLine = (recType, atomSerial, atomName, resName, chainId, resSeq, x, y, z, bFactor, element) => {
-    const nameField = atomName.length >= 4 ? atomName.slice(0, 4) : ` ${atomName.padEnd(3, ' ')}`;
-    const resField = (resName || 'ALA').slice(0, 3).padStart(3, ' ');
-    const chainField = (chainId || 'A').slice(0, 1);
-    const seqField = String(Math.max(-999, Math.min(9999, resSeq))).padStart(4, ' ');
-    const xField = (Number.isFinite(x) ? x : 0).toFixed(3).padStart(8, ' ');
-    const yField = (Number.isFinite(y) ? y : 0).toFixed(3).padStart(8, ' ');
-    const zField = (Number.isFinite(z) ? z : 0).toFixed(3).padStart(8, ' ');
-    const occField = '  1.00';
-    const bField = (Number.isFinite(bFactor) ? bFactor : 80.0).toFixed(2).padStart(6, ' ');
-    const elField = (element || 'C').slice(0, 2).padStart(2, ' ');
-    return (
-      `${recType.padEnd(6, ' ')}${String(atomSerial).padStart(5, ' ')} ${nameField} ${resField} ${chainField}${seqField}    ` +
-      `${xField}${yField}${zField}${occField}${bField}          ${elField}  `
-    );
-  };
+function extractFixedTokenAnchorsNm(batch, n) {
+  const atoms = batch.__atoms ?? null;
+  const crdArr = atoms?.condition_coordinate_1_atom;
+  const hasIdxArr = atoms?.condition_index_1_residue;
+  if (!atoms?.token_id || !Array.isArray(crdArr)) return null;
 
-  for (let i = 0; i < n; i += 1) {
-    const tok = tokens[i];
-    const cx = caCoordsNm[i * 3 + 0] * 10.0;
-    const cy = caCoordsNm[i * 3 + 1] * 10.0;
-    const cz = caCoordsNm[i * 3 + 2] * 10.0;
-    const bf = bFactors ? bFactors[i] : 80.0;
-    const rt = finalResidueType ? finalResidueType[i] : -1;
-    const resName =
-      rt >= 0 && UNIFIED_ATOM37_TOKENS[rt] && UNIFIED_ATOM37_TOKENS[rt] !== '<M>' && UNIFIED_ATOM37_TOKENS[rt] !== '<A>'
-        ? UNIFIED_ATOM37_TOKENS[rt]
-        : tok.resName;
-
-    if (tok.isAtomized) {
-      lines.push(fmtAtomLine('HETATM', serial++, tok.atomName, tok.resName, tok.chainId, tok.resId, cx, cy, cz, bf, tok.element));
-    } else {
-      const prevIdx = i > 0 ? i - 1 : i;
-      const nextIdx = i < n - 1 ? i + 1 : i;
-      let tx = (caCoordsNm[nextIdx * 3 + 0] - caCoordsNm[prevIdx * 3 + 0]) * 10.0;
-      let ty = (caCoordsNm[nextIdx * 3 + 1] - caCoordsNm[prevIdx * 3 + 1]) * 10.0;
-      let tz = (caCoordsNm[nextIdx * 3 + 2] - caCoordsNm[prevIdx * 3 + 2]) * 10.0;
-      const tLen = Math.hypot(tx, ty, tz) || 1.0;
-      tx /= tLen;
-      ty /= tLen;
-      tz /= tLen;
-
-      lines.push(fmtAtomLine('ATOM', serial++, 'N', resName, tok.chainId, tok.resId, cx - tx * 1.45, cy - ty * 1.45, cz - tz * 1.45, bf, 'N'));
-      lines.push(fmtAtomLine('ATOM', serial++, 'CA', resName, tok.chainId, tok.resId, cx, cy, cz, bf, 'C'));
-      lines.push(fmtAtomLine('ATOM', serial++, 'C', resName, tok.chainId, tok.resId, cx + tx * 1.52, cy + ty * 1.52, cz + tz * 1.52, bf, 'C'));
-      lines.push(fmtAtomLine('ATOM', serial++, 'O', resName, tok.chainId, tok.resId, cx + tx * 1.52 + 0.85, cy + ty * 1.52 + 0.88, cz + tz * 1.52, bf, 'O'));
+  const anchorByToken = new Map();
+  for (let i = 0; i < atoms.token_id.length; i += 1) {
+    if (hasIdxArr && !hasIdxArr[i]) continue;
+    const c = crdArr[i];
+    if (!Array.isArray(c) || !Number.isFinite(c[0]) || !Number.isFinite(c[1]) || !Number.isFinite(c[2])) continue;
+    const tid = atoms.token_id[i];
+    if (tid < 0 || tid >= n) continue;
+    const prev = anchorByToken.get(tid);
+    const aname = atoms.atom_name?.[i];
+    if (!prev || aname === 'CA' || (aname === "C4'" && prev.atomName !== 'CA')) {
+      anchorByToken.set(tid, { atomName: aname, xNm: c[0] / 10.0, yNm: c[1] / 10.0, zNm: c[2] / 10.0 });
     }
   }
-  lines.push('END');
-  return lines.join('\n');
+  if (anchorByToken.size < 3) return null;
+  const tokenIndices = new Int32Array(anchorByToken.size);
+  const fixedCoordsNm = new Float32Array(anchorByToken.size * 3);
+  let k = 0;
+  for (const [tid, info] of anchorByToken.entries()) {
+    tokenIndices[k] = tid;
+    fixedCoordsNm[k * 3 + 0] = info.xNm;
+    fixedCoordsNm[k * 3 + 1] = info.yNm;
+    fixedCoordsNm[k * 3 + 2] = info.zNm;
+    k += 1;
+  }
+  return { tokenIndices, fixedCoordsNm };
+}
+
+/** Max distance (nm) of any Cα from the centroid. */
+function caExtentRadiusNm(caNm) {
+  const n = caNm.length / 3;
+  let cx = 0, cy = 0, cz = 0;
+  for (let i = 0; i < n; i += 1) {
+    cx += caNm[i * 3]; cy += caNm[i * 3 + 1]; cz += caNm[i * 3 + 2];
+  }
+  cx /= n; cy /= n; cz /= n;
+  let r2 = 0;
+  for (let i = 0; i < n; i += 1) {
+    const dx = caNm[i * 3] - cx, dy = caNm[i * 3 + 1] - cy, dz = caNm[i * 3 + 2] - cz;
+    r2 = Math.max(r2, dx * dx + dy * dy + dz * dz);
+  }
+  return Math.sqrt(r2);
 }
 
 /**
- * Compute per-token B-factors reflecting RFD4-Proteina conditioning roles and a pairwise
- * contact map (`Uint8Array(n * n)`) for `py2Dmol`'s heatmap panel.
+ * Rigidly superimpose output `atoms` (Å) onto per-token reference Cα coordinates (nm), in place.
+ * Returns false (atoms untouched) when the atoms do not cover exactly `n` tokens.
  */
-function buildViewerDiagnostics(batch, tokens, caCoordsNm) {
-  const n = tokens.length;
-  const bFactors = new Float32Array(n);
-  const highlightPositions = [];
-  const chains = tokens.map((t) => t.chainId);
-
-  const condCrd = batch.condition_coordinate_1_atom?.data;
-  const condGrp = batch.condition_CoordinateGroup_1_atom?.data;
-  const condHot = batch.condition_hotspot_1_atom?.data;
-  const condMcoord = batch['condition_metal-coord_1_atom']?.data;
-  const condHb = batch.condition_hbond_1_atom?.data;
-
-  for (let i = 0; i < n; i += 1) {
-    let isHot = false;
-    let isFixed = false;
-    let isIntCrd = false;
-    let isMcoord = false;
-    for (let a = 0; a < 37; a += 1) {
-      const s = i * 37 + a;
-      if (condHot && condHot[s]) isHot = true;
-      if (condMcoord && condMcoord[s] > 0) isMcoord = true;
-      if (condHb && condHb[s] > 0) isHot = true;
-      if (condGrp && condGrp[s] >= 0) isIntCrd = true;
-      if (condCrd && Number.isFinite(condCrd[s * 3])) isFixed = true;
-    }
-    if (isHot || isMcoord) {
-      bFactors[i] = 96.0;
-      highlightPositions.push(i);
-    } else if (isIntCrd) {
-      bFactors[i] = 88.0;
-      highlightPositions.push(i);
-    } else if (isFixed) {
-      bFactors[i] = 92.0;
-    } else {
-      bFactors[i] = 78.0;
+function alignStructureAtomsToCa(atoms, refCaNm, n) {
+  const byToken = new Map();
+  for (const a of atoms) {
+    const tid = a.tokenId ?? 0;
+    const prev = byToken.get(tid);
+    if (!prev || a.atomName === 'CA' || (a.atomName === "C4'" && prev.atomName !== 'CA')) {
+      byToken.set(tid, a);
     }
   }
-
-  const contactData = new Uint8Array(n * n);
-  for (let i = 0; i < n; i += 1) {
-    const ix = caCoordsNm[i * 3 + 0];
-    const iy = caCoordsNm[i * 3 + 1];
-    const iz = caCoordsNm[i * 3 + 2];
-    for (let j = 0; j < n; j += 1) {
-      const jx = caCoordsNm[j * 3 + 0];
-      const jy = caCoordsNm[j * 3 + 1];
-      const jz = caCoordsNm[j * 3 + 2];
-      const dNm = Math.hypot(ix - jx, iy - jy, iz - jz);
-      const prob = Math.max(0.0, Math.min(1.0, 1.0 - (dNm - 0.4) / 1.8));
-      contactData[i * n + j] = Math.round(prob * 255);
-    }
+  if (byToken.size !== n || n < 3) return false;
+  const refCoordsA = Float32Array.from(refCaNm, (v) => v * 10.0);
+  const mobileA = new Float32Array(n * 3);
+  for (let k = 0; k < n; k += 1) {
+    const a = byToken.get(k);
+    mobileA[k * 3 + 0] = a?.x ?? 0;
+    mobileA[k * 3 + 1] = a?.y ?? 0;
+    mobileA[k * 3 + 2] = a?.z ?? 0;
   }
-
-  return {
-    bFactors,
-    highlightPositions,
-    chains,
-    contactMap: {
-      data: contactData,
-      n,
-      vmin: 0,
-      vmax: 1,
-      chains,
-    },
-  };
+  const { rotation: R, fixedCenter, mobileCenter } = superimposeCoords3D(refCoordsA, mobileA);
+  for (const a of atoms) {
+    const mx = a.x - mobileCenter[0];
+    const my = a.y - mobileCenter[1];
+    const mz = a.z - mobileCenter[2];
+    a.x = Math.fround(mx * R[0] + my * R[1] + mz * R[2] + fixedCenter[0]);
+    a.y = Math.fround(mx * R[3] + my * R[4] + mz * R[5] + fixedCenter[1]);
+    a.z = Math.fround(mx * R[6] + my * R[7] + mz * R[8] + fixedCenter[2]);
+  }
+  return true;
 }
 
-class Rfd4pLocalFoldApp {
+/**
+ * The reference motif, as atom records at their conditioning coordinates (Å, input frame), for drawing beside each
+ * live frame so a motif-scaffolding run keeps showing what it is scaffolding. A motif is a coordinate-conditioned
+ * token that is unindexed, or indexed inside a chain that is otherwise designed; a chain whose residues are all
+ * coordinate-conditioned is a target and is drawn by the frame itself. Placed on an unused chain id so it can never
+ * share a residue key with the scaffold.
+ */
+function buildMotifOverlayAtoms(inputAtoms) {
+  if (!inputAtoms?.token_id || !inputAtoms.condition_coordinate_1_atom) return [];
+  const crdOf = (i) => {
+    const c = inputAtoms.condition_coordinate_1_atom[i];
+    return Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1]) && Number.isFinite(c[2]) ? c : null;
+  };
+  const tokenChain = new Map();
+  const tokenHasCrd = new Map();
+  const tokenIndexed = new Map();
+  for (let i = 0; i < inputAtoms.token_id.length; i += 1) {
+    const tid = inputAtoms.token_id[i];
+    tokenChain.set(tid, inputAtoms.chain_id[i]);
+    if (crdOf(i)) tokenHasCrd.set(tid, true);
+    if (!tokenIndexed.has(tid)) {
+      tokenIndexed.set(tid, inputAtoms.condition_index_1_residue ? Boolean(inputAtoms.condition_index_1_residue[i]) : true);
+    }
+  }
+  const chainTokens = new Map();
+  for (const [tid, chain] of tokenChain) {
+    const c = chainTokens.get(chain) ?? { total: 0, fixed: 0 };
+    c.total += 1;
+    if (tokenHasCrd.get(tid)) c.fixed += 1;
+    chainTokens.set(chain, c);
+  }
+  const isMotifToken = (tid) => tokenHasCrd.get(tid) &&
+    (!tokenIndexed.get(tid) || chainTokens.get(tokenChain.get(tid)).fixed < chainTokens.get(tokenChain.get(tid)).total);
+  const used = new Set(tokenChain.values());
+  const chainId = [...'MNOPQRSTUVWXYZ'].find((c) => !used.has(c)) ?? 'MOTIF';
+  const out = [];
+  for (let i = 0; i < inputAtoms.token_id.length; i += 1) {
+    const crd = crdOf(i);
+    const name = inputAtoms.atom_name[i];
+    if (!crd || !isMotifToken(inputAtoms.token_id[i]) || !name || name === 'UNK') continue;
+    out.push({
+      groupPdb: 'HETATM', isHetero: true, atomName: name, resName: inputAtoms.res_name[i], chainId,
+      resId: Number(inputAtoms.res_id[i]), authSeqId: Number(inputAtoms.res_id[i]), insCode: '',
+      element: inputAtoms.element?.[i] || undefined, x: crd[0], y: crd[1], z: crd[2],
+      occupancy: 1.0, bFactor: NaN, charge: 0, entityId: null,
+    });
+  }
+  return out;
+}
+
+/** `_entity` loop for `atoms`: the given entity ids are `non-polymer` (drawn as sticks), the rest as before. */
+function entityCif(atoms, nonPolymerIds) {
+  const types = new Map();
+  for (const a of atoms) {
+    const id = a.entityId ?? 0;
+    const prev = types.get(id);
+    const het = nonPolymerIds.has(id) || a.isHetero;
+    types.set(id, prev === undefined ? het : prev && het);
+  }
+  return ['loop_', '_entity.id', '_entity.type',
+    ...[...types].map(([id, het]) => `${id} ${het ? 'non-polymer' : 'polymer'}`), '#', ''].join('\n');
+}
+
+/** Whether output atoms carry conditioning coordinates (so processSampleToAtoms put them in the input frame). */
+const isAnchored = (atoms) => atoms.some((a) => a.crd && Number.isFinite(a.crd[0]));
+
+function alignCaNmToAnchors(caNm, tokenIndices, fixedCoordsNm) {
+  const m = tokenIndices.length;
+  const mobile = new Float32Array(m * 3);
+  for (let k = 0; k < m; k += 1) {
+    const tid = tokenIndices[k];
+    mobile[k * 3 + 0] = caNm[tid * 3 + 0];
+    mobile[k * 3 + 1] = caNm[tid * 3 + 1];
+    mobile[k * 3 + 2] = caNm[tid * 3 + 2];
+  }
+  const { rotation: R, fixedCenter, mobileCenter } = superimposeCoords3D(fixedCoordsNm, mobile);
+  const out = new Float32Array(caNm.length);
+  const n = caNm.length / 3;
+  for (let i = 0; i < n; i += 1) {
+    const mx = caNm[i * 3 + 0] - mobileCenter[0];
+    const my = caNm[i * 3 + 1] - mobileCenter[1];
+    const mz = caNm[i * 3 + 2] - mobileCenter[2];
+    out[i * 3 + 0] = Math.fround(mx * R[0] + my * R[1] + mz * R[2] + fixedCenter[0]);
+    out[i * 3 + 1] = Math.fround(mx * R[3] + my * R[4] + mz * R[5] + fixedCenter[1]);
+    out[i * 3 + 2] = Math.fround(mx * R[6] + my * R[7] + mz * R[8] + fixedCenter[2]);
+  }
+  return out;
+}
+
+const ONE_LETTER = {
+  ALA: 'A', ARG: 'R', ASN: 'N', ASP: 'D', CYS: 'C', GLN: 'Q', GLU: 'E', GLY: 'G', HIS: 'H', ILE: 'I',
+  LEU: 'L', LYS: 'K', MET: 'M', PHE: 'F', PRO: 'P', SER: 'S', THR: 'T', TRP: 'W', TYR: 'Y', VAL: 'V',
+  MSE: 'M', UNK: 'X', DA: 'A', DC: 'C', DG: 'G', DT: 'T', A: 'A', C: 'C', G: 'G', U: 'U',
+};
+
+/**
+ * The designed sequence of each live frame, drawn in Studio's sequence dock while a design runs. It sits beside
+ * Studio's own (interactive) `#sequence-view`, which is only hidden meanwhile, so finishing, stopping or failing
+ * just removes the strip and Studio's view is back untouched. Residues that changed since the previous frame are
+ * highlighted, which shows the sequence settling.
+ */
+class LiveSequenceStrip {
+  constructor() {
+    this.dock = document.getElementById('sequence-dock');
+    this.view = document.getElementById('sequence-view');
+    this.help = document.querySelector('#sequence-dock .sequence-help');
+    this.el = null;
+    this.tokens = new Map();
+  }
+
+  start() {
+    if (!this.view || this.el) return;
+    document.getElementById('rfd4p-live-sequence')?.remove();
+    this.el = document.createElement('div');
+    this.el.id = 'rfd4p-live-sequence';
+    this.el.className = 'sequence-view';
+    this.el.setAttribute('aria-live', 'off');
+    this.view.after(this.el);
+    // On the dock, not the view: Studio's sequence render resets the view's className.
+    this.dock?.classList.add('rfd4p-live');
+    this.helpText = this.help?.textContent ?? null;
+    this.tokens.clear();
+  }
+
+  /** @param {Array<{chainId: string, resId: number, resName: string}>} atoms */
+  update(atoms, step, nsteps, convergence = null) {
+    if (!this.el) return;
+    const residues = new Map();
+    for (const a of atoms) {
+      const code = ONE_LETTER[a.resName];
+      const key = `${a.chainId}:${a.resId}`;
+      if (code && !residues.has(key)) residues.set(key, { chainId: a.chainId, resId: a.resId, resName: a.resName, code });
+    }
+    let changed = 0;
+    if (this.tokens.size !== residues.size || [...residues.keys()].some((k) => !this.tokens.has(k))) {
+      this.build(residues);
+    } else {
+      for (const [key, r] of residues) {
+        const tok = this.tokens.get(key);
+        const diff = tok.textContent !== r.code;
+        if (diff) {
+          tok.textContent = r.code;
+          tok.title = `${r.chainId}/${r.resName} ${r.resId}`;
+          changed += 1;
+        }
+        tok.classList.toggle('rfd4p-changed', diff);
+      }
+    }
+    if (this.help) {
+      const conv = convergence?.stop ? ' · converged'
+        : convergence?.streak ? ` · still for ${convergence.streak} step${convergence.streak > 1 ? 's' : ''}` : '';
+      this.help.textContent = `Live · step ${step + 1}/${nsteps}` + (step > 0 ? ` · ${changed} changed` : '') + conv;
+    }
+  }
+
+  build(residues) {
+    this.el.replaceChildren();
+    this.tokens.clear();
+    const tracks = new Map();
+    for (const [key, r] of residues) {
+      let track = tracks.get(r.chainId);
+      if (!track) {
+        const chain = document.createElement('div');
+        chain.className = 'sequence-chain';
+        const label = document.createElement('span');
+        label.className = 'sequence-chain-label';
+        label.textContent = r.chainId;
+        track = document.createElement('div');
+        track.className = 'sequence-track';
+        chain.append(label, track);
+        this.el.appendChild(chain);
+        tracks.set(r.chainId, track);
+      }
+      const tok = document.createElement('span');
+      tok.className = 'sequence-token';
+      tok.textContent = r.code;
+      tok.title = `${r.chainId}/${r.resName} ${r.resId}`;
+      track.appendChild(tok);
+      this.tokens.set(key, tok);
+    }
+  }
+
+  stop() {
+    if (!this.el) return;
+    this.el.remove();
+    this.el = null;
+    this.tokens.clear();
+    this.dock?.classList.remove('rfd4p-live');
+    if (this.help && this.helpText != null) this.help.textContent = this.helpText;
+  }
+}
+
+const PRESET_TO_TASK = {
+  uncond_short: 'unconditional',
+  ppi_pdl1: 'unconditional',
+  motif_idx_1prw: 'unconditional',
+  motif_unidx_1prw: 'unconditional',
+  sm_sam: 'unconditional',
+  dna_7m5w: 'unconditional',
+  yaml_5o45_binder: 'unconditional',
+  partial_diffusion_1prw: 'partial_diffusion',
+  inverse_folding_1prw: 'inverse_folding',
+  custom_cath_monomer: 'unconditional',
+};
+
+class Rfd4pStudioApp {
   constructor() {
     this.gpuDevice = null;
     this.gpuAdapterInfo = null;
@@ -224,91 +388,108 @@ class Rfd4pLocalFoldApp {
     this.presetBytesCache = new Map();
     this.currentPreset = null;
     this.currentCifBytes = null;
-    this.presetDirty = false;
+    this.currentCifText = '';
     this.currentBatchResult = null;
 
+    // AtomWorks Studio integration state
+    this.studioSessionId = null;
+    this.inputSessionId = null;
+    this.useStudioSession = false;
+    this.activeAbortController = null;
+    this.generatedViews = new Map(); // sessionId -> { label, cif, pdb, hasTrajectory, isInput }
+
     this.els = {
+      cardStaging: document.getElementById('rfd4p-card-staging'),
+      studioCard: document.getElementById('rfd4p-studio-card'),
       predictBtn: document.getElementById('predict'),
-      parityBtn: document.getElementById('parity-btn'),
-      quickUploadInput: document.getElementById('quick-upload-input'),
-      contigInput: document.getElementById('contig-input'),
-      activeConditionPills: document.getElementById('active-condition-pills'),
-      presetSelect: document.getElementById('preset-select'),
-      nstepsInput: document.getElementById('nsteps-input'),
-      recycleSelect: document.getElementById('recycle-select'),
+      taskSelect: document.getElementById('task-select'),
+      thinkingRadioGroup: document.getElementById('thinking-radio-group'),
+      samplesInput: document.getElementById('samples-input'),
       seedInput: document.getElementById('seed-input'),
-      backendSelect: document.getElementById('backend-select'),
-      archSelect: document.getElementById('arch-select'),
-      safetensorsFileInput: document.getElementById('safetensors-file-input'),
-      conditionSpecInput: document.getElementById('condition-spec-input'),
-      structureInput: document.getElementById('structure-input'),
-      structureFileInput: document.getElementById('structure-file-input'),
-      structureSummaryText: document.getElementById('structure-summary-text'),
-      statusMessage: document.getElementById('status-message'),
-      modelLoad: document.getElementById('model-load'),
-      modelLoadText: document.getElementById('model-load-text'),
-      progress: document.getElementById('progress'),
-      predictionScoresBox: document.getElementById('predictionScoresBox'),
+      backboneNoise: document.getElementById('backbone-noise'),
+      backboneNoiseNum: document.getElementById('backbone-noise-num'),
+      latentNoise: document.getElementById('latent-noise'),
+      latentNoiseNum: document.getElementById('latent-noise-num'),
+      earlyStop: document.getElementById('early-stop'),
+      statusBox: document.getElementById('generation-status'),
+      statusMessage: document.getElementById('rfd4p-status-message'),
+      modelLoad: document.getElementById('rfd4p-model-load'),
+      modelLoadText: document.getElementById('rfd4p-model-load-text'),
+      progress: document.getElementById('rfd4p-progress'),
+      designResultsRow: document.getElementById('design-results'),
+      designViewRadios: document.getElementById('design-view-radios'),
       downloadsBox: document.getElementById('downloads'),
-      downloadPdbBtn: document.getElementById('download-pdb-btn'),
       downloadCifBtn: document.getElementById('download-cif-btn'),
-      metricTokens: document.getElementById('metric-tokens'),
-      metricAtoms: document.getElementById('metric-atoms'),
-      metricLatency: document.getElementById('metric-latency'),
-      metricParity: document.getElementById('metric-parity'),
+      downloadAllBtn: document.getElementById('download-all-btn'),
+      webgpuBadge: document.getElementById('webgpu-badge'),
     };
   }
 
-  setStatus(msg, isError = false) {
+  _mountCardIntoStudio() {
+    const card = this.els.studioCard;
+    const popover = document.getElementById('atomworks-studio-popover');
+    if (card && popover && card.parentElement !== popover) {
+      popover.prepend(card);
+      this._bindControls();
+    }
+    const closeBtn = document.getElementById('close-structure');
+    if (closeBtn && !closeBtn.__rfd4pCloseBound) {
+      closeBtn.__rfd4pCloseBound = true;
+      closeBtn.addEventListener('click', () => {
+        this.useStudioSession = false;
+        this.inputSessionId = null;
+        this.studioSessionId = null;
+        if (this.els.designResultsRow) this.els.designResultsRow.hidden = true;
+      });
+    }
+  }
+
+  setStatus(msg, isError = false, { visible = true } = {}) {
     if (!this.els.statusMessage) return;
     this.els.statusMessage.textContent = msg;
     this.els.statusMessage.classList.toggle('error', Boolean(isError));
+    if (this.els.statusBox) {
+      this.els.statusBox.hidden = !visible;
+    }
+    const studioFooter = visible ? document.getElementById('status-message') : null;
+    if (studioFooter) {
+      studioFooter.textContent = msg;
+      studioFooter.classList.toggle('error-text', Boolean(isError));
+    }
   }
 
   setProgress(fraction, state = 'running') {
     if (!this.els.progress) return;
     this.els.progress.dataset.state = state;
     this.els.progress.value = Math.max(0, Math.min(1, fraction));
+    this.els.progress.hidden = state === 'idle';
   }
 
-  getPy2DmolRenderer() {
-    const registry = window.py2dmol_viewers ?? {};
-    const firstKey = Object.keys(registry)[0];
-    return firstKey ? registry[firstKey]?.renderer : undefined;
+  _getSelectedThinking() {
+    const checked = this.els.thinkingRadioGroup?.querySelector('input[name="thinking-radio"]:checked');
+    return checked?.value || 'none';
   }
 
-  revealViewer() {
-    const renderer = this.getPy2DmolRenderer();
-    try {
-      if (window.Plddt && renderer) window.Plddt.initialize(renderer);
-    } catch { /* ignore */ }
-    const container = document.getElementById('viewer-container');
-    if (container && getComputedStyle(container).display === 'none') {
-      container.style.display = 'flex';
+  _syncThinkingRadios(val) {
+    if (!this.els.thinkingRadioGroup) return;
+    const radios = this.els.thinkingRadioGroup.querySelectorAll('input[name="thinking-radio"]');
+    for (const r of radios) {
+      r.checked = r.value === val;
     }
-    const seqBox = document.getElementById('sequence-viewer-container');
-    if (seqBox) seqBox.style.display = 'block';
-    if (this.els.predictionScoresBox) this.els.predictionScoresBox.style.display = 'block';
-    if (this.els.downloadsBox) this.els.downloadsBox.style.display = 'flex';
-    try {
-      renderer?._updateCanvasDimensions?.();
-    } catch { /* ignore */ }
-  }
-
-  _isHalfSelected() {
-    return this.els.backendSelect?.value !== 'webgpu-fp32';
   }
 
   async init() {
-    this._populatePresets();
     this._bindControls();
+    await this._loadPreset(RFD4P_PRESETS[0].id, { syncStudio: false });
+    this._initStudioBridge();
     await this._initWebGpu();
-    await this._loadPreset(RFD4P_PRESETS[0].id);
+    this._syncThinkingRadios('none');
     this.els.predictBtn.disabled = false;
-    const backendLabel = this.gpuDevice
-      ? `WebGPU (${this._isHalfSelected() ? 'FP16' : 'FP32'} Weights)`
-      : 'CPU Float32';
-    this.setStatus(`Ready (${backendLabel}). Pick a preset or enter a contig and press Design.`);
+    const backendLabel = this.gpuDevice ? 'WebGPU FP16' : 'CPU Float32';
+    if (this.els.webgpuBadge) {
+      this.els.webgpuBadge.textContent = backendLabel;
+    }
+    this.setStatus('Ready to generate.', false, { visible: false });
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('autorun') === '1') {
@@ -316,13 +497,59 @@ class Rfd4pLocalFoldApp {
     }
   }
 
-  _populatePresets() {
-    this.els.presetSelect.innerHTML = '';
-    for (const p of RFD4P_PRESETS) {
-      const opt = document.createElement('option');
-      opt.value = p.id;
-      opt.textContent = p.title;
-      this.els.presetSelect.appendChild(opt);
+  _initStudioBridge() {
+    this._mountCardIntoStudio();
+    // AtomWorks Studio runs in this same document and announces session changes as window events.
+    window.addEventListener('atomworks-studio-message', (ev) => {
+      const event = { data: ev.detail };
+      if (['ready', 'changed', 'example'].includes(event.data?.type)) {
+        this._mountCardIntoStudio();
+        const sid = event.data.session_id;
+        if (sid) {
+          this.studioSessionId = sid;
+          const isExplicitChange = event.data.type === 'changed' || event.data.type === 'example';
+          if (isExplicitChange || !this.generatedViews.has(sid) || this.generatedViews.get(sid)?.isInput) {
+            const previousInput = this.inputSessionId;
+            this.inputSessionId = sid;
+            this.useStudioSession = true;
+            if (isExplicitChange && this.generatedViews.has(sid)) {
+              const view = this.generatedViews.get(sid);
+              if (view) view.isInput = true;
+            }
+            if (previousInput && previousInput !== sid && this.els.designResultsRow && event.data.type === 'example') {
+              this.els.designResultsRow.hidden = true;
+            }
+            if (event.data.type === 'example') {
+              if (this.activeAbortController) {
+                this.activeAbortController.abort();
+              }
+              if (event.data.task && this.els.taskSelect) {
+                this.els.taskSelect.value = normalizeTaskMode(event.data.task);
+              }
+              this.setStatus('Ready to generate.', false, { visible: false });
+            }
+          }
+        }
+      }
+    });
+  }
+
+  _navigateStudioToSession(sessionId, { withTrajectory = false } = {}) {
+    if (!sessionId) return;
+    const trajUrl = withTrajectory
+      ? `/api/v1/sessions/${encodeURIComponent(sessionId)}/trajectory.cif`
+      : null;
+    if (typeof window.__rfd4pOpenSession !== 'function') {
+      console.warn('AtomWorks Studio is not ready; cannot open session', sessionId);
+      return;
+    }
+    const opened = window.__rfd4pOpenSession(sessionId, trajUrl);
+    // Display-only reference motif beside a finished motif-scaffolding design (not part of the saved document).
+    const overlayCif = this.generatedViews.get(sessionId)?.overlayCif;
+    if (overlayCif) {
+      Promise.resolve(opened)
+        .then(() => window.__rfd4pAddOverlay?.(overlayCif, 'motif.cif'))
+        .catch((err) => console.warn('Motif overlay failed:', err));
     }
   }
 
@@ -332,17 +559,14 @@ class Rfd4pLocalFoldApp {
       if (res && res.device) {
         this.gpuDevice = res.device;
         this.gpuAdapterInfo = res.adapter?.info ?? null;
-      } else {
-        this.els.backendSelect.value = 'cpu';
       }
     } catch (err) {
       console.warn('WebGPU fallback to CPU:', err);
-      this.els.backendSelect.value = 'cpu';
     }
   }
 
   async ensureWeightsLoaded(source = this.prevArchChoice, { needEncoder = false } = {}) {
-    const half = this._isHalfSelected();
+    const half = true;
     const makeProgressCb = (label) => ({ bytesLoaded, totalBytes, file }) => {
       const mb = (bytesLoaded / (1024 * 1024)).toFixed(1);
       const tag = file ? `${label} (${file})` : label;
@@ -441,23 +665,18 @@ class Rfd4pLocalFoldApp {
     }
   }
 
-  async _loadPreset(presetId) {
+  async _loadPreset(presetId, { syncStudio = false } = {}) {
     const preset = getRfd4pPresetById(presetId);
     this.currentPreset = preset;
-    this.presetDirty = false;
     this.currentCifBytes = null;
+    this.currentCifText = '';
+    this.useStudioSession = false;
 
-    this.els.contigInput.value = preset.contig || '';
-    this.els.conditionSpecInput.value = JSON.stringify(preset.conditions ?? {}, null, 2);
-
-    if (preset.nsteps) {
-      const val = String(preset.nsteps);
-      if ([...this.els.nstepsInput.options].some((o) => o.value === val)) {
-        this.els.nstepsInput.value = val;
-      }
+    if (this.els.taskSelect && PRESET_TO_TASK[preset.id]) {
+      this.els.taskSelect.value = PRESET_TO_TASK[preset.id];
     }
     if (preset.recycleSchedule) {
-      this.els.recycleSelect.value = preset.recycleSchedule;
+      this._syncThinkingRadios(preset.recycleSchedule);
     }
 
     if (preset.cifUrl) {
@@ -470,250 +689,147 @@ class Rfd4pLocalFoldApp {
           this.presetBytesCache.set(preset.cifUrl, bytes);
         }
         this.currentCifBytes = bytes;
-        const text = decodeTextOrZstd(bytes);
-        this.els.structureInput.value = text;
-        const fileName = preset.cifUrl.split('/').pop();
-        this.els.structureSummaryText.textContent = `${fileName} (${text.split('\n').length} lines)`;
+        this.currentCifText = decodeTextOrZstd(bytes);
+        if (syncStudio) {
+          const fileName = preset.cifUrl.split('/').pop().replace(/\.zst$/, '');
+          const store = getSharedStudioStore();
+          const { sessionId } = store.createSession(this.currentCifText, fileName);
+          this.studioSessionId = sessionId;
+          this.inputSessionId = sessionId;
+          this._navigateStudioToSession(sessionId);
+        }
       } catch (err) {
         console.warn('Failed to fetch preset CIF:', err);
-        this.els.structureInput.value = '';
-        this.els.structureSummaryText.textContent = 'None (de novo)';
+        this.currentCifText = '';
       }
-    } else {
-      this.els.structureInput.value = '';
-      this.els.structureSummaryText.textContent = 'None (de novo)';
     }
 
-    this._previewConditions();
+    this._buildCurrentBatch();
   }
 
-  _buildCurrentBatch() {
-    const seed = Number.parseInt(this.els.seedInput.value, 10) || 42;
-    const preset = this.currentPreset;
+  _buildCurrentBatch(seedOverride = null) {
+    const seed = seedOverride ?? (Number.parseInt(this.els.seedInput.value, 10) || 42);
 
-    // Use the exact upstream annotated CIF when a preset is unmodified and not marked specMode
-    if (!this.presetDirty && preset && !preset.specMode && this.currentCifBytes) {
+    // Build directly from the active AtomWorks Studio session when the user is working in Studio
+    if (this.useStudioSession && this.inputSessionId) {
+      const store = getSharedStudioStore();
+      const doc = store.getSession(this.inputSessionId);
+      if (doc) {
+        const res = buildBatch(doc.toCif(), { seed });
+        this.currentBatchResult = res;
+        return res;
+      }
+    }
+
+    const preset = this.currentPreset;
+    if (preset && !preset.specMode && this.currentCifBytes) {
       const res = buildBatch(this.currentCifBytes, { seed });
       this.currentBatchResult = res;
       return res;
     }
 
-    let conditions = {};
-    const rawCond = (this.els.conditionSpecInput.value || '').trim();
-    if (rawCond && rawCond !== 'undefined') {
-      try {
-        conditions = JSON.parse(rawCond);
-      } catch (err) {
-        throw new Error(`Invalid conditions JSON: ${err.message}`);
-      }
-    }
-    const contig = this.els.contigInput.value.trim();
-    const structureText = this.els.structureInput.value.trim() || null;
     const res = buildBatch(
-      { contig, conditions },
-      { inputCif: structureText, seed },
+      { contig: preset?.contig || '100-100P', conditions: preset?.conditions ?? {} },
+      { inputCif: this.currentCifText || null, seed },
     );
     this.currentBatchResult = res;
     return res;
   }
 
-  _previewConditions() {
-    try {
-      const res = this._buildCurrentBatch();
-      this._renderConditionPills(res);
-    } catch (err) {
-      this.setStatus(err.message, true);
-    }
-  }
-
-  _renderConditionPills(batchResult) {
-    const { batch, n } = batchResult;
-    const condCrd = batch.condition_coordinate_1_atom?.data;
-    const condGrp = batch.condition_CoordinateGroup_1_atom?.data;
-    const condHot = batch.condition_hotspot_1_atom?.data;
-    const condMcoord = batch['condition_metal-coord_1_atom']?.data;
-    const condHb = batch.condition_hbond_1_atom?.data;
-    const condSalt = batch.condition_saltbridge_1_atom?.data;
-    const condSec = batch['condition_secondary-structure_1_residue']?.data;
-    const condCath = batch['condition_cath-label_1_residue']?.data;
-    const seqMask = batch.sequence_probs_mask?.data;
-    const unidxMask = batch.is_in_context_conditioning?.data;
-
-    let nCrd = 0;
-    let nCrdGrp = 0;
-    let nUnidx = 0;
-    let nHot = 0;
-    let nMcoord = 0;
-    let nHb = 0;
-    let nSalt = 0;
-    let nSec = 0;
-    let nSeq = 0;
-    let nCath = 0;
-
-    for (let i = 0; i < n; i += 1) {
-      if (condSec && condSec[i] !== 0) nSec += 1;
-      if (seqMask && seqMask[i] !== 0) nSeq += 1;
-      if (unidxMask && unidxMask[i] !== 0) nUnidx += 1;
-      if (condCath && condCath[i * 3] >= 0) nCath += 1;
-
-      let tokCrd = false;
-      let tokGrp = false;
-      let tokHot = false;
-      let tokMc = false;
-      let tokHb = false;
-      let tokSalt = false;
-      for (let a = 0; a < 37; a += 1) {
-        const s = i * 37 + a;
-        if (condCrd && Number.isFinite(condCrd[s * 3])) tokCrd = true;
-        if (condGrp && condGrp[s] >= 0) tokGrp = true;
-        if (condHot && condHot[s]) tokHot = true;
-        if (condMcoord && condMcoord[s] > 0) tokMc = true;
-        if (condHb && condHb[s] > 0) tokHb = true;
-        if (condSalt && condSalt[s] > 0) tokSalt = true;
-      }
-      if (tokCrd) nCrd += 1;
-      if (tokGrp) nCrdGrp += 1;
-      if (tokHot) nHot += 1;
-      if (tokMc) nMcoord += 1;
-      if (tokHb) nHb += 1;
-      if (tokSalt) nSalt += 1;
-    }
-
-    const preset = this.currentPreset;
-    const modeTag = preset?.inverseFolding
-      ? [{ label: 'Inverse Folding', cls: 'pill-cath' }]
-      : preset?.partialTrajectoryFractionSteps
-      ? [{ label: `Partial Diffusion (${preset.partialTrajectoryFractionSteps * 100}%)`, cls: 'pill-cath' }]
-      : [];
-
-    const pills = [
-      { label: `${n} tokens`, cls: '' },
-      ...modeTag,
-      ...(nCrd > 0 ? [{ label: `C_CRD: ${nCrd} fixed`, cls: 'pill-crd' }] : []),
-      ...(nCrdGrp > 0 ? [{ label: `C_CRDGRP: ${nCrdGrp} motif`, cls: 'pill-crdgrp' }] : []),
-      ...(nUnidx > 0 ? [{ label: `C_IDX=false: ${nUnidx} unindexed`, cls: 'pill-crdgrp' }] : []),
-      ...(nSeq > 0 ? [{ label: `C_SEQ: ${nSeq} locked`, cls: 'pill-crd' }] : []),
-      ...(nHot > 0 ? [{ label: `C_HOT: ${nHot} hotspots`, cls: 'pill-hot' }] : []),
-      ...(nMcoord > 0 ? [{ label: `C_MCOORD: ${nMcoord} metal`, cls: 'pill-mcoord' }] : []),
-      ...(nHb > 0 ? [{ label: `C_HB: ${nHb}`, cls: 'pill-mcoord' }] : []),
-      ...(nSalt > 0 ? [{ label: `C_SALT: ${nSalt}`, cls: 'pill-hot' }] : []),
-      ...(nSec > 0 ? [{ label: `C_SEC: ${nSec}`, cls: 'pill-cath' }] : []),
-      ...(nCath > 0 ? [{ label: `C_CATH: ${nCath}`, cls: 'pill-cath' }] : []),
-    ];
-
-    this.els.activeConditionPills.innerHTML = pills
-      .map((p) => `<span class="rfd4p-pill ${p.cls}">${p.label}</span>`)
-      .join('');
-  }
-
   _bindControls() {
-    this.els.presetSelect.addEventListener('change', async () => {
-      await this._loadPreset(this.els.presetSelect.value);
-    });
-
-    const onSpecEdited = () => {
-      this.presetDirty = true;
-      this._previewConditions();
+    const bindSliderPair = (slider, numInput) => {
+      if (!slider || !numInput) return;
+      slider.oninput = () => { numInput.value = slider.value; };
+      numInput.oninput = () => { slider.value = numInput.value; };
     };
-    this.els.contigInput.addEventListener('input', onSpecEdited);
-    this.els.conditionSpecInput.addEventListener('input', onSpecEdited);
-    this.els.structureInput.addEventListener('input', onSpecEdited);
+    bindSliderPair(this.els.backboneNoise, this.els.backboneNoiseNum);
+    bindSliderPair(this.els.latentNoise, this.els.latentNoiseNum);
 
-    this.els.predictBtn.addEventListener('click', () => this.runDesign());
-    this.els.parityBtn.addEventListener('click', () => this.runParityCheck());
-
-    this.els.structureFileInput.addEventListener('change', async (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      await this._loadStructureFile(file);
-    });
-
-    this.els.quickUploadInput.addEventListener('change', async (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      if (file.name.endsWith('.safetensors')) {
-        await this._loadSafetensorsFile(file);
-      } else {
-        await this._loadStructureFile(file);
-      }
-    });
-
-    this.els.archSelect.addEventListener('change', async () => {
-      const choice = this.els.archSelect.value;
-      if (choice === 'local') {
-        this.els.archSelect.value = this.prevArchChoice;
-        this.els.safetensorsFileInput.click();
-        return;
-      }
-      this.prevArchChoice = choice;
-      this.activeWeights = null;
-      this.shardedBundle = null;
-      if (this.gpuModel) {
-        this.gpuModel.destroy();
-        this.gpuModel = null;
-      }
-      await this.ensureWeightsLoaded(choice);
-      const count = Object.keys(this.activeWeights).length;
-      this.setStatus(`Ready · ${count} tensors loaded on ${this.gpuDevice ? 'WebGPU' : 'CPU'}.`);
-    });
-
-    this.els.safetensorsFileInput.addEventListener('change', async (e) => {
-      const file = e.target.files?.[0];
-      if (file) await this._loadSafetensorsFile(file);
-    });
-
-    this.els.downloadPdbBtn.addEventListener('click', () => {
-      if (!this.lastResult?.pdb) return;
-      this._downloadText(this.lastResult.pdb, `${this.els.presetSelect.value || 'rfd4p'}.pdb`, 'chemical/x-pdb');
-    });
-
-    this.els.downloadCifBtn.addEventListener('click', () => {
-      if (!this.lastResult?.cif) return;
-      this._downloadText(this.lastResult.cif, `${this.els.presetSelect.value || 'rfd4p'}.cif`, 'chemical/x-mmcif');
-    });
-  }
-
-  async _loadStructureFile(file) {
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const text = decodeTextOrZstd(bytes);
-      this.currentCifBytes = bytes;
-      this.els.structureInput.value = text;
-      this.els.structureSummaryText.textContent = `${file.name} (${text.split('\n').length} lines)`;
-      // If the uploaded file is an annotated CIF with condition_*, parse directly; otherwise use spec mode
-      const isAnnotated = text.includes('condition_') || text.includes('annotation_expseg');
-      this.presetDirty = !isAnnotated;
-      this._previewConditions();
-      this.setStatus(`Loaded structure ${file.name}.`);
-    } catch (err) {
-      this.setStatus(`Failed to load ${file.name}: ${err.message}`, true);
-    }
-  }
-
-  async _loadSafetensorsFile(file) {
-    try {
-      this.setStatus(`Loading checkpoint ${file.name}...`);
-      if (!this.activeConfig) {
-        try {
-          this.activeConfig = await fetchRfd4pConfig(DEFAULT_LOCAL_CONFIG_URL);
-        } catch {
-          this.activeConfig = await fetchRfd4pConfig(DEFAULT_HF_CONFIG_URL);
+    if (this.els.predictBtn) {
+      this.els.predictBtn.onclick = () => {
+        if (this.activeAbortController) {
+          this.activeAbortController.abort();
+          return;
         }
-      }
-      const buf = await file.arrayBuffer();
-      const { tensors } = parseSafetensors(buf);
-      this.shardedBundle = null;
-      this.activeWeights = tensors;
-      const half = this._isHalfSelected();
-      if (this.gpuDevice) {
-        if (this.gpuModel) this.gpuModel.destroy();
-        this.gpuModel = new Rfd4pGeneratorGpu(this.gpuDevice, this.activeWeights, this.activeConfig, { half });
-        this.gpuModelHalf = half;
-      }
-      this.setStatus(`Loaded ${file.name} (${Object.keys(tensors).length} tensors).`);
-    } catch (err) {
-      this.setStatus(`Failed to load ${file.name}: ${err.message}`, true);
+        this.runDesign();
+      };
     }
+
+    if (this.els.downloadCifBtn) {
+      this.els.downloadCifBtn.onclick = () => {
+        const activeView = this.generatedViews.get(this.studioSessionId);
+        const cif = activeView?.cif || this.lastResult?.cif;
+        if (!cif) return;
+        this._downloadText(cif, `${activeView?.filenameStem || 'design-1'}.cif`, 'chemical/x-mmcif');
+      };
+    }
+
+    if (this.els.downloadAllBtn) {
+      this.els.downloadAllBtn.onclick = async () => {
+        await this._downloadAllDesigns();
+      };
+    }
+
+    if (this.els.designViewRadios) {
+      this.els.designViewRadios.onchange = (e) => {
+        const input = e.target;
+        if (input && input.name === 'design-view-radio' && input.checked) {
+          const sid = input.value;
+          this.studioSessionId = sid;
+          const viewInfo = this.generatedViews.get(sid);
+          this._navigateStudioToSession(sid, {
+            withTrajectory: Boolean(viewInfo?.hasTrajectory),
+          });
+        }
+      };
+    }
+  }
+
+  async _downloadAllDesigns() {
+    const designs = [...this.generatedViews.values()].filter((v) => !v.isInput && v.cif);
+    if (designs.length === 0) {
+      if (this.lastResult?.cif) {
+        this._downloadText(this.lastResult.cif, 'design-1.cif', 'chemical/x-mmcif');
+      }
+      return;
+    }
+    if (designs.length === 1 || typeof window.JSZip !== 'function') {
+      this._downloadText(designs[0].cif, `${designs[0].filenameStem || 'design-1'}.cif`, 'chemical/x-mmcif');
+      return;
+    }
+    const zip = new window.JSZip();
+    designs.forEach((d, idx) => {
+      zip.file(`design-${idx + 1}.cif`, d.cif);
+    });
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'designs.zip';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  _renderDesignResultsRow(choices, selectedSessionId) {
+    if (!this.els.designResultsRow || !this.els.designViewRadios) return;
+    this.els.designViewRadios.innerHTML = '';
+    for (const choice of choices) {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'design-view-radio';
+      input.value = choice.sessionId;
+      input.checked = choice.sessionId === selectedSessionId;
+      const span = document.createElement('span');
+      span.textContent = choice.label;
+      label.append(input, span);
+      this.els.designViewRadios.appendChild(label);
+    }
+    const designCount = choices.filter((c) => c.label !== 'Input').length;
+    if (this.els.downloadsBox) {
+      this.els.downloadsBox.hidden = designCount <= 1;
+    }
+    this.els.designResultsRow.hidden = false;
   }
 
   _downloadText(text, filename, mime) {
@@ -726,218 +842,311 @@ class Rfd4pLocalFoldApp {
     URL.revokeObjectURL(url);
   }
 
-  /**
-   * Load the flow-matching CA trajectory and final decoded all-atom structure into `py2Dmol`.
-   */
-  async _loadResultIntoPy2Dmol(stem, batch, trajectoryFrames, result) {
-    const load = window.py2dmolLoadFiles;
-    if (typeof load !== 'function') return;
-
-    const tokens = extractTokenMetadata(batch);
-    const finalCaNm = result.x.bb_ca;
-    const diag = buildViewerDiagnostics(batch, tokens, finalCaNm);
-    const finalPdb = result.pdb;
-    const finalResTypes = result.residueType;
-
-    const firstFrame = trajectoryFrames[0];
-    const firstPdb = firstFrame
-      ? formatCaFrameToPdb(firstFrame.caCoordsNm, tokens, diag.bFactors, finalResTypes)
-      : finalPdb;
-
-    const ui = window.viewerConfig?.ui;
-    const prevFilter = ui?.filterAdditives;
-    if (ui) ui.filterAdditives = false;
+  async runDesign(overrides = {}) {
+    if (this.activeAbortController) {
+      this.activeAbortController.abort();
+    }
+    const abortController = new AbortController();
+    this.activeAbortController = abortController;
+    const liveSequence = new LiveSequenceStrip();
     try {
-      const vFile = (name, text) => ({ name, readAsync: () => Promise.resolve(text) });
-      await load([vFile(`${stem}.pdb`, firstPdb)], true);
-    } finally {
-      if (ui) ui.filterAdditives = prevFilter;
-    }
+      this.els.predictBtn.textContent = 'Stop generation';
+      this.els.predictBtn.classList.add('secondary');
+      this.els.predictBtn.disabled = false;
 
-    const renderer = this.getPy2DmolRenderer();
-    if (!renderer) return;
-    const objName = renderer.currentObjectName ?? stem;
-    const objData = renderer.objectsData?.[objName];
+      const baseSeed = Number.parseInt(this.els.seedInput.value, 10) || 42;
+      const numSamples = Math.max(1, Math.min(8, Number.parseInt(this.els.samplesInput?.value ?? '1', 10) || 1));
+      const nsteps = overrides.nsteps ?? 60;
+      const recycleSchedule = overrides.recycleSchedule ?? this._getSelectedThinking();
+      const backboneNoise = Math.max(0.01, Math.min(1.0, Number.parseFloat(this.els.backboneNoise?.value ?? '0.3') || 0.3));
+      const latentNoise = Math.max(0.01, Math.min(1.0, Number.parseFloat(this.els.latentNoise?.value ?? '0.1') || 0.1));
 
-    if (objData?.frames?.[0]) {
-      const f0 = objData.frames[0];
-      f0.name = f0.label = f0.title = firstFrame
-        ? `flow_${firstFrame.step + 1}_t${firstFrame.tBb.toFixed(2)}`
-        : 'decoded_all_atom';
-      f0.maps = { contact: diag.contactMap };
-    }
-
-    const api = window.py2Dmol;
-    if (api?.frameFromText && trajectoryFrames.length > 0) {
-      for (let s = 1; s < trajectoryFrames.length; s += 1) {
-        const tf = trajectoryFrames[s];
-        const stepPdb = formatCaFrameToPdb(tf.caCoordsNm, tokens, diag.bFactors, finalResTypes);
-        const stepDiag = buildViewerDiagnostics(batch, tokens, tf.caCoordsNm);
-        const frame = api.frameFromText(stepPdb);
-        frame.name = frame.label = frame.title = `flow_${tf.step + 1}_t${tf.tBb.toFixed(2)}`;
-        frame.maps = { contact: stepDiag.contactMap };
-        frame.align = true;
-        renderer.addFrame(frame, objName);
-      }
-
-      const finalFrame = api.frameFromText(finalPdb);
-      finalFrame.name = finalFrame.label = finalFrame.title = 'decoded_all_atom';
-      finalFrame.maps = { contact: diag.contactMap };
-      finalFrame.align = true;
-      renderer.addFrame(finalFrame, objName);
-    }
-
-    this.revealViewer();
-
-    const totalFrames = objData?.frames?.length ?? 1;
-    if (typeof renderer.setFrame === 'function' && totalFrames > 0) {
-      renderer.setFrame(totalFrames - 1);
-    }
-
-    if (diag.highlightPositions.length > 0 && typeof renderer.showSidechains === 'function') {
-      try {
-        renderer.showSidechains({ object: objName, positions: diag.highlightPositions });
-      } catch { /* ignore */ }
-    }
-
-    const uniqueChains = new Set(diag.chains).size;
-    const targetColor = uniqueChains > 1 ? 'chain' : 'rainbow';
-    if (typeof api?.setColor === 'function') {
-      try {
-        api.setColor(targetColor);
-      } catch { /* ignore */ }
-    }
-
-    try {
-      window.Heatmap?.updateFrame?.(renderer, objData, totalFrames - 1);
-      window.Heatmap?.updateVisibility?.(renderer);
-      renderer.render?.('rfd4p-complete');
-    } catch { /* ignore */ }
-  }
-
-  async runDesign() {
-    try {
-      this.els.predictBtn.disabled = true;
-      const { batch, n, atoms } = this._buildCurrentBatch();
-      this._renderConditionPills({ batch, n, atoms });
+      const firstBatchRes = this._buildCurrentBatch(baseSeed);
 
       const preset = this.currentPreset;
-      const inverseFolding = !this.presetDirty && Boolean(preset?.inverseFolding);
+      const task = this.els.taskSelect?.value || 'unconditional';
+      const inverseFolding =
+        task === 'inverse_folding' ||
+        (!this.useStudioSession && Boolean(preset?.inverseFolding));
       const partialTrajectoryFractionSteps =
-        !this.presetDirty && preset?.partialTrajectoryFractionSteps != null
+        task === 'partial_diffusion'
+          ? 0.4
+          : !this.useStudioSession && preset?.partialTrajectoryFractionSteps != null
           ? preset.partialTrajectoryFractionSteps
           : null;
       const needEncoder = Boolean(inverseFolding || partialTrajectoryFractionSteps != null);
+      if (needEncoder) {
+        const has3dCoords = Boolean(
+          firstBatchRes?.atoms?.coord?.some(
+            (c) => Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1]) && Number.isFinite(c[2])
+          )
+        );
+        if (!has3dCoords) {
+          throw new Error(
+            `${inverseFolding ? 'Inverse folding' : 'Partial diffusion'} requires an input structure with 3D coordinates (open a structure or select a 3D example in Examples).`
+          );
+        }
+      }
 
       await this.ensureWeightsLoaded(this.prevArchChoice, { needEncoder });
 
-      const nsteps = Math.max(1, Number.parseInt(this.els.nstepsInput.value, 10) || 60);
-      const recycleSchedule = this.els.recycleSelect.value || 'low';
-      const seed = Number.parseInt(this.els.seedInput.value, 10) || 42;
-      const useGpu = this.els.backendSelect.value !== 'cpu' && Boolean(this.gpuModel);
-      const backendLabel = useGpu
-        ? `WebGPU ${this._isHalfSelected() ? 'FP16' : 'FP32'}`
-        : 'CPU Float32';
+      const useGpu = Boolean(this.gpuModel);
+      const backendLabel = useGpu ? 'WebGPU FP16' : 'CPU Float32';
 
-      const trajectoryFrames = [];
-      const t0 = performance.now();
-      this.setProgress(0.02, 'running');
-      this.setStatus(`Running RFD4-Proteina (${n} tokens, ${nsteps} steps, ${backendLabel})...`);
-
-      const onStep = async (info) => {
-        trajectoryFrames.push({
-          step: info.step,
-          tBb: info.t.bb_ca,
-          tLl: info.t.local_latents,
-          depth: info.depth,
-          caCoordsNm: Float32Array.from(info.x1.bb_ca),
-        });
-        const frac = (info.step + 1) / (info.nsteps + 1);
-        this.setProgress(frac, 'running');
-        this.setStatus(
-          `Flow-matching step ${info.step + 1}/${info.nsteps} · t_bb=${info.t.bb_ca.toFixed(2)} · t_ll=${info.t.local_latents.toFixed(2)} (${info.depth}x recycle)`
-        );
-      };
-
-      const genOpts = {
+      const customSampling = {
+        ...DEFAULT_SAMPLING,
         nsteps,
-        recycleSchedule,
-        seed,
-        inverseFolding,
-        partialTrajectoryFractionSteps,
-        inputAtoms: atoms,
-        onStep,
+        bb_ca: {
+          ...DEFAULT_SAMPLING.bb_ca,
+          step: { ...DEFAULT_SAMPLING.bb_ca.step, sc_scale_noise: backboneNoise },
+        },
+        local_latents: {
+          ...DEFAULT_SAMPLING.local_latents,
+          step: { ...DEFAULT_SAMPLING.local_latents.step, sc_scale_noise: latentNoise },
+        },
       };
 
-      const result = useGpu
-        ? await this.gpuModel.generate(batch, genOpts)
-        : await generateRfd4pCpu(batch, this.activeWeights, this.activeConfig, genOpts);
+      const store = getSharedStudioStore();
+      this.generatedViews.clear();
+      const viewChoices = [];
+      const earlyStops = [];
+      liveSequence.start();
+      let inputRevision = 1;
+      if (!this.inputSessionId && this.currentCifText) {
+        const { sessionId } = store.createSession(this.currentCifText, 'uncond_short.cif');
+        this.inputSessionId = sessionId;
+      }
+      if (this.inputSessionId && store.getSession(this.inputSessionId)) {
+        const inputDoc = store.getSession(this.inputSessionId);
+        inputRevision = inputDoc.revision ?? 1;
+        this.generatedViews.set(this.inputSessionId, {
+          label: 'Input',
+          cif: inputDoc.toCif(),
+          pdb: null,
+          isInput: true,
+          hasTrajectory: false,
+          filenameStem: 'input',
+        });
+        viewChoices.push({ label: 'Input', sessionId: this.inputSessionId });
+      }
+
+      const t0 = performance.now();
+
+      for (let sampleIdx = 0; sampleIdx < numSamples; sampleIdx += 1) {
+        const sampleSeed = baseSeed + sampleIdx;
+        const { batch, n, atoms } = sampleIdx === 0 ? firstBatchRes : this._buildCurrentBatch(sampleSeed);
+        const tokens = extractTokenMetadata(batch);
+        const fixedAnchors = extractFixedTokenAnchorsNm(batch, n);
+        const allTokenIndices = Int32Array.from({ length: n }, (_, idx) => idx);
+        const trajectoryFrames = [];
+        const sampleTag = numSamples > 1 ? ` [Design ${sampleIdx + 1}/${numSamples}]` : '';
+
+        this.setProgress((sampleIdx / numSamples) + 0.02, 'running');
+        this.setStatus(`Generating design${sampleTag} (${n} tokens, ${nsteps} steps, ${backendLabel})...`);
+
+        let referenceCaNm = null;
+        let liveFramesRendered = 0;
+        let liveCamRadius = 0;
+        let lastLiveRenderTime = 0;
+        let liveRenderBusy = false;
+        let liveRenderPromise = null;
+
+        // Live frames use the decoder's all-atom x1 (real backbone geometry, so Mol* can assign secondary
+        // structure, and in-context targets keep their input atoms); CA-only frames are the fallback.
+        // Asked before the step's trunk pass, so predict whether a render will be due once it finishes.
+        let lastStepEnd = performance.now();
+        let lastStepMs = 0;
+        const wantLiveFrame = (step, total) =>
+          step === 0 || step === total - 1 || performance.now() + lastStepMs - lastLiveRenderTime >= 180;
+        const motifOverlay = buildMotifOverlayAtoms(atoms);
+        const motifOverlayCif = motifOverlay.length
+          ? toCifString(motifOverlay, { dataBlockName: 'motif' }) + entityCif(motifOverlay, new Set([0]))
+          : null;
+        const liveAllAtomCif = (info) => {
+          if (!info.decoded) return null;
+          try {
+            const structure = processSampleToAtoms({
+              coors: info.decoded.coors,
+              atomMask: info.decoded.atomMask,
+              residueType: info.decoded.residueType,
+              paddingMask: batch.padding_mask?.data ?? null,
+              inputAtoms: atoms,
+              batch,
+            });
+            // processSampleToAtoms already aligns coordinate-conditioned designs onto the input (motif) frame.
+            if (!fixedAnchors && !isAnchored(structure.atoms) && referenceCaNm) {
+              alignStructureAtomsToCa(structure.atoms, referenceCaNm, n);
+            }
+            liveSequence.update(structure.atoms, info.step, info.nsteps, info.convergence);
+            if (!motifOverlay.length) return toCifString(structure) + caSecondaryStructureCif(structure.atoms);
+            const overlayEntity = Math.max(0, ...structure.atoms.map((a) => a.entityId ?? 0)) + 1;
+            const all = structure.atoms.concat(motifOverlay.map((a, k) => ({
+              ...a, serial: structure.atoms.length + k + 1, entityId: overlayEntity,
+            })));
+            return toCifString(all) + entityCif(all, new Set([overlayEntity])) + caSecondaryStructureCif(structure.atoms);
+          } catch (err) {
+            console.warn('Live all-atom frame failed; showing Cα frame:', err);
+            return null;
+          }
+        };
+
+        const onStep = (info) => {
+          const stepEnd = performance.now();
+          lastStepMs = stepEnd - lastStepEnd;
+          lastStepEnd = stepEnd;
+          let alignedCaNm = Float32Array.from(info.x1.bb_ca);
+          if (fixedAnchors) {
+            alignedCaNm = alignCaNmToAnchors(alignedCaNm, fixedAnchors.tokenIndices, fixedAnchors.fixedCoordsNm);
+          } else if (n >= 3) {
+            if (!referenceCaNm) {
+              referenceCaNm = Float32Array.from(alignedCaNm);
+            } else {
+              alignedCaNm = alignCaNmToAnchors(alignedCaNm, allTokenIndices, referenceCaNm);
+            }
+          }
+
+          trajectoryFrames.push({
+            step: info.step,
+            tBb: info.t.bb_ca,
+            tLl: info.t.local_latents,
+            depth: info.depth,
+            caCoordsNm: alignedCaNm,
+          });
+
+          const now = performance.now();
+          const isFirstOrLast = info.step === 0 || info.step === info.nsteps - 1;
+          if (!liveRenderBusy && (isFirstOrLast || now - lastLiveRenderTime >= 180)) {
+            if (typeof window.__rfd4pRenderLiveFrame === 'function') {
+              const liveCif = liveAllAtomCif(info) ?? buildLiveFrameCifFromCa(alignedCaNm, tokens, null, UNIFIED_ATOM37_TOKENS);
+              if (liveCif) {
+                liveRenderBusy = true;
+                lastLiveRenderTime = now;
+                // Early x1 estimates are a collapsed blob that later expands several-fold, so a camera
+                // fit once to step 1 ends up inside the protein; refit whenever the extent drifts.
+                const radius = caExtentRadiusNm(alignedCaNm);
+                const keepCam = liveFramesRendered > 0 && radius < liveCamRadius * 1.3 && radius > liveCamRadius * 0.6;
+                if (!keepCam) liveCamRadius = radius;
+                liveFramesRendered += 1;
+                liveRenderPromise = Promise.resolve(
+                  window.__rfd4pRenderLiveFrame(liveCif, `step_${info.step + 1}.cif`, keepCam),
+                )
+                  .catch(() => {})
+                  .finally(() => {
+                    liveRenderBusy = false;
+                  });
+              }
+            }
+          }
+
+          const stepFrac = (info.step + 1) / (info.nsteps + 1);
+          const overallFrac = (sampleIdx + stepFrac) / numSamples;
+          this.setProgress(overallFrac, 'running');
+          this.setStatus(
+            `Generating design${sampleTag} · step ${info.step + 1}/${info.nsteps} (${info.depth}x recycle)`
+          );
+        };
+
+        const genOpts = {
+          nsteps,
+          recycleSchedule,
+          seed: sampleSeed,
+          sampling: customSampling,
+          inverseFolding,
+          partialTrajectoryFractionSteps,
+          inputAtoms: atoms,
+          onStep,
+          decodeStep: wantLiveFrame,
+          earlyStop: this.els.earlyStop?.checked ?? true,
+          signal: abortController.signal,
+        };
+
+        let result;
+        try {
+          result = useGpu
+            ? await this.gpuModel.generate(batch, genOpts)
+            : await generateRfd4pCpu(batch, this.activeWeights, this.activeConfig, genOpts);
+        } finally {
+          if (liveRenderPromise) {
+            await liveRenderPromise;
+          }
+        }
+
+        if (!fixedAnchors && referenceCaNm && result.structure?.atoms && !isAnchored(result.structure.atoms) &&
+            alignStructureAtomsToCa(result.structure.atoms, referenceCaNm, n)) {
+          result.cif = toCifString(result.structure);
+          result.pdb = toPdbString(result.structure);
+        }
+
+        this.lastResult = result;
+        if (result.stepsRun != null && result.stepsRun < result.nsteps) earlyStops.push(`${result.stepsRun}/${result.nsteps}`);
+
+        // Register generated design in AtomWorks Studio session store with trajectory playback
+        const trajectoryCif = buildTrajectoryCifFromFrames(
+          trajectoryFrames,
+          tokens,
+          result.residueType,
+          UNIFIED_ATOM37_TOKENS,
+        );
+        const designName = `design-${sampleIdx + 1}.cif`;
+        const { sessionId: designSessionId } = store.createSession(result.cif, designName, {
+          trajectoryCif,
+        });
+        this.generatedViews.set(designSessionId, {
+          label: `Design ${sampleIdx + 1}`,
+          cif: result.cif,
+          pdb: result.pdb,
+          isInput: false,
+          hasTrajectory: Boolean(trajectoryCif),
+          filenameStem: `design-${sampleIdx + 1}`,
+          overlayCif: motifOverlayCif,
+        });
+        viewChoices.push({ label: `Design ${sampleIdx + 1}`, sessionId: designSessionId });
+      }
 
       const elapsedS = ((performance.now() - t0) / 1000).toFixed(2);
-      this.lastResult = result;
       this.runCounter += 1;
-      const stem = `${this.els.presetSelect.value || 'rfd4p'}_${this.runCounter}`;
 
-      await this._loadResultIntoPy2Dmol(stem, batch, trajectoryFrames, result);
-
-      const atomCount = result.structure?.atoms?.length ?? 0;
-      const chains = new Set(result.structure?.atoms?.map((a) => a.chainId) ?? ['A']).size;
-      const depths = recycleDepths(recycleSchedule, trajectoryFrames.length || nsteps, nsteps);
-      const totalPasses = depths.reduce((acc, d) => acc + d, 0);
-
-      this.els.metricTokens.textContent = `${n} (${chains} ch)`;
-      this.els.metricAtoms.textContent = String(atomCount);
-      this.els.metricLatency.textContent = `${elapsedS} s`;
-      if (this.els.metricParity.textContent === '-') {
-        this.els.metricParity.textContent = `${totalPasses} passes`;
+      const firstDesignChoice = viewChoices.find((c) => c.label === 'Design 1');
+      if (firstDesignChoice) {
+        this._renderDesignResultsRow(viewChoices, firstDesignChoice.sessionId);
+        this.studioSessionId = firstDesignChoice.sessionId;
+        const viewInfo = this.generatedViews.get(firstDesignChoice.sessionId);
+        this._navigateStudioToSession(firstDesignChoice.sessionId, {
+          withTrajectory: Boolean(viewInfo?.hasTrajectory),
+        });
       }
 
       this.setProgress(1, 'idle');
-      this.setStatus(
-        `Done in ${elapsedS} s (${backendLabel}) · ${n} tokens · ${atomCount} all-atom coordinates decoded.`
-      );
+      const stopNote = earlyStops.length ? ` Converged early at step ${earlyStops.join(', ')}.` : '';
+      this.setStatus(`Generated from input revision ${inputRevision} (${elapsedS} s on ${backendLabel}).${stopNote}`);
     } catch (err) {
-      console.error('RFD4-Proteina run failed:', err);
       this.setProgress(0, 'idle');
-      this.setStatus(`Error: ${err.message}`, true);
-    } finally {
-      this.els.predictBtn.disabled = false;
-    }
-  }
-
-  async runParityCheck() {
-    try {
-      this.els.parityBtn.disabled = true;
-      await this.ensureWeightsLoaded(this.prevArchChoice);
-      if (!this.gpuModel) {
-        this.setStatus('WebGPU unavailable on this browser; running on CPU reference.', true);
-        return;
+      try {
+        await window.__rfd4pRestoreInputView?.();
+      } catch {
+        // Ignore
       }
-      const { batch, n, atoms } = this._buildCurrentBatch();
-      const seed = Number.parseInt(this.els.seedInput.value, 10) || 42;
-      this.setStatus(`Verifying WebGPU vs CPU float32 parity on ${n} tokens (1 step + decoder)...`);
-      await new Promise((r) => setTimeout(r, 15));
-
-      const opts = { nsteps: 1, recycleSchedule: 'none', seed, inputAtoms: atoms };
-      const gpuRes = await this.gpuModel.generate(batch, opts);
-      const cpuRes = await generateRfd4pCpu(batch, this.activeWeights, this.activeConfig, opts);
-
-      const caDiff = maxAbsDiff(gpuRes.x.bb_ca, cpuRes.x.bb_ca);
-      const atomDiff = maxAbsDiff(gpuRes.coors, cpuRes.coors);
-      this.els.metricParity.textContent = `${atomDiff.toExponential(1)} Å`;
-      this.setStatus(
-        `WebGPU vs CPU Parity Verified · max |ΔCα| = ${caDiff.toExponential(2)} nm · max |ΔAllAtom| = ${atomDiff.toExponential(2)} Å`
-      );
-    } catch (err) {
-      this.setStatus(`Parity check error: ${err.message}`, true);
+      if (abortController.signal.aborted || String(err?.message || '').includes('aborted')) {
+        this.setStatus('Generation stopped. Your input is unchanged.', false);
+      } else {
+        console.error('RFD4-Proteina run failed:', err);
+        this.setStatus(`Generation failed. ${err.message} Your input is unchanged.`, true);
+      }
     } finally {
-      this.els.parityBtn.disabled = false;
+      // A newer run (Generate pressed again) owns the strip once it has started.
+      if (this.activeAbortController === abortController) liveSequence.stop();
+      if (this.activeAbortController === abortController) {
+        this.activeAbortController = null;
+      }
+      this.els.predictBtn.textContent = 'Generate design';
+      this.els.predictBtn.classList.remove('secondary');
+      this.els.predictBtn.disabled = false;
     }
   }
 }
 
 const boot = () => {
-  const app = new Rfd4pLocalFoldApp();
+  const app = new Rfd4pStudioApp();
   window.rfd4pApp = app;
   app.init();
 };

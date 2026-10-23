@@ -53,10 +53,11 @@ export function recycleDepths(schedule, nsteps, fullNsteps = nsteps) {
   if (depths.length === fullNsteps) {
     return depths.slice(depths.length - nsteps);
   }
-  if (fullNsteps === nsteps && depths.length > 0) {
-    return Array.from({ length: nsteps }, (_, i) =>
-      depths[Math.min(depths.length - 1, Math.floor((i * depths.length) / nsteps))]
+  if (depths.length > 0 && fullNsteps >= nsteps) {
+    const fullDepths = Array.from({ length: fullNsteps }, (_, i) =>
+      depths[Math.min(depths.length - 1, Math.floor((i * depths.length) / fullNsteps))]
     );
+    return fullDepths.slice(fullDepths.length - nsteps);
   }
   throw new Error(`recycle schedule expands to ${depths.length}, want ${fullNsteps}`);
 }

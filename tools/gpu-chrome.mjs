@@ -188,12 +188,12 @@ try {
   const module = await import(${JSON.stringify(modulePath)});
   if (typeof module.main !== "function") throw new Error("module exports no main(device, args)");
   const value = await module.main(device, ${JSON.stringify(moduleArgs)});
-  post({ ok: true, value, logs, adapter: {
+  await post({ ok: true, value, logs, adapter: {
     vendor: adapter.info?.vendor, architecture: adapter.info?.architecture,
     description: adapter.info?.description, features: [...device.features],
   } });
 } catch (error) {
-  post({ ok: false, error: error && error.stack ? error.stack : String(error), logs });
+  await post({ ok: false, error: error && error.stack ? error.stack : String(error), logs });
 }
 </script>`;
 }

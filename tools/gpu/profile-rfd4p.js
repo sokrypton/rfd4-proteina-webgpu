@@ -120,16 +120,18 @@ export async function main(device, args = []) {
 
   // End-to-end 60-step benchmark on uncond_short (low & medium) and ppi_pdl1 (low)
   const e2e = {};
-  for (const [presetId, schedule] of [
-    ['uncond_short', 'low'],
-    ['uncond_short', 'medium'],
-    ['ppi_pdl1', 'low'],
-  ]) {
-    const { batch, n, atoms } = await loadPresetBatch(presetId);
-    const t0 = performance.now();
-    await gen.generate(batch, { nsteps: 60, recycleSchedule: schedule, seed: 42, inputAtoms: atoms });
-    const wallMs = Number((performance.now() - t0).toFixed(1));
-    e2e[`${presetId}_${schedule}_60steps`] = { n, schedule, wallMs };
+  if (opt.e2e !== '0') {
+    for (const [presetId, schedule] of [
+      ['uncond_short', 'low'],
+      ['uncond_short', 'medium'],
+      ['ppi_pdl1', 'low'],
+    ]) {
+      const { batch, n, atoms } = await loadPresetBatch(presetId);
+      const t0 = performance.now();
+      await gen.generate(batch, { nsteps: 60, recycleSchedule: schedule, seed: 42, inputAtoms: atoms });
+      const wallMs = Number((performance.now() - t0).toFixed(1));
+      e2e[`${presetId}_${schedule}_60steps`] = { n, schedule, wallMs };
+    }
   }
 
   gen.destroy();
