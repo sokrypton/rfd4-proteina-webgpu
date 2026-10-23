@@ -988,8 +988,10 @@ class Rfd4pStudioApp {
         let lastStepEnd = performance.now();
         let lastStepMs = 0;
         const LIVE_FRAME_INTERVAL_MS = 320;
+        // Not gated on liveRenderBusy: the previous frame's Mol* update almost always finishes during this trunk pass,
+        // and a skipped decode used to fall back to a CA-only frame (frozen sequence, sheets twisted by invented O).
         const wantLiveFrame = (step, total) =>
-          !liveRenderBusy && (step === 0 || (step < total - 1 && performance.now() + lastStepMs - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS));
+          step === 0 || (step < total - 1 && performance.now() + lastStepMs - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS);
         const motifOverlay = buildMotifOverlayAtoms(atoms);
         const motifOverlayCif = motifOverlay.length
           ? toCifString(motifOverlay, { dataBlockName: 'motif' }) + entityCif(motifOverlay, new Set([0]))
@@ -1047,7 +1049,9 @@ class Rfd4pStudioApp {
 
           const now = performance.now();
           const isStopping = info.step > 0 && (info.step === info.nsteps - 1 || Boolean(info.convergence?.stop));
-          if (!liveRenderBusy && !isStopping && (info.step === 0 || now - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS)) {
+          // On the GPU path only decoded frames are shown; the CA-only frame is for the CPU backend (no live decode).
+          const frameReady = Boolean(info.decoded) || !useGpu;
+          if (frameReady && !liveRenderBusy && !isStopping && (info.step === 0 || now - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS)) {
             if (typeof window.__rfd4pRenderLiveFrame === 'function') {
               const liveCif = liveAllAtomCif(info) ?? buildLiveFrameCifFromCa(alignedCaNm, tokens, null, UNIFIED_ATOM37_TOKENS);
               if (liveCif) {
