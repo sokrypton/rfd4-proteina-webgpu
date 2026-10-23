@@ -241,6 +241,16 @@ To avoid re-investigating solved problems or breaking subtle invariants, here is
    - Spreading or `JSON.stringify`ing `adapter.info.subgroupMatrixConfigs[i]` yields `{}`. Always extract `{ componentType: c.componentType, resultComponentType: c.resultComponentType, M: c.M, N: c.N, K: c.K }` explicitly, as [`Rfd4pEngine`](./webgpu/rfd4p/engine.js) now does.
 4. **Workgroup `vec4` Scalar Component Writes Race on Metal**:
    - Writing scalar components (`ta[i].x = ...`) of a `var<workgroup> ta: array<vec4<...>>` from different threads compiles to a non-atomic read-modify-write of the whole `vec4` on Metal. Always write whole `vec4`s (`ta[taWrite] = vec4(...)`) or declare scalar workgroup arrays (`array<f16, ...>` / `array<f32, ...>`).
+5. **Four `gemmSource` variants on the stock-Chrome path all LOST on Apple M2 (2026-10-23)**, measured inside the real trunk with `tools/gpu/bench-kernels.js` (one trunk pass, GPU timestamps, 3 interleaved rounds, `LOCALFOLD_STOCK_FLAGS=1`, n = 100 and 208). The current 64x128 tile / 4x8 per thread / `f16` staging kernel is a local optimum; anything that adds registers or workgroup bytes per thread loses about in proportion, so occupancy is the binding constraint:
+
+   | Variant | Idea | n = 100 | n = 208 | Numerics |
+   |---|---|---:|---:|---|
+   | `f32` workgroup staging | convert once on store instead of per read | 0.73x | 0.73x | same |
+   | `mt8`: 8x8 per thread (two 64-row halves, 128-row tile) | 2x FMAs per shared load | 0.77x | 0.77x | bit-identical |
+   | `f16` FMA with per-k-tile `f16` partials | 1.7x `f16` ALU | 0.89x | 0.89x | worse (`zRel` 1e-3) |
+   | register prefetch of the next k-tile | overlap global loads with compute | 0.94x | 0.93x | bit-identical |
+
+   Prefetch alone won where K = 768 (`gemm [nn]x384x768` 1.05-1.07x, `swigluLinear` 1.05x) and lost where K = 384 (`triProjG`, `Q.l1Fused` 0.87-0.88x): about 1% of a pass if enabled only for K >= 768, not worth the code. A further gain needs a different kernel class (e.g. subgroup-shuffle register blocking), not a tweak of this one.
 
 ---
 
