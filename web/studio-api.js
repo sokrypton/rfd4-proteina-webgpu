@@ -26,6 +26,7 @@ import {
 } from '../shared/rfd4p/pipeline/cif.js';
 import { toPdbString } from '../shared/rfd4p/output.js';
 import { decodeTextOrZstd } from '../shared/rfd4p/pipeline/zstd.js';
+import { prepareRcsbStructure } from '../shared/rfd4p/pipeline/prepare.js';
 import { evalPathSelection, evalSelection } from '../shared/rfd4p/pipeline/spec.js';
 
 const RESIDUE_CODES = {
@@ -342,7 +343,13 @@ function fmtCifVal(v) {
   if (typeof v === 'boolean') return v ? 'True' : 'False';
   const s = String(v);
   if (s === '') return '.';
-  if (/[\s'"]/.test(s)) return `'${s.replace(/'/g, '"')}'`;
+  // CIF quoting: delimit with the quote character the value does not contain (primed nucleic-acid atom names such as
+  // O5' must round-trip), and quote values a parser would read as syntax.
+  if (/[\s'"]/.test(s) || /^[_#$;[\]]/.test(s) || /^(data|loop|save|global|stop)_/i.test(s)) {
+    if (!s.includes('"')) return `"${s}"`;
+    if (!s.includes("'")) return `'${s}'`;
+    return `"${s.replace(/"/g, "'")}"`;
+  }
   return s;
 }
 
@@ -355,6 +362,14 @@ export class StudioDoc {
     this.rawCif = isPdb ? null : normalizedCif;
     this.cifBlock = parseCifBlock(normalizedCif);
     this.atoms = parseCifToAtomArray(normalizedCif, { fixArginines: opts.preset === 'rcsb' });
+    this.importNotes = [];
+    if (opts.preset === 'rcsb') {
+      // "Unannotated input": the AtomWorks rcsb preset's assembly / water / additive / MSE preparation.
+      const prepared = prepareRcsbStructure(this.atoms, this.cifBlock, { assemblyId: opts.assembly ?? '1' });
+      this.atoms = prepared.atoms;
+      this.importNotes = prepared.notes;
+      computeIdAndEntityAnnotations(this.atoms);
+    }
     this.atoms.distanceRestraints = this._parseInitialRestraints(this.cifBlock);
     this.atoms.cathText = this._parseInitialCathText(this.cifBlock, this.atoms.nAtoms);
     if (opts.preset === 'rcsb' && opts.loadStandardAnnotations === false) {
@@ -1479,6 +1494,7 @@ export class StudioDoc {
     const targetChain = newChain ? ((chainId || '').trim() || this.nextChainId()) : a.chain_id[atomIndex ?? 0];
     let insertPos = n;
     let resId = 1;
+    let shiftDownstream = false;
 
     if (!newChain && atomIndex !== null && atomIndex >= 0 && atomIndex < n) {
       const resStarts = getResidueSegments(a);
@@ -1490,11 +1506,31 @@ export class StudioDoc {
         }
       }
       insertPos = before ? resStarts[rIdx] : resStarts[rIdx + 1];
-      resId = before ? a.res_id[resStarts[rIdx]] : a.res_id[resStarts[rIdx]] + 1;
-      for (let i = insertPos; i < n; i += 1) {
-        if (a.chain_id[i] === targetChain) {
-          a.res_id[i] += 1;
-          a.auth_seq_id[i] += 1;
+      // atomworks `_compute_insert_res_id`: take a numbering gap if there is one, else prev + 1 and shift the rest
+      // (inserting before the chain's first residue takes first - 1 when that is still >= 0).
+      const chainIdx = [];
+      for (let i = 0; i < n; i += 1) if (a.chain_id[i] === targetChain) chainIdx.push(i);
+      const nBefore = chainIdx.filter((i) => i < insertPos).length;
+      if (nBefore > 0) {
+        const prevResId = a.res_id[chainIdx[nBefore - 1]];
+        const nextResId = nBefore < chainIdx.length ? a.res_id[chainIdx[nBefore]] : null;
+        if (nextResId !== null && nextResId > prevResId + 1) {
+          resId = nextResId - 1;
+        } else {
+          resId = prevResId + 1;
+          shiftDownstream = true;
+        }
+      } else {
+        const firstResId = a.res_id[chainIdx[0]];
+        resId = firstResId > 0 ? firstResId - 1 : firstResId;
+        shiftDownstream = firstResId <= 0;
+      }
+      if (shiftDownstream) {
+        for (let i = insertPos; i < n; i += 1) {
+          if (a.chain_id[i] === targetChain && a.res_id[i] >= resId) {
+            a.res_id[i] += 1;
+            a.auth_seq_id[i] += 1;
+          }
         }
       }
     }
@@ -1564,12 +1600,48 @@ export class StudioDoc {
       v >= insertPos ? v + 1 : v,
       bt,
     ]);
+    this._installSentinelBonds(insertPos, ct);
     computeIdAndEntityAnnotations(a);
 
     return {
       changed: true,
       message: `Inserted expandable segment ${compName} on chain ${targetChain}.`,
     };
+  }
+
+  /**
+   * Wire an expandable-segment sentinel into the polymer bond graph (atomworks `_install_sentinel_bonds`): single
+   * bonds to the previous residue's terminal polymer atom and the next residue's start atom in the same chain (an
+   * adjacent one-atom sentinel stands in for either), replacing any direct bond between those two. Without these the
+   * realized segment is a separate fragment to the model.
+   */
+  _installSentinelBonds(sentinelIdx, chainType) {
+    const a = this.atoms;
+    const isNa = chainType === CHAIN_TYPE.DNA || chainType === CHAIN_TYPE.RNA;
+    const [termName, startName] = isNa ? ["O3'", 'P'] : ['C', 'N'];
+    const segMin = a.annotations['annotation_expsegmin_1_residue'];
+    const resStarts = getResidueSegments(a);
+    const r = resStarts.findIndex((s, k) => k < resStarts.length - 1 && sentinelIdx >= s && sentinelIdx < resStarts[k + 1]);
+    const chain = a.chain_id[sentinelIdx];
+    const pick = (k, name) => {
+      if (k < 0 || k >= resStarts.length - 1) return null;
+      const s = resStarts[k];
+      const e = resStarts[k + 1];
+      if (a.chain_id[s] !== chain) return null;
+      for (let i = s; i < e; i += 1) {
+        if (a.atom_name[i] === name || (e - s === 1 && segMin && segMin[i] !== -1)) return i;
+      }
+      return null;
+    };
+    const prev = pick(r - 1, termName);
+    const next = pick(r + 1, startName);
+    const key = (u, v) => `${Math.min(u, v)}-${Math.max(u, v)}`;
+    let bonds = a.bonds || [];
+    if (prev !== null && next !== null) bonds = bonds.filter(([u, v]) => key(u, v) !== key(prev, next));
+    const have = new Set(bonds.map(([u, v]) => key(u, v)));
+    if (prev !== null && !have.has(key(prev, sentinelIdx))) bonds.push([prev, sentinelIdx, BOND_TYPE.SINGLE]);
+    if (next !== null && !have.has(key(sentinelIdx, next))) bonds.push([sentinelIdx, next, BOND_TYPE.SINGLE]);
+    a.bonds = bonds;
   }
 
   clearInternalCoordinateTargets(indices, scope = 'atom') {
@@ -2634,6 +2706,7 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
       const text = file && typeof file.text === 'function' ? await file.text() : String(file || '');
       const { sessionId, doc } = store.createSession(text, name, {
         preset,
+        assembly: String(form?.get('assembly') ?? parsedOptions.assembly ?? '1'),
         loadStandardAnnotations: parsedOptions.load_standard_annotations,
       });
       store.activeSessionId = sessionId;
