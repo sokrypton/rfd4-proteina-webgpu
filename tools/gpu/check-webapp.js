@@ -237,10 +237,7 @@ export async function main() {
     app.studioSessionId = sessData.session_id;
     app.inputSessionId = sessData.session_id;
     app.useStudioSession = true;
-    if (app.els.taskSelect) {
-      app.els.taskSelect.value =
-        ex.task === 'partial_diffusion' || ex.task === 'inverse_folding' ? ex.task : 'unconditional';
-    }
+    app._setPartialDiffusion(ex.task === 'partial_diffusion');
     const tEx0 = performance.now();
     await app.runDesign({ nsteps: 5, recycleSchedule: 'none' });
     const exElapsedMs = Math.round(performance.now() - tEx0);

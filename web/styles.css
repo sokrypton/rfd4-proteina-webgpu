@@ -386,3 +386,18 @@ body.studio-fullscreen-body {
   background: var(--accent, #82aaff);
   transition: none;
 }
+
+.rfd4p-thinking-row {
+  margin-bottom: 8px;
+}
+
+.rfd4p-sampling-note {
+  margin: 0 0 6px;
+  color: var(--text-subtle, #a0a3ab);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.rfd4p-sampling-body label:has(input:disabled) {
+  opacity: 0.5;
+}

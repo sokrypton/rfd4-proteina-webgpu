@@ -20,6 +20,15 @@ function pyRound(x) {
   return Math.round(x);
 }
 
+/**
+ * Denoising steps a partial trajectory runs (`round(fraction * nsteps)`, half to even). The schedule check in
+ * `buildPartialSchedule` needs every caller to agree on this, so use it rather than `Math.round`, which differs on
+ * exact halves (50% of 5 steps).
+ */
+export function partialStepCount(frac, nsteps) {
+  return pyRound(frac * nsteps);
+}
+
 function validatePartialT(partialTDict) {
   const bad = Object.entries(partialTDict).filter(([, t]) => t >= 1.0);
   if (bad.length > 0) {
@@ -86,7 +95,7 @@ export function resolvePartialT(opts = {}, sampling = DEFAULT_SAMPLING, refNstep
       throw new Error(`partial_trajectory_fraction_steps must be in (0, 1], got ${frac}.`);
     }
     const nsteps = opts.nsteps ?? sampling.nsteps;
-    const remainingSteps = pyRound(frac * nsteps);
+    const remainingSteps = partialStepCount(frac, nsteps);
     if (remainingSteps < 1) {
       throw new Error(
         `partial_trajectory_fraction_steps=${frac} with nsteps=${nsteps} rounds to zero denoising steps.`,

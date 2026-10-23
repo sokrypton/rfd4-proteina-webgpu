@@ -30,6 +30,7 @@ import { processSampleToAtoms, toCifString, toPdbString } from '../../shared/rfd
 import {
   RESAMPLED_FORWARD_MARGINAL,
   buildPartialSchedule,
+  partialStepCount,
   corruptBatch,
   resolveInverseFoldingMethod,
   resolvePartialT,
@@ -163,7 +164,7 @@ export class Rfd4pGeneratorGpu {
     const partialTDict = resolvePartialT({ ...opts, nsteps: baseNsteps }, sampling);
     const isPartial = Object.keys(partialTDict).length > 0;
     const frac = opts.partialTrajectoryFractionSteps ?? opts.partial_trajectory_fraction_steps ?? null;
-    const nsteps = isPartial && frac != null ? Math.round(frac * baseNsteps) : baseNsteps;
+    const nsteps = isPartial && frac != null ? partialStepCount(frac, baseNsteps) : baseNsteps;
     const depths = recycleDepths(opts.recycleSchedule ?? 'medium', nsteps, opts.fullNsteps ?? baseNsteps);
 
     let sched;

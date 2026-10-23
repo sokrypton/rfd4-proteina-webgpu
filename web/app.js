@@ -80,11 +80,6 @@ function extractTokenMetadata(batch) {
   return tokens;
 }
 
-function normalizeTaskMode(task) {
-  if (task === 'partial_diffusion' || task === 'inverse_folding') return task;
-  return 'unconditional';
-}
-
 function extractFixedTokenAnchorsNm(batch, n) {
   const atoms = batch.__atoms ?? null;
   const crdArr = atoms?.condition_coordinate_1_atom;
@@ -402,14 +397,16 @@ class Rfd4pStudioApp {
       cardStaging: document.getElementById('rfd4p-card-staging'),
       studioCard: document.getElementById('rfd4p-studio-card'),
       predictBtn: document.getElementById('predict'),
-      taskSelect: document.getElementById('task-select'),
       thinkingRadioGroup: document.getElementById('thinking-radio-group'),
       samplesInput: document.getElementById('samples-input'),
       seedInput: document.getElementById('seed-input'),
-      backboneNoise: document.getElementById('backbone-noise'),
-      backboneNoiseNum: document.getElementById('backbone-noise-num'),
-      latentNoise: document.getElementById('latent-noise'),
-      latentNoiseNum: document.getElementById('latent-noise-num'),
+      backboneK: document.getElementById('backbone-k'),
+      backboneKNum: document.getElementById('backbone-k-num'),
+      latentK: document.getElementById('latent-k'),
+      latentKNum: document.getElementById('latent-k-num'),
+      partialDiffusion: document.getElementById('partial-diffusion'),
+      partialPercent: document.getElementById('partial-diffusion-percent'),
+      partialPercentNum: document.getElementById('partial-diffusion-percent-num'),
       earlyStop: document.getElementById('early-stop'),
       statusBox: document.getElementById('generation-status'),
       statusMessage: document.getElementById('rfd4p-status-message'),
@@ -463,6 +460,18 @@ class Rfd4pStudioApp {
     this.els.progress.dataset.state = state;
     this.els.progress.value = Math.max(0, Math.min(1, fraction));
     this.els.progress.hidden = state === 'idle';
+  }
+
+  /** Tick or clear Partial diffusion (optionally setting its %); the % controls are live only when ticked. */
+  _setPartialDiffusion(enabled, percent = null) {
+    const { partialDiffusion, partialPercent, partialPercentNum } = this.els;
+    if (partialDiffusion) partialDiffusion.checked = Boolean(enabled);
+    if (percent != null && partialPercent) {
+      partialPercent.value = String(Math.round(percent));
+      if (partialPercentNum) partialPercentNum.value = partialPercent.value;
+    }
+    if (partialPercent) partialPercent.disabled = !enabled;
+    if (partialPercentNum) partialPercentNum.disabled = !enabled;
   }
 
   _getSelectedThinking() {
@@ -523,9 +532,7 @@ class Rfd4pStudioApp {
               if (this.activeAbortController) {
                 this.activeAbortController.abort();
               }
-              if (event.data.task && this.els.taskSelect) {
-                this.els.taskSelect.value = normalizeTaskMode(event.data.task);
-              }
+              this._setPartialDiffusion(event.data.task === 'partial_diffusion');
               this.setStatus('Ready to generate.', false, { visible: false });
             }
           }
@@ -672,9 +679,10 @@ class Rfd4pStudioApp {
     this.currentCifText = '';
     this.useStudioSession = false;
 
-    if (this.els.taskSelect && PRESET_TO_TASK[preset.id]) {
-      this.els.taskSelect.value = PRESET_TO_TASK[preset.id];
-    }
+    this._setPartialDiffusion(
+      PRESET_TO_TASK[preset.id] === 'partial_diffusion',
+      preset.partialTrajectoryFractionSteps != null ? preset.partialTrajectoryFractionSteps * 100 : null,
+    );
     if (preset.recycleSchedule) {
       this._syncThinkingRadios(preset.recycleSchedule);
     }
@@ -742,8 +750,12 @@ class Rfd4pStudioApp {
       slider.oninput = () => { numInput.value = slider.value; };
       numInput.oninput = () => { slider.value = numInput.value; };
     };
-    bindSliderPair(this.els.backboneNoise, this.els.backboneNoiseNum);
-    bindSliderPair(this.els.latentNoise, this.els.latentNoiseNum);
+    bindSliderPair(this.els.backboneK, this.els.backboneKNum);
+    bindSliderPair(this.els.latentK, this.els.latentKNum);
+    bindSliderPair(this.els.partialPercent, this.els.partialPercentNum);
+    if (this.els.partialDiffusion) {
+      this.els.partialDiffusion.onchange = () => this._setPartialDiffusion(this.els.partialDiffusion.checked);
+    }
 
     if (this.els.predictBtn) {
       this.els.predictBtn.onclick = () => {
@@ -858,22 +870,18 @@ class Rfd4pStudioApp {
       const numSamples = Math.max(1, Math.min(8, Number.parseInt(this.els.samplesInput?.value ?? '1', 10) || 1));
       const nsteps = overrides.nsteps ?? 60;
       const recycleSchedule = overrides.recycleSchedule ?? this._getSelectedThinking();
-      const backboneNoise = Math.max(0.01, Math.min(1.0, Number.parseFloat(this.els.backboneNoise?.value ?? '0.3') || 0.3));
-      const latentNoise = Math.max(0.01, Math.min(1.0, Number.parseFloat(this.els.latentNoise?.value ?? '0.1') || 0.1));
+      // Sampling temperature as upstream's Studio provider exposes it: TSR K per modality (lower = hotter).
+      const backboneK = Math.max(1, Math.min(20, Number.parseFloat(this.els.backboneK?.value ?? '16') || 16));
+      const latentK = Math.max(1, Math.min(6, Number.parseFloat(this.els.latentK?.value ?? '4') || 4));
 
       const firstBatchRes = this._buildCurrentBatch(baseSeed);
 
       const preset = this.currentPreset;
-      const task = this.els.taskSelect?.value || 'unconditional';
-      const inverseFolding =
-        task === 'inverse_folding' ||
-        (!this.useStudioSession && Boolean(preset?.inverseFolding));
-      const partialTrajectoryFractionSteps =
-        task === 'partial_diffusion'
-          ? 0.4
-          : !this.useStudioSession && preset?.partialTrajectoryFractionSteps != null
-          ? preset.partialTrajectoryFractionSteps
-          : null;
+      // What to design comes from the input's annotations (as in upstream's Space); partial diffusion is the one
+      // option on top. The resampled inverse-folding sampler is kept for the benchmark preset only.
+      const inverseFolding = !this.useStudioSession && Boolean(preset?.inverseFolding);
+      const partialPercent = Math.max(1, Math.min(100, Number.parseFloat(this.els.partialPercent?.value ?? '70') || 70));
+      const partialTrajectoryFractionSteps = this.els.partialDiffusion?.checked ? partialPercent / 100 : null;
       const needEncoder = Boolean(inverseFolding || partialTrajectoryFractionSteps != null);
       if (needEncoder) {
         const has3dCoords = Boolean(
@@ -898,11 +906,11 @@ class Rfd4pStudioApp {
         nsteps,
         bb_ca: {
           ...DEFAULT_SAMPLING.bb_ca,
-          step: { ...DEFAULT_SAMPLING.bb_ca.step, sc_scale_noise: backboneNoise },
+          step: { ...DEFAULT_SAMPLING.bb_ca.step, tsr_k: backboneK },
         },
         local_latents: {
           ...DEFAULT_SAMPLING.local_latents,
-          step: { ...DEFAULT_SAMPLING.local_latents.step, sc_scale_noise: latentNoise },
+          step: { ...DEFAULT_SAMPLING.local_latents.step, tsr_k: latentK },
         },
       };
 
