@@ -1,5 +1,8 @@
 # AGENTS.md
 
+> Working on speed? Read [`SPEED-HANDOFF.md`](./SPEED-HANDOFF.md) first: current per-kernel profiles on stock and
+> developer Chrome, ranked opportunities, what already lost, and the gates.
+
 Operational guide for coding agents working in `rfd4p` (WebGPU implementation of `RosettaCommons/RFD4-Proteina`, inspired by `../localfold`).
 
 ## Architecture & Module Layout

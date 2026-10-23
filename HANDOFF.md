@@ -1,5 +1,7 @@
 # Handoff to Apple Silicon (M2 & M5): RFD4-Proteina WebGPU Port (`localdesign`)
 
+> Newer: [`SPEED-HANDOFF.md`](./SPEED-HANDOFF.md) (2026-10-23) has the current profiles and the next speed work.
+
 Written on the Linux / NVIDIA Ampere A100 box on 2026-10-22, for an agent working on an **Apple M2** and **Apple M5**.
 Read [`AGENTS.md`](./AGENTS.md) first (module layout, ES-module rules, and WebGPU numerical invariants), then this file.
 Also consult `../localfold/docs/M5-HANDOFF.md` and `../localfold/webgpu/runtime/device-profile.js` if `../localfold` is checked out alongside this repo.
