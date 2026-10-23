@@ -27,6 +27,7 @@ import {
 import { toPdbString } from '../shared/rfd4p/output.js';
 import { decodeTextOrZstd } from '../shared/rfd4p/pipeline/zstd.js';
 import { prepareRcsbStructure } from '../shared/rfd4p/pipeline/prepare.js';
+import { componentsNeedingCcd, fetchCcdComponents, mergeCcdIntoBlock } from '../shared/rfd4p/pipeline/ccd.js';
 import { evalPathSelection, evalSelection } from '../shared/rfd4p/pipeline/spec.js';
 
 const RESIDUE_CODES = {
@@ -353,6 +354,23 @@ function fmtCifVal(v) {
   return s;
 }
 
+/**
+ * `new StudioDoc`, plus the chemistry a plain RCSB file leaves out: multi-atom components with no bond tables
+ * (nonstandard residues, ligands) get their CCD entries fetched from RCSB and the document is rebuilt with them,
+ * as AtomWorks does from its bundled CCD. Offline, the document is returned as before.
+ */
+export async function createStudioDocWithCcd(text, name, opts = {}, fetchFn = globalThis.fetch?.bind(globalThis)) {
+  const doc = new StudioDoc(text, name, opts);
+  const a = doc.atoms;
+  const multiAtom = new Set();
+  const starts = getResidueSegments(a);
+  for (let r = 0; r < starts.length - 1; r += 1) if (starts[r + 1] - starts[r] > 1) multiAtom.add(a.res_name[starts[r]]);
+  const needed = componentsNeedingCcd(multiAtom, doc.cifBlock);
+  if (!needed.length || !fetchFn) return doc;
+  const { blocks } = await fetchCcdComponents(needed, { fetchFn });
+  return blocks.size ? new StudioDoc(text, name, { ...opts, ccdBlocks: blocks }) : doc;
+}
+
 export class StudioDoc {
   constructor(cifText, name = 'structure.cif', opts = {}) {
     this.name = name;
@@ -361,7 +379,8 @@ export class StudioDoc {
     const normalizedCif = isPdb ? pdbTextToCifText(decoded) : decoded;
     this.rawCif = isPdb ? null : normalizedCif;
     this.cifBlock = parseCifBlock(normalizedCif);
-    this.atoms = parseCifToAtomArray(normalizedCif, { fixArginines: opts.preset === 'rcsb' });
+    if (opts.ccdBlocks?.size) mergeCcdIntoBlock(this.cifBlock, opts.ccdBlocks);
+    this.atoms = parseCifToAtomArray(normalizedCif, { fixArginines: opts.preset === 'rcsb', ccdBlocks: opts.ccdBlocks });
     this.importNotes = [];
     if (opts.preset === 'rcsb') {
       // "Unannotated input": the AtomWorks rcsb preset's assembly / water / additive / MSE preparation.
@@ -2704,11 +2723,14 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
       const parsedOptions = rawOptions ? JSON.parse(String(rawOptions)) : {};
       const name = ((file && file.name) || 'structure.cif').replace(/\.(cif|mmcif|pdb|ent|zst)+$/i, '');
       const text = file && typeof file.text === 'function' ? await file.text() : String(file || '');
-      const { sessionId, doc } = store.createSession(text, name, {
+      const sessionOpts = {
         preset,
         assembly: String(form?.get('assembly') ?? parsedOptions.assembly ?? '1'),
         loadStandardAnnotations: parsedOptions.load_standard_annotations,
-      });
+      };
+      const { sessionId } = store.createSession(text, name, sessionOpts);
+      const doc = await createStudioDocWithCcd(text, name, sessionOpts, nativeFetch);
+      store.sessions.set(sessionId, doc);
       store.activeSessionId = sessionId;
       return jsonResponse({
         session_id: sessionId,

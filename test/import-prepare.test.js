@@ -96,3 +96,31 @@ test('rcsb preparation: waters, additives, MSE, per-chain altloc, unmodeled resi
   // MET4 (from MSE) is completed with its missing side chain.
   assert.deepEqual(atoms.atom_name.filter((_, i) => atoms.res_id[i] === 4).slice(0, 8), ['N', 'CA', 'C', 'O', 'CB', 'CG', 'SD', 'CE']);
 });
+
+test('CCD components are fetched only when needed, merged, and failures are tolerated', async () => {
+  const { componentsNeedingCcd, fetchCcdComponents, mergeCcdIntoBlock } = await import('../shared/rfd4p/pipeline/ccd.js');
+  const fileBlock = parseCifBlock([
+    'data_x', 'loop_', '_chem_comp_bond.comp_id', '_chem_comp_bond.atom_id_1', '_chem_comp_bond.atom_id_2',
+    '_chem_comp_bond.value_order', 'SAM N CA SING', '#',
+  ].join('\n'));
+  // Standard residues, components the file defines, segments and masks are skipped.
+  assert.deepEqual(componentsNeedingCcd(['GLY', 'SAM', 'PTH', '5-10', '<M>', 'UNK'], fileBlock), ['PTH']);
+  const ptH = [
+    'data_PTH', 'loop_', '_chem_comp_atom.comp_id', '_chem_comp_atom.atom_id', '_chem_comp_atom.type_symbol',
+    '_chem_comp_atom.pdbx_aromatic_flag', 'PTH P P N', 'PTH O1P O N', '#',
+    'loop_', '_chem_comp_bond.comp_id', '_chem_comp_bond.atom_id_1', '_chem_comp_bond.atom_id_2',
+    '_chem_comp_bond.value_order', '_chem_comp_bond.pdbx_aromatic_flag', 'PTH P O1P DOUB N', '#',
+  ].join('\n');
+  const calls = [];
+  const fetchFn = async (url) => {
+    calls.push(url);
+    return url.includes('PTH') ? new Response(ptH) : new Response('', { status: 404 });
+  };
+  const { blocks, failed } = await fetchCcdComponents(['PTH', 'NOPE'], { fetchFn });
+  assert.deepEqual([...blocks.keys()], ['PTH']);
+  assert.deepEqual(failed, ['NOPE']);
+  mergeCcdIntoBlock(fileBlock, blocks);
+  assert.deepEqual(fileBlock.chem_comp_bond.comp_id, ['SAM', 'PTH']);
+  assert.deepEqual(fileBlock.chem_comp_bond.pdbx_aromatic_flag, ['?', 'N']);
+  assert.ok(calls.every((u) => u.startsWith('https://files.rcsb.org/ligands/view/')));
+});

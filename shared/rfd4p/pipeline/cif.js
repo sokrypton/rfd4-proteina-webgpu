@@ -863,6 +863,35 @@ export function pdbTextToCifText(pdbText) {
 /**
  * Parse a CIF string, PDB string, or Zstandard-compressed CIF bytes into an AtomArray object.
  */
+/** Row view of a parsed CIF category (columns may be scalars when the category has one row). */
+export const catRows = (cat) => {
+  const cols = cat ? Object.keys(cat) : [];
+  const n = cols.length ? (Array.isArray(cat[cols[0]]) ? cat[cols[0]].length : 1) : 0;
+  return { cols, n, get: (c, r) => (Array.isArray(cat[c]) ? cat[c][r] : cat[c]) };
+};
+
+/**
+ * Append the fetched components' `_chem_comp_atom` / `_chem_comp_bond` rows to `cifBlock` (in place), so bond
+ * building and the Studio export see them exactly as if the file had carried them. Columns missing on either side
+ * are filled with '?'.
+ */
+export function mergeCcdIntoBlock(cifBlock, blocks) {
+  for (const cat of ['chem_comp_atom', 'chem_comp_bond']) {
+    const parts = [...blocks.values()].map((b) => catRows(b[cat])).filter((p) => p.n > 0);
+    if (!parts.length) continue;
+    const base = catRows(cifBlock[cat]);
+    const cols = [...new Set([...base.cols, ...parts.flatMap((p) => p.cols)])];
+    const out = Object.fromEntries(cols.map((c) => [c, []]));
+    for (const src of [{ part: base, cat: cifBlock[cat] }, ...parts.map((p) => ({ part: p }))]) {
+      for (let r = 0; r < src.part.n; r += 1) {
+        for (const c of cols) out[c].push(src.part.cols.includes(c) ? String(src.part.get(c, r)) : '?');
+      }
+    }
+    cifBlock[cat] = out;
+  }
+  return cifBlock;
+}
+
 export function parseCifToAtomArray(cifInput, opts = {}) {
   const rawText = decodeTextOrZstd(cifInput);
   const cifText =
@@ -870,6 +899,8 @@ export function parseCifToAtomArray(cifInput, opts = {}) {
       ? pdbTextToCifText(rawText)
       : rawText;
   const block = parseCifBlock(cifText);
+  // Fetched Chemical Component Dictionary entries (`ccd.js`) for components the file carries no tables for.
+  if (opts.ccdBlocks?.size) mergeCcdIntoBlock(block, opts.ccdBlocks);
   const atomSite = block.atom_site;
   if (!atomSite) {
     throw new Error('CIF block does not contain _atom_site category');
