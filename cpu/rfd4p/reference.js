@@ -807,11 +807,12 @@ export function forwardTrunkCpu(n, f, mask, weights, cfg, nRecycle = 1, opts = {
   const logits = linearLayer(sSeqNorm, n, D, W('nn.sequence_readout.1.weight'), 147);
 
   let insertion = null;
-  if (opts.insertion && getOptionalTensorData(weights, 'nn.insertion_q_proj.0.weight')) {
-    const qNorm = applyNorm(s, n, D, norm, W('nn.insertion_q_proj.0.weight'));
-    const q = linearLayer(qNorm, n, D, W('nn.insertion_q_proj.1.weight'), D);
-    const kNorm = applyNorm(s, n, D, norm, W('nn.insertion_k_proj.0.weight'));
-    const k = linearLayer(kNorm, n, D, W('nn.insertion_k_proj.1.weight'), D);
+  // Plain projections of s, matching webgpu/rfd4p/trunk.js (insQ/insK, no norm). This looked for
+  // `nn.insertion_q_proj.0.weight` — a norm/linear pair that the exported checkpoint does not contain — so the
+  // guard never passed and the reference silently skipped the insertion head, leaving the GPU path unchecked.
+  if (opts.insertion && getOptionalTensorData(weights, 'nn.insertion_q_proj.weight')) {
+    const q = linearLayer(s, n, D, W('nn.insertion_q_proj.weight'), D);
+    const k = linearLayer(s, n, D, W('nn.insertion_k_proj.weight'), D);
     const scale = 1 / Math.sqrt(D);
     insertion = new Float32Array(n * n);
     for (let i = 0; i < n; i += 1) {
