@@ -64,6 +64,20 @@ const MAX_CONCURRENT_DOWNLOADS = 8;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const CACHE_TIMEOUT_MS = 2000;
 
+/**
+ * Whether `url` is served by another machine (worth keeping in the Cache API). Relative URLs are resolved against the
+ * page, so the deployed site's `./weights/...` counts as remote; a local dev server does not.
+ */
+function isRemoteUrl(url) {
+  let resolved;
+  try {
+    resolved = new URL(url, globalThis.location?.href);
+  } catch {
+    return false;
+  }
+  return /^https?:$/.test(resolved.protocol) && !['localhost', '127.0.0.1', '[::1]'].includes(resolved.hostname);
+}
+
 function withTimeout(promise, fallback) {
   return Promise.race([
     promise,
@@ -164,7 +178,7 @@ export function readShardedTensor(record, buffer, copy = false) {
  */
 export async function fetchShardedWeights(baseDir = DEFAULT_LOCAL_SHARDED_DIR, opts = {}) {
   const cleanBase = baseDir.replace(/\/+$/, '');
-  const isRemote = /^https?:\/\//i.test(cleanBase) && !cleanBase.includes('127.0.0.1') && !cleanBase.includes('localhost');
+  const isRemote = isRemoteUrl(cleanBase);
   const {
     includeEncoder = false,
     onProgress = null,
@@ -192,6 +206,16 @@ export async function fetchShardedWeights(baseDir = DEFAULT_LOCAL_SHARDED_DIR, o
   if (useCache && typeof caches !== 'undefined') {
     const cacheName = `rfd4p-sharded-${manifest.bundle?.format ?? 'int8'}-${manifest.bundle?.bytes ?? 0}`;
     cacheStore = await withTimeout(caches.open(cacheName).catch(() => null), null);
+    if (cacheStore) {
+      // Ask the browser not to evict the cached shards under storage pressure (granted silently in Chrome for
+      // engaged sites; a no-op elsewhere). Persisted storage is never evicted, so drop shard caches of older bundles.
+      navigator.storage?.persist?.().catch(() => {});
+      caches.keys()
+        .then((names) => Promise.all(names
+          .filter((name) => name.startsWith('rfd4p-sharded-') && name !== cacheName)
+          .map((name) => caches.delete(name))))
+        .catch(() => {});
+    }
   }
 
   const tensors = {};
@@ -325,7 +349,7 @@ export async function fetchRfd4pConfig(url = DEFAULT_LOCAL_CONFIG_URL) {
  * @param {{onProgress?: (p: {bytesLoaded: number, loadedBytes: number, totalBytes: number, fraction: number, cached?: boolean}) => void, signal?: AbortSignal, cache?: boolean}} [opts]
  */
 export async function fetchSafetensors(url = DEFAULT_LOCAL_WEIGHTS_URL, opts = {}) {
-  const isRemote = /^https?:\/\//i.test(url) && !url.includes('127.0.0.1') && !url.includes('localhost');
+  const isRemote = isRemoteUrl(url);
   const { onProgress = null, signal = null, cache: useCache = isRemote } = opts;
   let cacheStore = null;
   if (useCache && typeof caches !== 'undefined') {
