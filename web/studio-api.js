@@ -1160,43 +1160,76 @@ export class StudioDoc {
     }
   }
 
+  /** Polymer residues (not ligands, not segment sentinels) of `chain`, in order, as {key, resId, atoms}. */
+  _chainResidues(chain) {
+    const a = this.atoms;
+    const out = [];
+    for (let i = 0; i < a.nAtoms; i += 1) {
+      if (String(a.chain_id[i]) !== chain || a.hetero[i] || /^\d+-\d+$/.test(String(a.res_name[i]))) continue;
+      const key = `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}`;
+      if (out[out.length - 1]?.key !== key) out.push({ key, resId: a.res_id[i], atoms: [] });
+      out[out.length - 1].atoms.push(i);
+    }
+    return out;
+  }
+
   /**
-   * Motif scaffolding around a selection: keep the selected residues (coordinates and sequence fixed), delete the other
-   * polymer residues of their chains and put a new-residue segment in each gap (N-terminal, between motif pieces,
-   * C-terminal) whose length range is the original gap length +/- `spread` (a fraction).
+   * Insert one segment per gap `{chain, resId, before, min, max}` (anchored on residue `resId` of `chain`, or a new
+   * chain `chain` when `resId` is null). C-terminal gaps go first so renumbering never moves an anchor still to be used.
    */
-  scaffoldMotif(indices, { spread = 0.25 } = {}) {
+  _insertGapSegments(gaps) {
+    const sorted = [...gaps].sort((g, h) => (g.chain === h.chain ? (h.resId ?? 0) - (g.resId ?? 0) || (g.before ? 1 : -1) : 0));
+    for (const g of sorted) {
+      if (g.resId == null) {
+        this.insertSegment({ minimum: g.min, maximum: g.max, newChain: true, chainId: g.chain });
+        continue;
+      }
+      const anchor = this._chainResidues(g.chain).find((r) => r.resId === g.resId)?.atoms[0];
+      if (anchor != null) this.insertSegment({ minimum: g.min, maximum: g.max, atomIndex: anchor, before: g.before });
+    }
+  }
+
+  /**
+   * Motif scaffolding around a selection: keep the selected residues (sequence + coordinates of the whole residue, or
+   * of its side chain only), delete the other polymer residues of their chains and rebuild them as new residues.
+   * Indexed (default): one segment per gap (N-terminal, between motif pieces, C-terminal), each its original length
+   * +/- `spread`. Unindexed: the motif may sit anywhere, so the chain becomes one segment of `totalMin`-`totalMax`
+   * residues (default: the chain's length +/- `spread`) plus the motif residues.
+   */
+  scaffoldMotif(indices, { spread = 0.25, sidechainsOnly = false, unindexed = false, totalMin = null, totalMax = null } = {}) {
     const keep = this.resolveIndices(indices, 'residue');
     if (!keep.length) throw new Error('select the motif residues first');
     const a = this.atoms;
     const resKey = (i) => `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}`;
     const kept = new Set(keep.map(resKey));
-    const isSentinel = (i) => /^\d+-\d+$/.test(String(a.res_name[i]));
-    const isPolymerAtom = (i) => !a.hetero[i] && !isSentinel(i);
-    const chains = new Set(keep.map((i) => String(a.chain_id[i])));
+    const chains = [...new Set(keep.map((i) => String(a.chain_id[i])))];
+    const range = (len) => {
+      const min = Math.max(1, Math.round(len * (1 - spread)));
+      return { min, max: Math.max(min, Math.round(len * (1 + spread))) };
+    };
 
-    // Per chain, residues in order -> gaps anchored on the kept residue beside them.
     const gaps = [];
     const drop = [];
     for (const chain of chains) {
-      const residues = [];
-      for (let i = 0; i < a.nAtoms; i += 1) {
-        if (String(a.chain_id[i]) !== chain || !isPolymerAtom(i)) continue;
-        const key = resKey(i);
-        if (residues[residues.length - 1]?.key !== key) residues.push({ key, resId: a.res_id[i], keep: kept.has(key) });
-        if (!kept.has(key)) drop.push(i);
+      const residues = this._chainResidues(chain);
+      const others = residues.filter((r) => !kept.has(r.key));
+      for (const r of others) drop.push(...r.atoms);
+      const first = residues.find((r) => kept.has(r.key));
+      if (unindexed) {
+        const def = range(residues.length);
+        const min = Math.max(1, Math.round(totalMin ?? def.min));
+        gaps.push({ chain, resId: first.resId, before: true, min, max: Math.max(min, Math.round(totalMax ?? def.max)) });
+        continue;
       }
       let run = 0;
       let lastKept = null;
-      const flush = (nextKept) => {
+      const flush = (next) => {
         if (!run) return;
-        // A gap after a kept residue is inserted after it; a leading gap goes before the first kept residue.
-        gaps.push(lastKept ? { chain, resId: lastKept.resId, before: false, length: run }
-          : { chain, resId: nextKept.resId, before: true, length: run });
+        gaps.push({ chain, resId: (lastKept ?? next).resId, before: !lastKept, ...range(run) });
         run = 0;
       };
       for (const r of residues) {
-        if (r.keep) {
+        if (kept.has(r.key)) {
           flush(r);
           lastKept = r;
         } else {
@@ -1206,29 +1239,78 @@ export class StudioDoc {
       flush(null);
     }
 
+    const backbone = new Set(['N', 'CA', 'C', 'O', 'OXT']);
+    const crdAtoms = sidechainsOnly ? keep.filter((i) => !backbone.has(String(a.atom_name[i]))) : keep;
     return this.compound(() => {
-      this.setCondition('coordinate', keep, { snapshot: false });
+      this.setCondition('coordinate', keep, { enabled: false, snapshot: false });
+      if (crdAtoms.length) this.setCondition('coordinate', crdAtoms, { snapshot: false });
       this.setCondition('sequence', keep, { snapshot: false });
+      // "Index conditioning" is stored inverted: enabling it marks residues as unindexed (placed anywhere).
+      this.setCondition('index', keep, { enabled: unindexed, snapshot: false });
       if (drop.length) this.deleteAtoms(drop);
-      // C-terminal gaps first, so residue renumbering after an insert never moves an anchor still to be used.
-      gaps.sort((g, h) => (g.chain === h.chain ? h.resId - g.resId || (g.before ? 1 : -1) : 0));
-      for (const g of gaps) {
-        let anchor = -1;
-        for (let i = 0; i < this.atoms.nAtoms; i += 1) {
-          if (String(this.atoms.chain_id[i]) === g.chain && this.atoms.res_id[i] === g.resId && !isSentinel(i)) {
-            anchor = i;
-            break;
-          }
-        }
-        if (anchor < 0) continue;
-        const min = Math.max(1, Math.round(g.length * (1 - spread)));
-        const max = Math.max(min, Math.round(g.length * (1 + spread)));
-        this.insertSegment({ minimum: min, maximum: max, atomIndex: anchor, before: g.before });
-      }
+      this._insertGapSegments(gaps);
       return {
         changed: true,
-        message: `Kept ${kept.size} motif residue${kept.size === 1 ? '' : 's'}; ${drop.length ? `replaced the rest with ${gaps.length} new-residue segment${gaps.length === 1 ? '' : 's'}` : 'nothing else to replace'}.`,
+        message: `Kept ${kept.size} motif residue${kept.size === 1 ? '' : 's'}${unindexed ? ' (placed anywhere)' : ''}; ` +
+          `${gaps.length} new-residue segment${gaps.length === 1 ? '' : 's'}.`,
       };
+    });
+  }
+
+  /** Replace the selected polymer residues with new residues: one `min`-`max` segment per contiguous run. */
+  replaceWithSegments(indices, minimum, maximum) {
+    const sel = this.resolveIndices(indices, 'residue');
+    const a = this.atoms;
+    const keys = new Set(sel.map((i) => `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}`));
+    const min = Math.max(1, Math.round(Number(minimum)) || 1);
+    const max = Math.max(min, Math.round(Number(maximum)) || min);
+    const gaps = [];
+    const drop = [];
+    for (const chain of new Set(sel.map((i) => String(a.chain_id[i])))) {
+      const residues = this._chainResidues(chain);
+      let inRun = false;
+      residues.forEach((r, k) => {
+        if (!keys.has(r.key)) {
+          inRun = false;
+          return;
+        }
+        drop.push(...r.atoms);
+        if (inRun) return;
+        inRun = true;
+        const prev = residues.slice(0, k).reverse().find((x) => !keys.has(x.key));
+        const next = residues.slice(k + 1).find((x) => !keys.has(x.key));
+        gaps.push(prev ? { chain, resId: prev.resId, before: false, min, max }
+          : next ? { chain, resId: next.resId, before: true, min, max }
+          : { chain, resId: null, min, max });
+      });
+    }
+    if (!drop.length) throw new Error('select polymer residues to replace');
+    return this.compound(() => {
+      this.deleteAtoms(drop);
+      this._insertGapSegments(gaps);
+      return { changed: true, message: `Replaced ${keys.size} residues with ${gaps.length} new-residue segment${gaps.length === 1 ? '' : 's'}.` };
+    });
+  }
+
+  /**
+   * Small-molecule binder set-up: optionally remove every polymer chain, keep the ligands (identity always; pose fixed
+   * or predicted) and add a new protein chain of `minimum`-`maximum` residues.
+   */
+  designAroundLigand({ removeProtein = true, poseFixed = true, minimum = 100, maximum = 150 } = {}) {
+    const a = this.atoms;
+    const sentinel = (i) => /^\d+-\d+$/.test(String(a.res_name[i]));
+    const ligand = [];
+    const polymer = [];
+    for (let i = 0; i < a.nAtoms; i += 1) (a.hetero[i] && !sentinel(i) ? ligand : polymer).push(i);
+    if (!ligand.length) throw new Error('this structure has no ligand');
+    return this.compound(() => {
+      if (removeProtein && polymer.length) this.deleteAtoms(polymer);
+      const lig = [];
+      for (let i = 0; i < this.atoms.nAtoms; i += 1) if (this.atoms.hetero[i] && !sentinel(i)) lig.push(i);
+      this.setCondition('sequence', lig, { snapshot: false });
+      this.setCondition('coordinate', lig, { enabled: poseFixed, snapshot: false });
+      this.insertSegment({ minimum, maximum, newChain: true });
+      return { changed: true, message: `Set up a protein of ${minimum}-${maximum} residues around ${new Set(lig.map((i) => this.atoms.res_name[i])).size} ligand(s).` };
     });
   }
 
@@ -3040,7 +3122,26 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
       if (subpath === '/segments/scaffold' && method === 'POST') {
-        const editResult = doc.scaffoldMotif(body.atom_indices, { spread: body.spread ?? 0.25 });
+        const editResult = doc.scaffoldMotif(body.atom_indices, {
+          spread: body.spread ?? 0.25,
+          sidechainsOnly: Boolean(body.sidechains_only),
+          unindexed: Boolean(body.unindexed),
+          totalMin: body.total_min ?? null,
+          totalMax: body.total_max ?? null,
+        });
+        return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
+      }
+      if (subpath === '/segments/replace' && method === 'POST') {
+        const editResult = doc.replaceWithSegments(body.atom_indices, body.minimum, body.maximum);
+        return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
+      }
+      if (subpath === '/segments/ligand-binder' && method === 'POST') {
+        const editResult = doc.designAroundLigand({
+          removeProtein: body.remove_protein ?? true,
+          poseFixed: body.pose_fixed ?? true,
+          minimum: body.minimum ?? 100,
+          maximum: body.maximum ?? 150,
+        });
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
       if (subpath === '/segments/range' && method === 'POST') {

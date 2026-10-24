@@ -126,7 +126,7 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
     else if (allFixed && seqFixed.length === polymer.length && !segments.length) role = 'fixed';
     else if (allFixed && !seqFixed.length && !segments.length) role = 'backbone';
     else if (!fixed.length && seqFixed.length === polymer.length && !segments.length) role = 'sequence';
-    else if (!fixed.length && !seqFixed.length && !segments.length) role = 'free';
+    else if (!fixed.length && !seqFixed.length) role = 'free';
     else role = 'motif';
 
     // Contig: fixed residue runs as `A12-20`, designed runs and segments as lengths, `/` between pieces.
@@ -231,6 +231,10 @@ function inferTask({ polymers, ligands, anyCondition, designedMax, partialDiffus
   }
   if (!polymers.length && !ligands.length) return T('empty', 'Nothing loaded', '');
   if (designedMax === 0) return T('nothing', 'Nothing to design', '');
+  // A structure as fetched (no conditions, no new residues) is "everything redesigned", whatever it contains.
+  if (!anyCondition && !polymers.some((c) => c.segments.length) && !polymers.every((c) => c.role === 'new')) {
+    return T('redesign_all', 'Full redesign', 'No constraints: structure and sequence are both redesigned.');
+  }
   const roles = new Set(polymers.map((c) => c.role));
   const unindexed = polymers.some((c) => c.unindexed > 0);
   const hasLigand = ligands.length > 0;

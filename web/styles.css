@@ -735,3 +735,141 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   font-size: 11px;
   color: var(--text-secondary, #d1d2d5);
 }
+
+/* Selection popup (web/design-panel.js _renderPop) */
+.rfd4p-pop {
+  position: fixed;
+  z-index: 50;
+  display: grid;
+  gap: 6px;
+  width: 300px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong, #50535a);
+  border-radius: 6px;
+  background: var(--surface-card, #26272b);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+  font-size: 11.5px;
+}
+
+.rfd4p-pop[hidden] {
+  display: none;
+}
+
+.rfd4p-pop-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 8px;
+}
+
+.rfd4p-pop-head strong {
+  font: 600 12px var(--font-mono, monospace);
+  overflow-wrap: anywhere;
+}
+
+.rfd4p-pop-head .muted {
+  grid-column: 1;
+  font-size: 11px;
+}
+
+.rfd4p-pop-close {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+}
+
+.rfd4p-pop-close,
+.rfd4p-chain-remove {
+  min-height: 0;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, #b1b3b9);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.rfd4p-pop-close:hover,
+.rfd4p-chain-remove:hover {
+  color: var(--text, #f1f1f2);
+}
+
+.rfd4p-pop-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.rfd4p-pop-row input {
+  width: 52px;
+  height: 24px;
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.rfd4p-chain-head {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 2px;
+}
+
+.rfd4p-chain-remove {
+  padding: 0;
+  font-size: 14px;
+}
+
+.rfd4p-partial-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 11.5px;
+}
+
+.rfd4p-flow-form select {
+  width: 100%;
+  font-size: 11px;
+}
+
+/* Chain rows: one line per item, truncated rather than wrapped; the role picker gets its own line. */
+#rfd4p-studio-card .rfd4p-chain-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+#rfd4p-studio-card .rfd4p-chain-info,
+#rfd4p-studio-card .rfd4p-seg-label,
+#rfd4p-studio-card .rfd4p-chain-line > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#rfd4p-studio-card .rfd4p-role-select {
+  width: 100%;
+  max-width: none;
+  height: auto;
+  min-height: 28px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+#rfd4p-studio-card .rfd4p-seg-inputs {
+  white-space: nowrap;
+}
+
+#rfd4p-studio-card .rfd4p-seg-inputs input {
+  width: 50px;
+  min-width: 0;
+}
+
+#rfd4p-studio-card .rfd4p-total,
+#rfd4p-studio-card .rfd4p-contig-row code {
+  overflow-wrap: anywhere;
+}
