@@ -38,7 +38,7 @@ export async function main(device, args = []) {
   }
 
   const kernelProfiles = {};
-  for (const presetId of ['uncond_short', 'ppi_pdl1']) {
+  for (const presetId of (opt.presets ? opt.presets.split(',') : ['uncond_short', 'ppi_pdl1'])) {
     const { batch, n } = await loadPresetBatch(presetId);
     const rng = seededRng(42);
     const nnCfg = config.nn;

@@ -121,7 +121,10 @@ export class DesignPanel {
     window.addEventListener('atomworks-studio-selection', (ev) => {
       this.selectionCount = ev.detail?.count ?? 0;
       queueMicrotask(() => this._renderPop());
-      if (this.els.guided && !this.els.guided.hidden) this._renderFlows(this._spec(), true);
+      if (!this.els.guided || this.els.guided.hidden) return;
+      // An open form keeps what the user typed: refresh only the selection-dependent parts.
+      if (this.flowForm && this.formUpdate) this.formUpdate();
+      else this._renderFlows(this._spec(), true);
     });
     for (const id of ['partial-diffusion', 'partial-diffusion-percent', 'partial-diffusion-percent-num']) {
       document.getElementById(id)?.addEventListener('input', () => this.render());
@@ -197,11 +200,13 @@ export class DesignPanel {
     els.chainList.replaceChildren(...spec.chains.map((c) => this._chainRow(c, viewingDesign)));
     const designed = range(spec.designedMin, spec.designedMax);
     els.total.textContent = spec.totalMax
-      ? `${designed} residue${spec.designedMax === 1 ? '' : 's'} designed · ${range(spec.totalMin, spec.totalMax)} in total`
+      ? [`${designed} residue${spec.designedMax === 1 ? '' : 's'} designed`,
+        spec.predicted ? `${spec.predicted} folded from sequence` : '',
+        `${range(spec.totalMin, spec.totalMax)} in total`].filter(Boolean).join(' · ')
       : '';
     els.contig.textContent = spec.contig || '—';
 
-    const warnings = [...spec.warnings];
+    const warnings = this.lastError ? [this.lastError, ...spec.warnings] : [...spec.warnings];
     if (spec.task.key === 'partial' && spec.chains.some((c) => c.segments.length)) {
       warnings.push('Partial diffusion needs every residue defined; this input has new-residue segments.');
     }
@@ -444,6 +449,8 @@ export class DesignPanel {
   _renderFlows(spec, visible = !this.els.guided?.hidden) {
     const box = this.els.guided;
     if (!box) return;
+    // The open form (if any) installs its own selection updater below.
+    this.formUpdate = () => this._updateScaffoldButton();
     box.hidden = !visible || !spec;
     if (box.hidden) return;
     const children = [el('p', { class: 'rfd4p-lead', text: 'What should happen to this structure?' })];
@@ -456,6 +463,7 @@ export class DesignPanel {
       children.push(el('button', {
         type: 'button',
         class: `rfd4p-flow${this.flowForm === f.key ? ' active' : ''}`,
+        'data-flow': f.key,
         disabled,
         title: needsSelection ? 'Select residues in the sequence bar or viewer first' : null,
         onclick: () => {
@@ -474,13 +482,34 @@ export class DesignPanel {
     box.replaceChildren(...children);
   }
 
+  /** Selection-dependent state of the scaffold button (enabled only with a selection). */
+  _updateScaffoldButton() {
+    const b = this.els.guided?.querySelector('[data-flow="scaffold"]');
+    if (!b) return;
+    const none = this.selectionCount === 0;
+    b.disabled = none;
+    b.title = none ? 'Select residues in the sequence bar or viewer first' : '';
+    const sub = b.querySelector('span');
+    if (sub) sub.textContent = none ? 'Select residues first' : FLOWS.find((f) => f.key === 'scaffold').desc;
+  }
+
   _binderForm(spec) {
     const min = el('input', { type: 'number', min: 10, max: 500, value: 60, 'aria-label': 'Binder minimum length' });
     const max = el('input', { type: 'number', min: 10, max: 500, value: 100, 'aria-label': 'Binder maximum length' });
     const hot = el('input', { type: 'checkbox', checked: this.selectionCount > 0, disabled: this.selectionCount === 0 });
-    const hotText = this.selectionCount
-      ? ` Use the ${this.selectionCount} selected atoms as hotspots`
-      : ' Hotspots: select 3–6 target residues at the interface first';
+    const hotLabel = () => (this.selectionCount
+      ? ` Use the ${this._selectedResidueCount()} selected residues as hotspots`
+      : ' Hotspots: select 3–6 target residues at the interface first');
+    const hotText = document.createTextNode(hotLabel());
+    let wasNone = this.selectionCount === 0;
+    this.formUpdate = () => {
+      hotText.textContent = hotLabel();
+      hot.disabled = this.selectionCount === 0;
+      // Selecting the first hotspots ticks the box; after that it is the user's choice.
+      if (wasNone && this.selectionCount > 0) hot.checked = true;
+      wasNone = this.selectionCount === 0;
+      this._updateScaffoldButton();
+    };
     const apply = el('button', {
       type: 'button', class: 'primary compact', text: 'Set up binder',
       onclick: () => void this._runFlow('binder', spec, {
@@ -534,8 +563,21 @@ export class DesignPanel {
         totalMax: Number(totMax.value),
       }),
     });
+    const count = el('p', { class: 'muted' });
+    const showCount = () => {
+      const k = this._selectedResidueCount();
+      count.textContent = k
+        ? `Keeps the ${k} selected residue${k === 1 ? '' : 's'} fixed (sequence, and the structure chosen below).`
+        : 'Select the motif residues in the sequence bar or viewer.';
+    };
+    showCount();
+    this.formUpdate = () => {
+      showCount();
+      apply.disabled = this.selectionCount === 0;
+      this._updateScaffoldButton();
+    };
     return el('div', { class: 'rfd4p-flow-form' },
-      el('p', { class: 'muted', text: `Keeps the ${this._selectedResidueCount()} selected residues fixed (structure and sequence).` }),
+      count,
       el('label', {}, 'Fix ', fix),
       el('label', {}, 'Motif position ', where),
       total, gapLine, inPlaceLine, apply);
@@ -568,51 +610,57 @@ export class DesignPanel {
     const ligandAtoms = spec.chains.flatMap((c) => c.ligandAtomIndices);
     const roleEdits = (c, role) => this._roleEdits(c, role);
     const selection = window.__rfd4pSelection?.() ?? [];
-    this.app._setPartialDiffusion?.(key === 'diversify');
-    try {
-      if (key === 'binder') {
-        const edits = polymers.flatMap((c) => roleEdits(c, 'fixed'));
-        if (ligandAtoms.length) edits.push({ condition: 'coordinate', atom_indices: ligandAtoms, enabled: true });
-        await this._batch(edits);
-        const lo = Math.max(10, Math.round(opts.min) || 60);
-        await this._mutate('/segments', {
+    // Each step must succeed before the next; a failure keeps the form open with its error shown.
+    let ok = true;
+    if (key === 'binder') {
+      const edits = polymers.flatMap((c) => roleEdits(c, 'fixed'));
+      if (ligandAtoms.length) edits.push({ condition: 'coordinate', atom_indices: ligandAtoms, enabled: true });
+      const lo = Math.max(10, Math.round(opts.min) || 60);
+      ok = await this._batch(edits)
+        && await this._mutate('/segments', {
           minimum: lo, maximum: Math.max(lo, Math.round(opts.max) || 100), atom_index: null, before: false,
           new_chain: true, chain_id: null, chain_type: 'polypeptide(L)',
-        });
-        if (opts.hotspots && selection.length) {
-          await this._mutate('/conditions', { condition: 'hotspot', atom_indices: selection, enabled: true, scope: 'atom' });
-        }
-      } else if (key === 'ligand') {
-        const lo = Math.max(20, Math.round(opts.min) || 100);
-        await this._mutate('/segments/ligand-binder', {
-          remove_protein: opts.removeProtein !== false, pose_fixed: opts.poseFixed !== false,
-          minimum: lo, maximum: Math.max(lo, Math.round(opts.max) || 150),
-        });
-      } else if (key === 'scaffold' && opts.rebuild !== false) {
-        if (!selection.length) return;
-        await this._mutate('/segments/scaffold', {
+        })
+        && (!opts.hotspots || !selection.length
+          || await this._mutate('/conditions', { condition: 'hotspot', atom_indices: selection, enabled: true, scope: 'atom' }));
+    } else if (key === 'ligand') {
+      const lo = Math.max(20, Math.round(opts.min) || 100);
+      ok = await this._mutate('/segments/ligand-binder', {
+        remove_protein: opts.removeProtein !== false, pose_fixed: opts.poseFixed !== false,
+        minimum: lo, maximum: Math.max(lo, Math.round(opts.max) || 150),
+      });
+    } else if (key === 'scaffold') {
+      if (!selection.length) return;
+      if (opts.rebuild !== false) {
+        ok = await this._mutate('/segments/scaffold', {
           atom_indices: selection, spread: opts.spread ?? 0.25, sidechains_only: Boolean(opts.sidechainsOnly),
           unindexed: Boolean(opts.unindexed),
           total_min: opts.unindexed ? opts.totalMin : null, total_max: opts.unindexed ? opts.totalMax : null,
         });
-      } else if (key === 'scaffold') {
-        if (!selection.length) return;
+      } else {
+        // In place: the rest of the selected chains is redesigned at its current length.
         const doc = this._inputDoc();
-        const chainsOfSelection = new Set(selection.map((i) => String(doc.atoms.chain_id[i])));
+        const a = doc.atoms;
+        const residues = doc.resolveIndices(selection, 'residue');
+        const backbone = new Set(['N', 'CA', 'C', 'O', 'OXT']);
+        const fixAtoms = opts.sidechainsOnly ? residues.filter((i) => !backbone.has(String(a.atom_name[i]))) : residues;
+        const chainsOfSelection = new Set(residues.map((i) => String(a.chain_id[i])));
         const edits = polymers.filter((c) => chainsOfSelection.has(c.id)).flatMap((c) => roleEdits(c, 'free'));
-        edits.push({ condition: 'coordinate', atom_indices: selection, enabled: true, scope: 'residue' });
-        edits.push({ condition: 'sequence', atom_indices: selection, enabled: true, scope: 'residue' });
-        await this._batch(edits);
-      } else if (key === 'sequence') {
-        await this._batch(polymers.flatMap((c) => roleEdits(c, 'backbone')));
-      } else if (key === 'diversify' || key === 'scratch') {
-        await this._batch(polymers.flatMap((c) => roleEdits(c, 'free')));
+        if (fixAtoms.length) edits.push({ condition: 'coordinate', atom_indices: fixAtoms, enabled: true });
+        edits.push({ condition: 'sequence', atom_indices: residues, enabled: true, scope: 'residue' });
+        ok = await this._batch(edits);
       }
+    } else if (key === 'sequence') {
+      ok = await this._batch(polymers.flatMap((c) => roleEdits(c, 'backbone')));
+    } else if (key === 'diversify' || key === 'scratch') {
+      ok = await this._batch(polymers.flatMap((c) => roleEdits(c, 'free')));
+    }
+    if (ok) {
+      this.app._setPartialDiffusion?.(key === 'diversify');
       this.showFlows = false;
       this.flowForm = null;
-    } finally {
-      this.render();
     }
+    this.render();
   }
 
   // ---- edits --------------------------------------------------------------------------------------------------
@@ -651,21 +699,26 @@ export class DesignPanel {
   }
 
   _batch(edits) {
-    return edits.length ? this._mutate('/conditions/batch', { edits }) : Promise.resolve();
+    return edits.length ? this._mutate('/conditions/batch', { edits }) : Promise.resolve(true);
   }
 
+  /** One edit through Studio's mutate path; resolves true on success. A failure stays shown until the next success. */
   async _mutate(path, body) {
-    if (typeof window.__rfd4pMutate !== 'function' || this.busy) return;
+    if (typeof window.__rfd4pMutate !== 'function' || this.busy) return false;
     this.busy = true;
     this.els.design?.classList.add('rfd4p-busy');
     try {
       await window.__rfd4pMutate(path, body);
+      this.lastError = null;
+      return true;
     } catch (err) {
       console.warn('Design edit failed:', err);
-      this.els.warnings?.replaceChildren(el('p', { class: 'rfd4p-warning', text: `Edit failed: ${err?.message ?? err}` }));
+      this.lastError = `Edit failed: ${String(err?.message ?? err).replace(/^Error:\s*/, '')}`;
+      return false;
     } finally {
       this.busy = false;
       this.els.design?.classList.remove('rfd4p-busy');
+      this.render();
     }
   }
 

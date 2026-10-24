@@ -65,7 +65,9 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
       res = {
         resId: Number(atoms.res_id[i]),
         resName: String(atoms.res_name[i]),
-        kind: sentinel ? 'segment' : polymerKind(String(atoms.res_name[i]), Boolean(atoms.hetero?.[i])),
+        // is_polymer, not HETATM: modified residues (MSE, SEP, ...) are polymer residues stored as HETATM.
+        kind: sentinel ? 'segment' : polymerKind(String(atoms.res_name[i]),
+          atoms.is_polymer?.length === n ? !atoms.is_polymer[i] : Boolean(atoms.hetero?.[i])),
         segment: sentinel ? { min: Number(segMin?.[i] ?? 0), max: Number(segMax?.[i] ?? 0), atomIndex: i } : null,
         crdAtoms: 0,
         crdBackbone: 0,
@@ -170,6 +172,8 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
       unresolved: polymer.length - resolved.length,
       seqFixed: seqFixed.length,
       designed: freeRes.length + polymer.filter((r) => r.crdAtoms && !r.seqFixed).length,
+      // Sequence kept but structure free: not designed, but still built by the model.
+      predicted: polymer.filter((r) => !r.crdAtoms && r.seqFixed).length,
       unindexed: polymer.filter((r) => r.unindexed).length,
       hotspots: chain.residues.filter((r) => r.hotspots > 0).length,
       segments,
@@ -196,12 +200,13 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
   const ligands = out.filter((c) => c.role === 'ligand');
   const designedMin = polymers.reduce((s, c) => s + c.designed + c.segments.reduce((t, g) => t + g.min, 0), 0);
   const designedMax = polymers.reduce((s, c) => s + c.designed + c.segments.reduce((t, g) => t + g.max, 0), 0);
+  const predicted = polymers.reduce((s, c) => s + c.predicted, 0);
   const totalMin = polymers.reduce((s, c) => s + c.lengthMin, 0);
   const totalMax = polymers.reduce((s, c) => s + c.lengthMax, 0);
   const anyCondition = out.some((c) => c.fixed || c.seqFixed || c.hotspots || c.ligands.some((l) => l.fixed));
   const ligandNames = ligands.flatMap((c) => c.ligands.map((l) => l.name));
 
-  const task = inferTask({ polymers, ligands, anyCondition, designedMax, partialDiffusion, partialPercent });
+  const task = inferTask({ polymers, ligands, anyCondition, designedMax, predicted, partialDiffusion, partialPercent });
   const warnings = [];
   if (!n) warnings.push('Open a structure or pick a task to start.');
   else if (task.key === 'redesign_all') {
@@ -216,6 +221,7 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
     chains: out,
     designedMin,
     designedMax,
+    predicted,
     totalMin,
     totalMax,
     contig: polymers.filter((c) => c.contig).map((c) => c.contig).join('/0 ') +
@@ -224,13 +230,16 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
   };
 }
 
-function inferTask({ polymers, ligands, anyCondition, designedMax, partialDiffusion, partialPercent }) {
+function inferTask({ polymers, ligands, anyCondition, designedMax, predicted, partialDiffusion, partialPercent }) {
   const T = (key, label, detail) => ({ key, label, detail });
   if (partialDiffusion) {
     return T('partial', 'Diversify (partial diffusion)', `Starts ${partialPercent}% of the way from this structure.`);
   }
   if (!polymers.length && !ligands.length) return T('empty', 'Nothing loaded', '');
-  if (designedMax === 0) return T('nothing', 'Nothing to design', '');
+  if (designedMax === 0 && predicted === 0) return T('nothing', 'Nothing to design', '');
+  if (designedMax === 0) {
+    return T('fold', 'Fold from sequence', 'Sequences kept; the model predicts the structure.');
+  }
   // A structure as fetched (no conditions, no new residues) is "everything redesigned", whatever it contains.
   if (!anyCondition && !polymers.some((c) => c.segments.length) && !polymers.every((c) => c.role === 'new')) {
     return T('redesign_all', 'Full redesign', 'No constraints: structure and sequence are both redesigned.');

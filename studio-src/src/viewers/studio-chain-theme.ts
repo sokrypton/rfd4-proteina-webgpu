@@ -16,7 +16,8 @@ type Params = typeof Params;
 function StudioChainColorTheme(_ctx: ThemeDataContext, props: PD.Values<Params>): ColorTheme<Params> {
   const cache = new Map<string, Color>();
   const byChain = (loc: StructureElement.Location): Color => {
-    const id = StructureProperties.chain.auth_asym_id(loc);
+    // label_asym_id: the chain id the document, sequence bar and design panel use (auth ids can differ in RCSB files).
+    const id = StructureProperties.chain.label_asym_id(loc);
     let c = cache.get(id);
     if (c === undefined) cache.set(id, (c = Color(chainColor(id))));
     return c;

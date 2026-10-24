@@ -1139,14 +1139,15 @@ export class StudioDoc {
    */
   setConditions(edits) {
     if (!Array.isArray(edits) || !edits.length) throw new Error('no condition edits');
-    this.snapshot();
-    let affected = 0;
-    for (const e of edits) {
-      affected += this.setCondition(e.condition, e.atom_indices, {
-        enabled: e.enabled ?? true, value: e.value ?? null, scope: e.scope || 'atom', snapshot: false,
-      }).affected_count;
-    }
-    return { affected_count: affected, changed: true, message: `Updated conditions on ${affected} atoms.` };
+    return this.compound(() => {
+      let affected = 0;
+      for (const e of edits) {
+        affected += this.setCondition(e.condition, e.atom_indices, {
+          enabled: e.enabled ?? true, value: e.value ?? null, scope: e.scope || 'atom', snapshot: false,
+        }).affected_count;
+      }
+      return { affected_count: affected, changed: true, message: `Updated conditions on ${affected} atoms.` };
+    });
   }
 
   /** Run several edits as one undo step. */
@@ -1155,17 +1156,45 @@ export class StudioDoc {
     this._compound = true;
     try {
       return fn();
+    } catch (err) {
+      // Nothing half-applied and no empty undo step: restore the state taken above.
+      const prev = this.undoStack.pop();
+      this.atoms = prev.atoms;
+      this.rawCif = prev.rawCif;
+      this.revision = prev.revision;
+      throw err;
     } finally {
       this._compound = false;
     }
   }
 
-  /** Polymer residues (not ligands, not segment sentinels) of `chain`, in order, as {key, resId, atoms}. */
-  _chainResidues(chain) {
+  _isSegmentAtom(i) {
+    return /^\d+-\d+$/.test(String(this.atoms.res_name[i]));
+  }
+
+  /** Polymer residue atom (modified residues stored as HETATM included), not a ligand or a segment sentinel. */
+  _isPolymerAtom(i) {
+    const a = this.atoms;
+    const polymer = a.is_polymer?.length === a.nAtoms ? Boolean(a.is_polymer[i]) : !a.hetero[i];
+    return polymer && !this._isSegmentAtom(i);
+  }
+
+  /**
+   * Polymer residues of `chain` in order, as {key, resId, atoms}; with `segments`, the chain's new-residue segments
+   * too, as {segment: true, atoms, length} (their mean length).
+   */
+  _chainResidues(chain, { segments = false } = {}) {
     const a = this.atoms;
     const out = [];
     for (let i = 0; i < a.nAtoms; i += 1) {
-      if (String(a.chain_id[i]) !== chain || a.hetero[i] || /^\d+-\d+$/.test(String(a.res_name[i]))) continue;
+      if (String(a.chain_id[i]) !== chain) continue;
+      if (segments && this._isSegmentAtom(i)) {
+        const min = Number(a.annotations?.annotation_expsegmin_1_residue?.[i]) || 1;
+        const max = Number(a.annotations?.annotation_expsegmax_1_residue?.[i]) || min;
+        out.push({ key: `seg:${i}`, segment: true, atoms: [i], length: Math.round((min + max) / 2) });
+        continue;
+      }
+      if (!this._isPolymerAtom(i)) continue;
       const key = `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}`;
       if (out[out.length - 1]?.key !== key) out.push({ key, resId: a.res_id[i], atoms: [] });
       out[out.length - 1].atoms.push(i);
@@ -1201,8 +1230,11 @@ export class StudioDoc {
     if (!keep.length) throw new Error('select the motif residues first');
     const a = this.atoms;
     const resKey = (i) => `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}`;
-    const kept = new Set(keep.map(resKey));
-    const chains = [...new Set(keep.map((i) => String(a.chain_id[i])))];
+    // Selected ligands are only held in place; chains are rebuilt around the selected polymer residues.
+    const keepPolymer = keep.filter((i) => this._isPolymerAtom(i));
+    if (!keepPolymer.length) throw new Error('select at least one protein or nucleic-acid residue as the motif');
+    const kept = new Set(keepPolymer.map(resKey));
+    const chains = [...new Set(keepPolymer.map((i) => String(a.chain_id[i])))];
     const range = (len) => {
       const min = Math.max(1, Math.round(len * (1 - spread)));
       return { min, max: Math.max(min, Math.round(len * (1 + spread))) };
@@ -1211,12 +1243,13 @@ export class StudioDoc {
     const gaps = [];
     const drop = [];
     for (const chain of chains) {
-      const residues = this._chainResidues(chain);
+      // Existing segments are replaced too, their length counted into the gap they sit in.
+      const residues = this._chainResidues(chain, { segments: true });
       const others = residues.filter((r) => !kept.has(r.key));
       for (const r of others) drop.push(...r.atoms);
       const first = residues.find((r) => kept.has(r.key));
       if (unindexed) {
-        const def = range(residues.length);
+        const def = range(residues.reduce((s, r) => s + (r.segment ? r.length : kept.has(r.key) ? 0 : 1), 0));
         const min = Math.max(1, Math.round(totalMin ?? def.min));
         gaps.push({ chain, resId: first.resId, before: true, min, max: Math.max(min, Math.round(totalMax ?? def.max)) });
         continue;
@@ -1225,7 +1258,8 @@ export class StudioDoc {
       let lastKept = null;
       const flush = (next) => {
         if (!run) return;
-        gaps.push({ chain, resId: (lastKept ?? next).resId, before: !lastKept, ...range(run) });
+        const anchor = lastKept ?? next;
+        if (anchor) gaps.push({ chain, resId: anchor.resId, before: !lastKept, ...range(run) });
         run = 0;
       };
       for (const r of residues) {
@@ -1233,20 +1267,22 @@ export class StudioDoc {
           flush(r);
           lastKept = r;
         } else {
-          run += 1;
+          run += r.segment ? r.length : 1;
         }
       }
       flush(null);
     }
 
     const backbone = new Set(['N', 'CA', 'C', 'O', 'OXT']);
-    const crdAtoms = sidechainsOnly ? keep.filter((i) => !backbone.has(String(a.atom_name[i]))) : keep;
+    const crdAtoms = sidechainsOnly
+      ? keep.filter((i) => !this._isPolymerAtom(i) || !backbone.has(String(a.atom_name[i])))
+      : keep;
     return this.compound(() => {
       this.setCondition('coordinate', keep, { enabled: false, snapshot: false });
       if (crdAtoms.length) this.setCondition('coordinate', crdAtoms, { snapshot: false });
       this.setCondition('sequence', keep, { snapshot: false });
       // "Index conditioning" is stored inverted: enabling it marks residues as unindexed (placed anywhere).
-      this.setCondition('index', keep, { enabled: unindexed, snapshot: false });
+      this.setCondition('index', keepPolymer, { enabled: unindexed, snapshot: false });
       if (drop.length) this.deleteAtoms(drop);
       this._insertGapSegments(gaps);
       return {
@@ -1298,15 +1334,14 @@ export class StudioDoc {
    */
   designAroundLigand({ removeProtein = true, poseFixed = true, minimum = 100, maximum = 150 } = {}) {
     const a = this.atoms;
-    const sentinel = (i) => /^\d+-\d+$/.test(String(a.res_name[i]));
     const ligand = [];
     const polymer = [];
-    for (let i = 0; i < a.nAtoms; i += 1) (a.hetero[i] && !sentinel(i) ? ligand : polymer).push(i);
+    for (let i = 0; i < a.nAtoms; i += 1) (this._isPolymerAtom(i) || this._isSegmentAtom(i) ? polymer : ligand).push(i);
     if (!ligand.length) throw new Error('this structure has no ligand');
     return this.compound(() => {
       if (removeProtein && polymer.length) this.deleteAtoms(polymer);
       const lig = [];
-      for (let i = 0; i < this.atoms.nAtoms; i += 1) if (this.atoms.hetero[i] && !sentinel(i)) lig.push(i);
+      for (let i = 0; i < this.atoms.nAtoms; i += 1) if (!this._isPolymerAtom(i) && !this._isSegmentAtom(i)) lig.push(i);
       this.setCondition('sequence', lig, { snapshot: false });
       this.setCondition('coordinate', lig, { enabled: poseFixed, snapshot: false });
       this.insertSegment({ minimum, maximum, newChain: true });
