@@ -250,7 +250,12 @@ function motifSideChainAtoms(structureAtoms, usedChains) {
  */
 function displayOverlayAtoms(structureAtoms, motifOverlay, entityId) {
   const used = new Set(structureAtoms.map((a) => a.chainId).concat(motifOverlay.map((a) => a.chainId)));
-  return motifOverlay.concat(motifSideChainAtoms(structureAtoms, used)).map((a, k) => ({
+  const sideChains = motifSideChainAtoms(structureAtoms, used);
+  // Mol* bonds overlay atoms by distance, so a reference atom the design has (nearly) reached would get spurious
+  // bonds to its side chain; once the design's atom is that close it shows the motif itself.
+  const reference = motifOverlay.filter((r) => !sideChains.some((a) =>
+    (a.x - r.x) ** 2 + (a.y - r.y) ** 2 + (a.z - r.z) ** 2 < 2.4 ** 2));
+  return reference.concat(sideChains).map((a, k) => ({
     ...a, serial: structureAtoms.length + k + 1, entityId,
   }));
 }
