@@ -164,6 +164,32 @@ export function readShardedTensor(record, buffer, copy = false) {
   throw new Error(`Unsupported sharded tensor dtype: ${dtype}`);
 }
 
+/** Small int8 tensors keep their decode (float32 ones are views of the shard and cost nothing to keep). */
+const LAZY_KEEP_ELEMENTS = 1 << 14;
+
+/**
+ * A tensor record that keeps the shard's bytes and decodes `data` when it is read, as `../localfold`'s tensor
+ * store does. Holding every tensor decoded cost float32 for all of it, kept for the session although only
+ * the GPU upload (and the CPU fallback) reads the large ones: 1,169 MB for the core model and 492 MB more with
+ * the encoder, against 316 and 131 MB for the shard bytes this keeps instead. Large tensors decode on each
+ * read, which is once per GPU model build.
+ */
+function lazyTensor(rec, buf) {
+  const elements = rec.shape.reduce((p, v) => p * v, 1);
+  const keep = rec.dtype === 'float32' || elements <= LAZY_KEEP_ELEMENTS;
+  let decoded = null;
+  return {
+    shape: rec.shape,
+    dtype: 'F32',
+    get data() {
+      if (decoded) return decoded;
+      const data = readShardedTensor(rec, buf, false);
+      if (keep) decoded = data;
+      return data;
+    },
+  };
+}
+
 /**
  * Load a `../localfold`-style sharded bundle (`manifest.json` + `shard_XXX.bin`) over HTTP
  * with 8-way concurrent shard downloads, Cache API persistence, and optional lazy Encoder loading.
@@ -262,12 +288,7 @@ export async function fetchShardedWeights(baseDir = DEFAULT_LOCAL_SHARDED_DIR, o
           }
         }
 
-        const entries = byShard.get(shard.file) ?? [];
-        // Keep Float32Array views when dtype === 'float32', otherwise decode into owned Float32Array
-        for (const [name, rec] of entries) {
-          const data = readShardedTensor(rec, buf, rec.dtype === 'float32');
-          tensors[name] = { shape: rec.shape, dtype: 'F32', data };
-        }
+        for (const [name, rec] of byShard.get(shard.file) ?? []) tensors[name] = lazyTensor(rec, buf);
 
         bytesLoaded += shard.bytes || buf.byteLength;
         loadedShards += 1;
