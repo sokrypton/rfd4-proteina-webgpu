@@ -217,10 +217,10 @@ function buildMotifOverlayAtoms(inputAtoms) {
 /**
  * Side chains (Cα onward) of the design's own motif residues — an unindexed motif placed by the insertion mapping
  * (e.g. an enzyme's catalytic residues), or a coordinate-conditioned residue in a chain that is otherwise designed —
- * copied onto an unused chain so they draw as sticks on top of the cartoon. Target chains (every residue fixed) are
+ * as copies drawn as sticks on top of the cartoon. Target chains (every residue fixed) are
  * left to the frame itself, as in `buildMotifOverlayAtoms`.
  */
-function motifSideChainAtoms(structureAtoms, usedChains) {
+function motifSideChainAtoms(structureAtoms) {
   const hasCrd = (a) => Boolean(a.crd && Number.isFinite(a.crd[0]));
   const chainTokens = new Map();
   const tokenFixed = new Map();
@@ -238,26 +238,34 @@ function motifSideChainAtoms(structureAtoms, usedChains) {
     if (fixed.length < tokens.size) for (const t of fixed) motifTokens.add(t);
   }
   if (!motifTokens.size) return [];
-  const chainId = [...'NOPQRSTUVWXYZ'].find((c) => !usedChains.has(c)) ?? 'SC';
   return structureAtoms
     .filter((a) => motifTokens.has(a.tokenId) && !a.isHetero && !['N', 'C', 'O', 'OXT'].includes(a.atomName))
-    .map((a) => ({ ...a, groupPdb: 'HETATM', isHetero: true, chainId }));
+    .map((a) => ({ ...a, groupPdb: 'HETATM', isHetero: true }));
+}
+
+/** A standalone `non-polymer` CIF for display-only atoms (null if there are none). */
+function overlayCifOf(atoms, name) {
+  if (!atoms.length) return null;
+  const all = atoms.map((a, k) => ({ ...a, serial: k + 1, entityId: 1 }));
+  return toCifString(all, { dataBlockName: name }) + entityCif(all, new Set([1]));
 }
 
 /**
- * CIF for the display-only overlay drawn beside a design: the reference motif plus the design's motif side chains,
- * as one `non-polymer` entity `entityId` (empty if there is nothing to draw).
+ * Display-only overlays drawn beside a design, each as its own Mol* structure so none can be distance-bonded to the
+ * design or to each other: the reference motif (drawn translucent) and the design's motif side chains.
  */
-function displayOverlayAtoms(structureAtoms, motifOverlay, entityId) {
-  const used = new Set(structureAtoms.map((a) => a.chainId).concat(motifOverlay.map((a) => a.chainId)));
-  const sideChains = motifSideChainAtoms(structureAtoms, used);
-  // Mol* bonds overlay atoms by distance, so a reference atom the design has (nearly) reached would get spurious
-  // bonds to its side chain; once the design's atom is that close it shows the motif itself.
-  const reference = motifOverlay.filter((r) => !sideChains.some((a) =>
-    (a.x - r.x) ** 2 + (a.y - r.y) ** 2 + (a.z - r.z) ** 2 < 2.4 ** 2));
-  return reference.concat(sideChains).map((a, k) => ({
-    ...a, serial: structureAtoms.length + k + 1, entityId,
-  }));
+function designOverlays(structureAtoms, motifOverlay) {
+  return {
+    motif: overlayCifOf(motifOverlay, 'motif'),
+    sideChains: overlayCifOf(motifSideChainAtoms(structureAtoms), 'motif_side_chains'),
+  };
+}
+
+/** Shows `overlays` (from `designOverlays`) in the Studio viewer, clearing any that are absent. */
+async function showDesignOverlays(overlays) {
+  if (typeof window.__rfd4pSetOverlay !== 'function') return;
+  await window.__rfd4pSetOverlay('motif', overlays?.motif ?? null, { label: 'Motif (reference)', alpha: 0.4 });
+  await window.__rfd4pSetOverlay('sideChains', overlays?.sideChains ?? null, { label: 'Motif side chains' });
 }
 
 /** `_entity` loop for `atoms`: the given entity ids are `non-polymer` (drawn as sticks), the rest as before. */
@@ -599,11 +607,8 @@ class Rfd4pStudioApp {
     }
     try {
       await window.__rfd4pOpenSession(sessionId, trajUrl);
-      // Display-only reference motif beside a finished motif-scaffolding design (not part of the saved document).
-      const overlayCif = this.generatedViews.get(sessionId)?.overlayCif;
-      if (overlayCif) {
-        await window.__rfd4pAddOverlay?.(overlayCif, 'motif.cif');
-      }
+      // Display-only reference motif and motif side chains beside a finished design (not part of the saved document).
+      await showDesignOverlays(this.generatedViews.get(sessionId)?.overlays);
     } catch (err) {
       console.warn('Motif overlay failed:', err);
     }
@@ -1040,6 +1045,8 @@ class Rfd4pStudioApp {
         const wantLiveFrame = (step, total) =>
           step === 0 || (step < total - 1 && performance.now() + lastStepMs - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS);
         const motifOverlay = buildMotifOverlayAtoms(atoms);
+        // Overlays for the frame being built; shown once its structure has been drawn.
+        let liveOverlays = null;
         const hasUnindexedMotif = Boolean(atoms.condition_index_1_residue?.some((v, i) =>
           !v && !atoms.hetero?.[i] && atoms.condition_coordinate_1_atom?.[i]?.some?.(Number.isFinite)));
         const liveAllAtomCif = (info) => {
@@ -1059,11 +1066,8 @@ class Rfd4pStudioApp {
               alignStructureAtomsToCa(structure.atoms, referenceCaNm, n);
             }
             liveSequence.update(structure.atoms, info.step, info.nsteps, info.convergence);
-            const overlayEntity = Math.max(0, ...structure.atoms.map((a) => a.entityId ?? 0)) + 1;
-            const overlay = displayOverlayAtoms(structure.atoms, motifOverlay, overlayEntity);
-            if (!overlay.length) return toCifString(structure) + caSecondaryStructureCif(structure.atoms);
-            const all = structure.atoms.concat(overlay);
-            return toCifString(all) + entityCif(all, new Set([overlayEntity])) + caSecondaryStructureCif(structure.atoms);
+            liveOverlays = designOverlays(structure.atoms, motifOverlay);
+            return toCifString(structure) + caSecondaryStructureCif(structure.atoms);
           } catch (err) {
             console.warn('Live all-atom frame failed; showing Cα frame:', err);
             return null;
@@ -1099,7 +1103,9 @@ class Rfd4pStudioApp {
           const frameReady = Boolean(info.decoded) || !useGpu;
           if (frameReady && !liveRenderBusy && !isStopping && (info.step === 0 || now - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS)) {
             if (typeof window.__rfd4pRenderLiveFrame === 'function') {
+              liveOverlays = { motif: overlayCifOf(motifOverlay, 'motif'), sideChains: null };
               const liveCif = liveAllAtomCif(info) ?? buildLiveFrameCifFromCa(alignedCaNm, tokens, null, UNIFIED_ATOM37_TOKENS);
+              const frameOverlays = liveOverlays;
               if (liveCif) {
                 liveRenderBusy = true;
                 lastLiveRenderTime = now;
@@ -1112,6 +1118,7 @@ class Rfd4pStudioApp {
                 liveRenderPromise = Promise.resolve(
                   window.__rfd4pRenderLiveFrame(liveCif, `step_${info.step + 1}.cif`, keepCam),
                 )
+                  .then(() => showDesignOverlays(frameOverlays))
                   .catch(() => {})
                   .finally(() => {
                     liveRenderBusy = false;
@@ -1163,10 +1170,7 @@ class Rfd4pStudioApp {
         this.lastResult = result;
         if (result.stepsRun != null && result.stepsRun < result.nsteps) earlyStops.push(`${result.stepsRun}/${result.nsteps}`);
 
-        const designOverlay = result.structure?.atoms ? displayOverlayAtoms(result.structure.atoms, motifOverlay, 1) : [];
-        const designOverlayCif = designOverlay.length
-          ? toCifString(designOverlay, { dataBlockName: 'motif' }) + entityCif(designOverlay, new Set([1]))
-          : null;
+        const overlays = designOverlays(result.structure?.atoms ?? [], motifOverlay);
 
         // Register generated design in AtomWorks Studio session store with trajectory playback
         const trajectoryCif = buildTrajectoryCifFromFrames(
@@ -1186,7 +1190,7 @@ class Rfd4pStudioApp {
           isInput: false,
           hasTrajectory: Boolean(trajectoryCif),
           filenameStem: `design-${sampleIdx + 1}`,
-          overlayCif: designOverlayCif,
+          overlays,
         });
         viewChoices.push({ label: `Design ${sampleIdx + 1}`, sessionId: designSessionId });
       }
@@ -1211,6 +1215,7 @@ class Rfd4pStudioApp {
       this.setProgress(0, 'idle');
       try {
         await window.__rfd4pRestoreInputView?.();
+        await showDesignOverlays(null);
       } catch {
         // Ignore
       }
