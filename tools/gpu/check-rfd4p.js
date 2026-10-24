@@ -20,6 +20,8 @@ export async function main(device, args = []) {
   if (args.includes('--no-submat=1') || args.includes('--no-submat')) device.noSubmat = true;
   const sgArg = args.find((a) => a.startsWith('--subgroup-mode='));
   if (sgArg) device.subgroupModeOverride = sgArg.split('=')[1];
+  const gvArg = args.find((a) => a.startsWith('--gemm-variant='));
+  if (gvArg) device.gemmVariantOverride = JSON.parse(gvArg.slice('--gemm-variant='.length));
   const trunkUncond = await checkTrunk(device, ['--case=uncond_short', ...args]);
   if (!trunkUncond.allOk) {
     throw new Error(`Rfd4pTrunkGpu (uncond_short) failed oracle check: ${JSON.stringify(trunkUncond.results)}`);

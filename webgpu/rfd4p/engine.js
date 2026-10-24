@@ -2490,6 +2490,12 @@ export class Rfd4pEngine {
     this.device = device;
     this.hasF16 = device.features?.has?.('shader-f16') === true;
     this.subgroups = subgroupMode(device);
+    // On a Mali-G715 (Pixel 9) the desktop-tuned GEMM refinements (prefetch, shuffles, paired epilogue) cost 8% per
+    // trunk pass (976 -> 900 ms at n=100), so ARM GPUs take the plain kernels. Also measured there and slower:
+    // f16 multiply-add in the GEMM inner loop (943 ms), 32x64 tiles (1319 ms), and no workgroup-memory staging
+    // (triProjG 445 -> 1304 ms).
+    if (device.adapterInfo?.vendor === 'arm') this.gemmVariant = { baseline: true };
+    if (device.gemmVariantOverride) this.gemmVariant = device.gemmVariantOverride;
     const smConfigs = [...(device.adapterInfo?.subgroupMatrixConfigs ?? device.subgroupMatrixConfigs ?? [])];
     this.subgroupMatrixConfigs = smConfigs.map((c) => ({
       componentType: c.componentType,
