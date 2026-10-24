@@ -403,3 +403,31 @@ All gates run strictly sequentially with zero concurrent GPU processes:
 5. **`patience = 3` and fixed `nsteps = 45`**:
    - On `uncond_short` seed 44, a 3-step Cα plateau occurs at steps 41–44 before 4 residues flip at step 45 (`seqId` drops to `0.960`, `aaRmsdA = 0.281 Å`). `patience = 4` rides through that plateau and matches `patience = 5` on 12/12 runs.
 
+
+## 11. Open bug (2026-10-24): intermittent GPU reset on chiral-ligand inputs, slow first forwards
+
+**Symptom.** `check-webapp` (stock flags) fails about 1 run in 4. Every failure where the example was identified was
+`small_molecule_binder` (SAM + 150 new residues, n=177). The error was "Caused GPU Hang Error" (macOS watchdog) or
+Metal "Internal Error". It did not reproduce in 30 runs of the same example from the plain CDP probe, either alone or
+cycling all 9 examples twice. The harness differs in its flags (`--disable-dawn-features=timestamp_quantization`,
+precise memory info) and in what runs before the examples (`motif_unidx_1prw` and `inverse_folding_1prw` presets,
+which load the encoder).
+
+**What is known (M2, stock flags).**
+- Ligands with chiral centres disable the fused GPU step loop: `generate.js`, `gpuStepLoop` is false when
+  `noise_align_chirality` has active frames. Every step then calls `trunk.forward` without `simBuf`. SAM has chiral
+  centres; ORO (enzyme example) does not, so the enzyme stays fused (about 1.1 s per pass at n=193).
+- On that non-fused path the first two forwards are slow on the GPU itself. The queue was drained before timing (346
+  ms before step 0, about 0 after), with no NaN/Inf in inputs or outputs. Forward ms over 12 steps:
+  `2411, 2078, 850, 852, 853, …`. With live frames on, step 1 rises to about 4.0 s (Mol*'s first-scene build competes
+  for the GPU). `record()` does not re-record (0 ms), `condUniform` is true throughout, and the programs are the same
+  chunked `passPrograms` as the fused path.
+- The `sm_sam` preset (n=180) shows the same pattern (`954, 3100` for its first two forwards). `profile-rfd4p.js
+  --presets=sm_sam` (zero xt, t=0.5) measures a steady 865 ms pass, dominated by `triProjG`, so the slow passes depend
+  on the early-step state, not the size.
+
+**Next steps.** Profile per kernel (`engine.profile`) on forwards 0 and 1 of a non-fused chiral-ligand run, against
+step 5, and find which dispatch inflates 2-4x. A 2-4x inflation of one 2-layer command buffer under contention is
+the likely watchdog trip. Also check whether the slowness tracks the early-t xt scale (data-dependent cost, e.g.
+f16 overflow/denormal handling) by replaying step 0's inputs at step 5. Reproduce in the CDP probe with
+`tools/gpu/check-webapp.js`'s preceding preset runs before the example.
