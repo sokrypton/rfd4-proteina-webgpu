@@ -480,6 +480,8 @@ class Rfd4pStudioApp {
       thinkingRadioGroup: document.getElementById('thinking-radio-group'),
       samplesInput: document.getElementById('samples-input'),
       seedInput: document.getElementById('seed-input'),
+      seedRandom: document.getElementById('seed-random'),
+      seedMode: document.getElementById('seed-mode'),
       backboneK: document.getElementById('backbone-k'),
       backboneKNum: document.getElementById('backbone-k-num'),
       latentK: document.getElementById('latent-k'),
@@ -567,7 +569,38 @@ class Rfd4pStudioApp {
     }
   }
 
+  /**
+   * Seeds start random so every visitor gets their own designs. A new one is drawn after each run, unless the user
+   * typed a seed (then it stays, to reproduce a design); the dice button draws one and returns to random.
+   */
+  _initSeed() {
+    const { seedInput, seedRandom } = this.els;
+    if (!seedInput) return;
+    this.seedPinned = false;
+    this._rollSeed();
+    seedInput.addEventListener('input', () => {
+      this.seedPinned = seedInput.value.trim() !== '';
+      if (!this.seedPinned) this._rollSeed();
+      this._renderSeedMode();
+    });
+    seedRandom?.addEventListener('click', () => {
+      this.seedPinned = false;
+      this._rollSeed();
+    });
+  }
+
+  _rollSeed() {
+    if (!this.els.seedInput) return;
+    this.els.seedInput.value = String(Math.floor(Math.random() * 1e6));
+    this._renderSeedMode();
+  }
+
+  _renderSeedMode() {
+    if (this.els.seedMode) this.els.seedMode.textContent = this.seedPinned ? 'fixed' : 'new each run';
+  }
+
   async init() {
+    this._initSeed();
     this._bindControls();
     await this._loadPreset(RFD4P_PRESETS[0].id, { syncStudio: false });
     this._initStudioBridge();
@@ -813,7 +846,8 @@ class Rfd4pStudioApp {
   }
 
   _buildCurrentBatch(seedOverride = null) {
-    const seed = seedOverride ?? (Number.parseInt(this.els.seedInput.value, 10) || 42);
+    const typed = Number.parseInt(this.els.seedInput.value, 10);
+    const seed = seedOverride ?? (Number.isFinite(typed) && typed >= 0 ? typed : 42);
 
     // Build directly from the active AtomWorks Studio session when the user is working in Studio
     if (this.useStudioSession && this.inputSessionId) {
@@ -931,6 +965,7 @@ class Rfd4pStudioApp {
       input.checked = choice.sessionId === selectedSessionId;
       const span = document.createElement('span');
       span.textContent = choice.label;
+      if (choice.title) label.title = choice.title;
       label.append(input, span);
       this.els.designViewRadios.appendChild(label);
     }
@@ -963,7 +998,8 @@ class Rfd4pStudioApp {
       this.els.predictBtn.classList.add('secondary');
       this.els.predictBtn.disabled = false;
 
-      const baseSeed = Number.parseInt(this.els.seedInput.value, 10) || 42;
+      const typedSeed = Number.parseInt(this.els.seedInput.value, 10);
+      const baseSeed = Number.isFinite(typedSeed) && typedSeed >= 0 ? typedSeed : 42;
       const numSamples = Math.max(1, Math.min(8, Number.parseInt(this.els.samplesInput?.value ?? '1', 10) || 1));
       const nsteps = overrides.nsteps ?? 60;
       const recycleSchedule = overrides.recycleSchedule ?? this._getSelectedThinking();
@@ -1212,15 +1248,15 @@ class Rfd4pStudioApp {
           trajectoryCif,
         });
         this.generatedViews.set(designSessionId, {
-          label: `Design ${sampleIdx + 1}`,
+          label: `Design ${sampleIdx + 1} · seed ${sampleSeed}`,
           cif: result.cif,
           pdb: result.pdb,
           isInput: false,
           hasTrajectory: Boolean(trajectoryCif),
-          filenameStem: `design-${sampleIdx + 1}`,
+          filenameStem: `design-${sampleIdx + 1}-seed${sampleSeed}`,
           overlays,
         });
-        viewChoices.push({ label: `Design ${sampleIdx + 1}`, sessionId: designSessionId });
+        viewChoices.push({ label: `Design ${sampleIdx + 1}`, title: `seed ${sampleSeed}`, sessionId: designSessionId });
       }
 
       const elapsedS = ((performance.now() - t0) / 1000).toFixed(2);
@@ -1238,7 +1274,9 @@ class Rfd4pStudioApp {
 
       this.setProgress(1, 'idle');
       const stopNote = earlyStops.length ? ` Converged early at step ${earlyStops.join(', ')}.` : '';
-      this.setStatus(`Generated from input revision ${inputRevision} (${elapsedS} s on ${backendLabel}).${stopNote}`);
+      const seeds = numSamples > 1 ? `seeds ${baseSeed}–${baseSeed + numSamples - 1}` : `seed ${baseSeed}`;
+      this.setStatus(`Generated from input revision ${inputRevision} with ${seeds} (${elapsedS} s on ${backendLabel}).${stopNote}`);
+      if (!this.seedPinned) this._rollSeed();
     } catch (err) {
       this.setProgress(0, 'idle');
       try {

@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/studio-DCmII2EW.css" />
-    <link rel="stylesheet" href="./web/styles.css?v=355080c1c2" />
+    <link rel="stylesheet" href="./web/styles.css?v=ede15749eb" />
     <!-- app.js first: its import of studio-api.js installs the /api/* fetch interceptor the Studio bundle boots against. -->
     <!-- module-versions:start (tools/stamp-modules.mjs) -->
     <script type="importmap">
@@ -37,8 +37,8 @@
           "./shared/rfd4p/presets.js": "./shared/rfd4p/presets.js?v=8db26644f7",
           "./shared/rfd4p/safetensors.js": "./shared/rfd4p/safetensors.js?v=4daf05721a",
           "./shared/rfd4p/vendor/fzstd.js": "./shared/rfd4p/vendor/fzstd.js?v=e6cdba40d4",
-          "./web/app.js": "./web/app.js?v=2ad4275a96",
-          "./web/design-panel.js": "./web/design-panel.js?v=a68db077c5",
+          "./web/app.js": "./web/app.js?v=b32a93e87a",
+          "./web/design-panel.js": "./web/design-panel.js?v=711b5148ad",
           "./web/design-spec.js": "./web/design-spec.js?v=4df623aa57",
           "./web/studio-api.js": "./web/studio-api.js?v=33827822eb",
           "./web/vendor/py2dmol-ss.js": "./web/vendor/py2dmol-ss.js?v=f2ede21309",
@@ -53,7 +53,7 @@
       }
     </script>
     <!-- module-versions:end -->
-    <script type="module" src="./web/app.js?v=2ad4275a96"></script>
+    <script type="module" src="./web/app.js?v=b32a93e87a"></script>
     <script type="module" crossorigin src="./assets/studio-Qv7-CNrf.js"></script>
   </head>
   <body>
@@ -77,6 +77,7 @@
                     <button id="rfd4p-open-file" type="button" class="secondary compact">Open file…</button>
                 </form>
                 <p id="rfd4p-fetch-status" class="inline-feedback muted" aria-live="polite"></p>
+                <button id="rfd4p-back" type="button" class="secondary compact" hidden>← Back to the current design</button>
             </div>
 
             <!-- Design: what will be generated, read from the open document. -->
@@ -86,7 +87,10 @@
                         <span class="rfd4p-eyebrow">Task</span>
                         <strong id="rfd4p-task-label"></strong>
                     </div>
-                    <button id="rfd4p-change-task" type="button" class="secondary compact">Change…</button>
+                    <span class="rfd4p-task-buttons">
+                        <button id="rfd4p-change-task" type="button" class="secondary compact">Change…</button>
+                        <button id="rfd4p-new" type="button" class="secondary compact" title="Start over with an example, a PDB ID or your own file">New…</button>
+                    </span>
                 </div>
                 <p id="rfd4p-task-detail" class="rfd4p-task-detail muted"></p>
                 <div id="rfd4p-guided" class="rfd4p-guided" hidden></div>
@@ -113,13 +117,17 @@
                     <label><input type="radio" name="thinking-radio" value="high" />high</label>
                 </fieldset>
             </div>
+            <div class="rfd4p-seed-row">
+                <label for="seed-input" title="Same seed and settings give the same design. A new random seed is drawn after each run unless you type one.">Seed
+                    <input type="number" id="seed-input" value="" min="0" max="4294967295" step="1" />
+                </label>
+                <button id="seed-random" type="button" class="secondary compact" title="New random seed" aria-label="New random seed">🎲</button>
+                <span id="seed-mode" class="rfd4p-seed-mode muted"></span>
+            </div>
 
             <details class="rfd4p-sampling-details" id="sampling-accordion">
                 <summary>More settings</summary>
                 <div class="rfd4p-sampling-body">
-                    <label for="seed-input">Seed
-                        <input type="number" id="seed-input" value="42" min="0" max="4294967295" step="1" />
-                    </label>
                     <p class="rfd4p-sampling-note">Lower K = higher temperature and more variation. Defaults give stronger low-temperature sampling.</p>
                     <label for="backbone-k">
                         <span class="rfd4p-slider-head">

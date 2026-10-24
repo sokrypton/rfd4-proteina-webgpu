@@ -69,6 +69,8 @@ export class DesignPanel {
       taskLabel: $('rfd4p-task-label'),
       taskDetail: $('rfd4p-task-detail'),
       changeTask: $('rfd4p-change-task'),
+      newDoc: $('rfd4p-new'),
+      back: $('rfd4p-back'),
       guided: $('rfd4p-guided'),
       chainList: $('rfd4p-chain-list'),
       addChain: $('rfd4p-add-chain'),
@@ -100,6 +102,10 @@ export class DesignPanel {
       void this._fetchPdb(els.pdbId.value);
     });
     els.openFile?.addEventListener('click', () => document.getElementById('file-input')?.click());
+    // "New…" shows the start screen over the open document; opening anything from it replaces the document.
+    els.newDoc?.addEventListener('click', () => { this.showStart = true; this.render(); });
+    els.back?.addEventListener('click', () => { this.showStart = false; this.render(); });
+    document.getElementById('file-input')?.addEventListener('change', () => { this.showStart = false; });
     els.changeTask?.addEventListener('click', () => {
       this.showFlows = !this.showFlows;
       this.flowForm = null;
@@ -181,10 +187,12 @@ export class DesignPanel {
     const spec = this._spec();
     const { els } = this;
     const hasDoc = Boolean(spec && !spec.empty);
-    if (els.start) els.start.hidden = hasDoc;
-    if (els.design) els.design.hidden = !hasDoc;
-    if (els.runSettings) els.runSettings.hidden = !hasDoc;
-    if (!hasDoc) return;
+    const starting = !hasDoc || Boolean(this.showStart);
+    if (els.start) els.start.hidden = !starting;
+    if (els.back) els.back.hidden = !hasDoc;
+    if (els.design) els.design.hidden = starting;
+    if (els.runSettings) els.runSettings.hidden = starting;
+    if (starting) return;
 
     const viewingDesign = this._viewingDesign();
     els.design.classList.toggle('rfd4p-readonly', viewingDesign);
@@ -193,6 +201,7 @@ export class DesignPanel {
       ? 'Showing a generated design. Select Input under View to change the setup.'
       : spec.task.detail;
     els.changeTask.hidden = viewingDesign;
+    if (els.newDoc) els.newDoc.hidden = viewingDesign;
     els.addChain.hidden = viewingDesign;
     els.undo.hidden = viewingDesign;
     els.undo.disabled = document.getElementById('undo')?.disabled ?? true;
@@ -730,6 +739,7 @@ export class DesignPanel {
     button?.classList.add('loading');
     try {
       await window.__rfd4pLoadExample(task.example);
+      this.showStart = false;
       if (task.then) {
         const spec = this._spec();
         if (spec) await this._runFlow(task.then, spec);
@@ -754,6 +764,7 @@ export class DesignPanel {
       const text = await res.text();
       const opened = await window.__rfd4pOpenFile?.(new File([text], `${id}.cif`, { type: 'chemical/x-mmcif' }));
       status.textContent = opened === false ? `Opening ${id} was cancelled.` : '';
+      if (opened !== false) this.showStart = false;
       this.showFlows = true;
     } catch (err) {
       status.textContent = `Could not fetch ${id}: ${err?.message ?? err}`;

@@ -435,6 +435,7 @@ body.studio-fullscreen-body {
 /* ---- Simple mode (default): only the RFD4-Proteina card, the viewer, the sequence and Open/Style/picking.
    "Advanced editor" (body.rfd4p-advanced, web/design-panel.js) brings back every AtomWorks Studio tool. ---- */
 body:not(.rfd4p-advanced) .header-actions .load-options,
+body:not(.rfd4p-advanced) .header-actions label.file-button,
 body:not(.rfd4p-advanced) .header-actions label.file-button.secondary,
 body:not(.rfd4p-advanced) .header-actions #download,
 body:not(.rfd4p-advanced) #viewer-toolbar details[data-menu="analyze"],
@@ -547,6 +548,12 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+}
+
+.rfd4p-task-buttons {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .rfd4p-task-head strong {
@@ -693,6 +700,33 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
 .rfd4p-readonly select,
 .rfd4p-readonly input {
   pointer-events: none;
+}
+
+/* Run settings: seed on its own line under designs + thinking */
+.rfd4p-seed-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.rfd4p-seed-row label {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.rfd4p-seed-row input {
+  width: 96px;
+}
+
+.rfd4p-seed-row button {
+  height: 28px;
+  padding: 0 8px;
+}
+
+.rfd4p-seed-mode {
+  font-size: 11px;
+  padding-bottom: 6px;
 }
 
 /* Run settings: designs + thinking on one line */
