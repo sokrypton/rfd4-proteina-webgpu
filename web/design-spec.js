@@ -99,7 +99,17 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
   const out = [];
   for (const chain of chains.values()) {
     const polymer = chain.residues.filter((r) => r.kind && r.kind !== 'segment');
-    const segments = chain.residues.filter((r) => r.kind === 'segment').map((r) => r.segment);
+    // Where each segment sits relative to the chain's existing residues (for labels).
+    const ordered = chain.residues.filter((r) => r.kind);
+    const segments = [];
+    ordered.forEach((r, k) => {
+      if (r.kind !== 'segment') return;
+      const prev = ordered.slice(0, k).reverse().find((x) => x.kind !== 'segment');
+      const next = ordered.slice(k + 1).find((x) => x.kind !== 'segment');
+      const where = !prev && !next ? '' : !prev ? 'N-terminal' : !next ? 'C-terminal'
+        : `between ${chain.id}${prev.resId} and ${chain.id}${next.resId}`;
+      segments.push({ ...r.segment, where });
+    });
     const ligands = chain.residues.filter((r) => !r.kind);
     const fixed = polymer.filter((r) => r.crdAtoms > 0);
     // Unmodelled residues (no coordinates) cannot be held in place, so roles are judged on the modelled ones.

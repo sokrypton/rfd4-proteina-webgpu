@@ -723,3 +723,15 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   justify-content: stretch;
   text-align: left;
 }
+
+.rfd4p-flow-form input.rfd4p-pct {
+  width: 56px;
+  height: 24px;
+  padding: 2px 6px;
+}
+
+.rfd4p-seg-label {
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-secondary, #d1d2d5);
+}

@@ -422,6 +422,8 @@ export class StudioDoc {
   }
 
   snapshot() {
+    // Inside `compound` the outer call already took the one snapshot for the whole operation.
+    if (this._compound) return;
     this.undoStack.push({
       atoms: cloneAtoms(this.atoms),
       rawCif: this.rawCif,
@@ -1145,6 +1147,89 @@ export class StudioDoc {
       }).affected_count;
     }
     return { affected_count: affected, changed: true, message: `Updated conditions on ${affected} atoms.` };
+  }
+
+  /** Run several edits as one undo step. */
+  compound(fn) {
+    this.snapshot();
+    this._compound = true;
+    try {
+      return fn();
+    } finally {
+      this._compound = false;
+    }
+  }
+
+  /**
+   * Motif scaffolding around a selection: keep the selected residues (coordinates and sequence fixed), delete the other
+   * polymer residues of their chains and put a new-residue segment in each gap (N-terminal, between motif pieces,
+   * C-terminal) whose length range is the original gap length +/- `spread` (a fraction).
+   */
+  scaffoldMotif(indices, { spread = 0.25 } = {}) {
+    const keep = this.resolveIndices(indices, 'residue');
+    if (!keep.length) throw new Error('select the motif residues first');
+    const a = this.atoms;
+    const resKey = (i) => `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}`;
+    const kept = new Set(keep.map(resKey));
+    const isSentinel = (i) => /^\d+-\d+$/.test(String(a.res_name[i]));
+    const isPolymerAtom = (i) => !a.hetero[i] && !isSentinel(i);
+    const chains = new Set(keep.map((i) => String(a.chain_id[i])));
+
+    // Per chain, residues in order -> gaps anchored on the kept residue beside them.
+    const gaps = [];
+    const drop = [];
+    for (const chain of chains) {
+      const residues = [];
+      for (let i = 0; i < a.nAtoms; i += 1) {
+        if (String(a.chain_id[i]) !== chain || !isPolymerAtom(i)) continue;
+        const key = resKey(i);
+        if (residues[residues.length - 1]?.key !== key) residues.push({ key, resId: a.res_id[i], keep: kept.has(key) });
+        if (!kept.has(key)) drop.push(i);
+      }
+      let run = 0;
+      let lastKept = null;
+      const flush = (nextKept) => {
+        if (!run) return;
+        // A gap after a kept residue is inserted after it; a leading gap goes before the first kept residue.
+        gaps.push(lastKept ? { chain, resId: lastKept.resId, before: false, length: run }
+          : { chain, resId: nextKept.resId, before: true, length: run });
+        run = 0;
+      };
+      for (const r of residues) {
+        if (r.keep) {
+          flush(r);
+          lastKept = r;
+        } else {
+          run += 1;
+        }
+      }
+      flush(null);
+    }
+
+    return this.compound(() => {
+      this.setCondition('coordinate', keep, { snapshot: false });
+      this.setCondition('sequence', keep, { snapshot: false });
+      if (drop.length) this.deleteAtoms(drop);
+      // C-terminal gaps first, so residue renumbering after an insert never moves an anchor still to be used.
+      gaps.sort((g, h) => (g.chain === h.chain ? h.resId - g.resId || (g.before ? 1 : -1) : 0));
+      for (const g of gaps) {
+        let anchor = -1;
+        for (let i = 0; i < this.atoms.nAtoms; i += 1) {
+          if (String(this.atoms.chain_id[i]) === g.chain && this.atoms.res_id[i] === g.resId && !isSentinel(i)) {
+            anchor = i;
+            break;
+          }
+        }
+        if (anchor < 0) continue;
+        const min = Math.max(1, Math.round(g.length * (1 - spread)));
+        const max = Math.max(min, Math.round(g.length * (1 + spread)));
+        this.insertSegment({ minimum: min, maximum: max, atomIndex: anchor, before: g.before });
+      }
+      return {
+        changed: true,
+        message: `Kept ${kept.size} motif residue${kept.size === 1 ? '' : 's'}; ${drop.length ? `replaced the rest with ${gaps.length} new-residue segment${gaps.length === 1 ? '' : 's'}` : 'nothing else to replace'}.`,
+      };
+    });
   }
 
   /** Change an expandable segment's length range (its sentinel atom's min/max, and its `min-max` name). */
@@ -2952,6 +3037,10 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
           chainId: body.chain_id,
           chainType: body.chain_type,
         });
+        return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
+      }
+      if (subpath === '/segments/scaffold' && method === 'POST') {
+        const editResult = doc.scaffoldMotif(body.atom_indices, { spread: body.spread ?? 0.25 });
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
       if (subpath === '/segments/range' && method === 'POST') {

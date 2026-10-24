@@ -27,7 +27,7 @@ const TASKS = [
 /** Guided set-ups for a document (shown for an unconstrained structure, or on "Change…"). */
 const FLOWS = [
   { key: 'binder', title: 'Design a binder to it', desc: 'Keep it fixed and add a new chain' },
-  { key: 'scaffold', title: 'Keep the selected residues', desc: 'Fix them; redesign the rest of their chains' },
+  { key: 'scaffold', title: 'Keep the selected residues', desc: 'Motif scaffolding: fix them, rebuild the rest' },
   { key: 'sequence', title: 'Redesign the sequence', desc: 'Keep the backbone, new sequence' },
   { key: 'diversify', title: 'Diversify it', desc: 'Partial diffusion from this structure' },
   { key: 'scratch', title: 'Redesign everything', desc: 'Same chain lengths, nothing kept' },
@@ -107,7 +107,7 @@ export class DesignPanel {
     window.addEventListener('atomworks-studio-message', () => queueMicrotask(() => this.render()));
     window.addEventListener('atomworks-studio-selection', (ev) => {
       this.selectionCount = ev.detail?.count ?? 0;
-      if (this.showFlows || this.flowForm) this._renderFlows(this._spec());
+      if (this.els.guided && !this.els.guided.hidden) this._renderFlows(this._spec(), true);
     });
     for (const id of ['partial-diffusion', 'partial-diffusion-percent', 'partial-diffusion-percent-num']) {
       document.getElementById(id)?.addEventListener('input', () => this.render());
@@ -240,7 +240,11 @@ export class DesignPanel {
       select.addEventListener('change', () => void this._setRole(c, select.value));
       body.append(el('div', { class: 'rfd4p-chain-line' }, info, select));
       const notes = [];
-      if (c.role === 'motif') notes.push(`${c.fixed} fixed, ${c.designed} designed`);
+      if (c.role === 'motif') {
+        notes.push(c.segments.length && !c.designed
+          ? `${c.fixed} motif residue${c.fixed === 1 ? '' : 's'} kept; new residues around them`
+          : `${c.fixed} fixed, ${c.designed} designed`);
+      }
       if (c.role === 'sequence') notes.push('sequence kept, structure predicted');
       if (c.unindexed) notes.push(`${c.unindexed} motif residue${c.unindexed === 1 ? '' : 's'} placed anywhere`);
       if (c.hotspots) notes.push(`${c.hotspots} hotspot residue${c.hotspots === 1 ? '' : 's'}`);
@@ -262,7 +266,7 @@ export class DesignPanel {
       min.addEventListener('change', commit);
       max.addEventListener('change', commit);
       body.append(el('div', { class: 'rfd4p-chain-line rfd4p-seg-line' },
-        el('span', { text: c.residues ? '+ new residues' : 'Length' }),
+        el('span', { class: 'rfd4p-seg-label', text: c.residues ? `New residues${seg.where ? `, ${seg.where}` : ''}` : 'Length' }),
         el('span', { class: 'rfd4p-seg-inputs' }, min, el('span', { text: '–' }), max)));
     }
     return row;
@@ -286,8 +290,8 @@ export class DesignPanel {
         disabled,
         title: needsSelection ? 'Select residues in the sequence bar or viewer first' : null,
         onclick: () => {
-          if (f.key === 'binder') {
-            this.flowForm = this.flowForm === 'binder' ? null : 'binder';
+          if (f.key === 'binder' || f.key === 'scaffold') {
+            this.flowForm = this.flowForm === f.key ? null : f.key;
             this._renderFlows(spec, true);
           } else {
             void this._runFlow(f.key, spec);
@@ -295,6 +299,7 @@ export class DesignPanel {
         },
       }, el('strong', { text: f.title }), el('span', { text: needsSelection ? 'Select residues first' : f.desc })));
       if (f.key === 'binder' && this.flowForm === 'binder') children.push(this._binderForm(spec));
+      if (f.key === 'scaffold' && this.flowForm === 'scaffold' && !needsSelection) children.push(this._scaffoldForm(spec));
     }
     box.replaceChildren(...children);
   }
@@ -319,6 +324,30 @@ export class DesignPanel {
       apply);
   }
 
+  _selectedResidueCount() {
+    const a = this._inputDoc()?.atoms;
+    const sel = window.__rfd4pSelection?.() ?? [];
+    if (!a) return sel.length;
+    return new Set(sel.map((i) => `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code?.[i] ?? ''}`)).size;
+  }
+
+  _scaffoldForm(spec) {
+    const rebuild = el('input', { type: 'radio', name: 'rfd4p-scaffold-mode', value: 'rebuild', checked: true });
+    const inPlace = el('input', { type: 'radio', name: 'rfd4p-scaffold-mode', value: 'in-place' });
+    const spread = el('input', { type: 'number', class: 'rfd4p-pct', min: 0, max: 100, step: 5, value: 25, 'aria-label': 'Length variation (%)' });
+    const apply = el('button', {
+      type: 'button', class: 'primary compact', text: 'Set up motif scaffolding',
+      onclick: () => void this._runFlow('scaffold', spec, {
+        rebuild: rebuild.checked, spread: Math.max(0, Math.min(100, Number(spread.value) || 0)) / 100,
+      }),
+    });
+    return el('div', { class: 'rfd4p-flow-form' },
+      el('p', { class: 'muted', text: `Keeps the ${this._selectedResidueCount()} selected residues fixed (structure and sequence).` }),
+      el('label', { class: 'checkbox' }, rebuild, ' Rebuild the rest as new segments, each its original length ±', spread, '%'),
+      el('label', { class: 'checkbox' }, inPlace, ' Keep the chain length; redesign the rest in place'),
+      apply);
+  }
+
   async _runFlow(key, spec, opts = {}) {
     const polymers = spec.chains.filter((c) => c.residues > 0);
     const ligandAtoms = spec.chains.flatMap((c) => c.ligandAtomIndices);
@@ -338,6 +367,9 @@ export class DesignPanel {
         if (opts.hotspots && selection.length) {
           await this._mutate('/conditions', { condition: 'hotspot', atom_indices: selection, enabled: true, scope: 'atom' });
         }
+      } else if (key === 'scaffold' && opts.rebuild !== false) {
+        if (!selection.length) return;
+        await this._mutate('/segments/scaffold', { atom_indices: selection, spread: opts.spread ?? 0.25 });
       } else if (key === 'scaffold') {
         if (!selection.length) return;
         const doc = this._inputDoc();

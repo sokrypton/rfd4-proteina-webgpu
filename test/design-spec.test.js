@@ -62,3 +62,22 @@ test('batch condition edits and segment ranges change the spec in one undo step'
   assert.match(spec.contig, /\/0 70-80$/);
   assert.throws(() => doc.setSegmentRange(0, 5, 6), /not an expandable segment/);
 });
+
+test('scaffoldMotif keeps the selection and rebuilds each gap as a +/-25% segment in one undo step', () => {
+  const doc = new StudioDoc(exampleCif('inverse_folding.cif'), '2kl8.cif');
+  const a = doc.atoms;
+  const motif = [];
+  for (let i = 0; i < a.nAtoms; i += 1) {
+    const r = a.res_id[i];
+    if (((r >= 30 && r <= 40) || (r >= 60 && r <= 65)) && a.atom_name[i] === 'CA') motif.push(i);
+  }
+  const depth = doc.undoStack.length;
+  doc.scaffoldMotif(motif);
+  assert.equal(doc.undoStack.length, depth + 1);
+  const spec = designSpec(doc.atoms);
+  assert.equal(spec.task.key, 'motif');
+  // 2KL8 numbers 1-7 and 28-79: gaps of 9, 19 and 14 residues around the two motif pieces.
+  assert.equal(spec.contig, '7-11/A30-40/14-24/A60-65/11-18');
+  doc.undo();
+  assert.equal(designSpec(doc.atoms).contig, '59');
+});
