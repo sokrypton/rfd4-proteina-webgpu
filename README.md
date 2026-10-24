@@ -15,7 +15,8 @@ diffusion and inverse folding, so the full set is 469 MB).
 npm run serve          # http://localhost:4173 (no-cache static server)
 ```
 
-No build step is needed for the app itself: everything outside `studio-src/` is plain ES modules served as-is.
+No build step is needed for the app itself: everything here is plain ES modules served as-is. `npm run build:studio`
+refreshes the embedded AtomWorks Studio from its pinned release (`studio.json`).
 
 ## Layout
 
@@ -25,7 +26,7 @@ No build step is needed for the app itself: everything outside `studio-src/` is 
 | `shared/rfd4p/` | Input pipeline (mmCIF parsing, RCSB-style preparation, CCD fetch), features, flow-matching schedules, output |
 | `webgpu/rfd4p/` | WebGPU engine (WGSL kernels), trunk, decoder, encoder, generator |
 | `cpu/rfd4p/` | Float32 CPU reference used by the parity checks |
-| `studio-src/` | Vendored AtomWorks Studio web source; `npm run build:studio` builds it into `assets/` |
+| `studio.json`, `web/page/` | The AtomWorks Studio release this site embeds, and the two page fragments this repo owns (its head additions and the RFD4-Proteina card). `npm run build:studio` downloads that release and composes `index.html` and `assets/` from it |
 | `weights/int8/` | INT8 weight shards served to the browser |
 | `tools/` | Dev server, Studio build, headless-Chrome GPU checks (`tools/gpu/`), PyTorch oracle checks (`tools/oracle/`) |
 | `test/` | Node unit tests |

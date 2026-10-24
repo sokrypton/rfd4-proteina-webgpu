@@ -283,12 +283,12 @@ function designOverlays(structureAtoms, motifOverlay, skipTokens) {
 
 /** Shows `overlays` (from `designOverlays`) in the Studio viewer, clearing any that are absent. */
 async function showDesignOverlays(overlays) {
-  if (typeof window.__rfd4pSetOverlay !== 'function') return;
+  if (typeof window.atomworksStudio?.setOverlay !== 'function') return;
   // One ghost color (not element colors) so the reference never reads as extra bonds on the sampled side chain.
-  await window.__rfd4pSetOverlay('motif', overlays?.motif ?? null, {
+  await window.atomworksStudio?.setOverlay('motif', overlays?.motif ?? null, {
     label: 'Motif (reference)', alpha: 0.35, color: 0xe2e8f0, sizeAspectRatio: 0.6,
   });
-  await window.__rfd4pSetOverlay('sideChains', overlays?.sideChains ?? null, { label: 'Motif side chains' });
+  await window.atomworksStudio?.setOverlay('sideChains', overlays?.sideChains ?? null, { label: 'Motif side chains' });
 }
 
 /** `_entity` loop for `atoms`: the given entity ids are `non-polymer` (drawn as sticks), the rest as before. */
@@ -405,7 +405,7 @@ class LiveSequenceStrip {
       if (!track) {
         const chain = document.createElement('div');
         chain.className = 'sequence-chain';
-        const color = window.__rfd4pChainColor?.(r.chainId);
+        const color = window.atomworksStudio?.chainColor?.(r.chainId);
         if (color) chain.style.setProperty('--chain-color', color);
         const label = document.createElement('span');
         label.className = 'sequence-chain-label';
@@ -624,7 +624,7 @@ class Rfd4pStudioApp {
   _initStudioBridge() {
     this._mountCardIntoStudio();
     // AtomWorks Studio runs in this same document and announces session changes as window events.
-    window.addEventListener('atomworks-studio-message', (ev) => {
+    window.addEventListener('atomworks-studio', (ev) => {
       const event = { data: ev.detail };
       if (['ready', 'changed', 'example'].includes(event.data?.type)) {
         this._mountCardIntoStudio();
@@ -661,12 +661,12 @@ class Rfd4pStudioApp {
     const trajUrl = withTrajectory
       ? `/api/v1/sessions/${encodeURIComponent(sessionId)}/trajectory.cif`
       : null;
-    if (typeof window.__rfd4pOpenSession !== 'function') {
+    if (typeof window.atomworksStudio?.openSession !== 'function') {
       console.warn('AtomWorks Studio is not ready; cannot open session', sessionId);
       return;
     }
     try {
-      await window.__rfd4pOpenSession(sessionId, trajUrl);
+      await window.atomworksStudio?.openSession(sessionId, trajUrl);
       // Display-only reference motif and motif side chains beside a finished design (not part of the saved document).
       await showDesignOverlays(this.generatedViews.get(sessionId)?.overlays);
     } catch (err) {
@@ -1166,7 +1166,7 @@ class Rfd4pStudioApp {
           // On the GPU path only decoded frames are shown; the CA-only frame is for the CPU backend (no live decode).
           const frameReady = Boolean(info.decoded) || !useGpu;
           if (frameReady && !liveRenderBusy && !isStopping && (info.step === 0 || now - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS)) {
-            if (typeof window.__rfd4pRenderLiveFrame === 'function') {
+            if (typeof window.atomworksStudio?.renderFrame === 'function') {
               liveOverlays = { motif: overlayCifOf(motifOverlay, 'motif'), sideChains: null };
               const liveCif = liveAllAtomCif(info) ?? buildLiveFrameCifFromCa(alignedCaNm, tokens, null, UNIFIED_ATOM37_TOKENS);
               const frameOverlays = liveOverlays;
@@ -1180,7 +1180,7 @@ class Rfd4pStudioApp {
                 if (!keepCam) liveCamRadius = radius;
                 liveFramesRendered += 1;
                 liveRenderPromise = Promise.resolve(
-                  window.__rfd4pRenderLiveFrame(liveCif, `step_${info.step + 1}.cif`, keepCam),
+                  window.atomworksStudio?.renderFrame(liveCif, `step_${info.step + 1}.cif`, keepCam),
                 )
                   .then(() => showDesignOverlays(frameOverlays))
                   .catch(() => {})
@@ -1280,7 +1280,7 @@ class Rfd4pStudioApp {
     } catch (err) {
       this.setProgress(0, 'idle');
       try {
-        await window.__rfd4pRestoreInputView?.();
+        await window.atomworksStudio?.showDocument?.();
         await showDesignOverlays(null);
       } catch {
         // Ignore

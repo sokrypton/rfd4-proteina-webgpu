@@ -1,64 +1,95 @@
 #!/usr/bin/env node
 /**
- * Build the vendored AtomWorks Studio (studio-src/) into assets/ and point index.html at it.
+ * Compose index.html and assets/ from a released AtomWorks Studio browser bundle.
  *
- * Vite emits content-hashed files, so each build replaces the previous Studio files (listed in
- * assets/studio-files.json) and rewrites the page's entry <script>/<link> tags. Run via `npm run build:studio`.
+ * Studio used to be vendored under studio-src/ and built here, which meant re-applying local patches on every
+ * import and keeping a fork of Studio's index.html. The fork was the worse half: Studio looks its elements up by id
+ * and throws on a missing one, so a page that had drifted would stop Studio booting outright. Nothing is vendored
+ * now — the bundle is a release download, and the page is composed from Studio's own index.html plus the two
+ * fragments this repo owns (web/page/head.html, web/page/card.html).
+ *
+ *   npm run build:studio                      # the pinned release in studio.json
+ *   npm run build:studio -- --from <dir>      # a bundle built locally, for trying an unreleased Studio
+ *
+ * Studio is driven through its documented embedding API (window.atomworksStudio); see web/app.js.
  */
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SRC = join(ROOT, 'studio-src');
-const DIST = join(SRC, 'dist');
 const ASSETS = join(ROOT, 'assets');
 const LIST = join(ASSETS, 'studio-files.json');
-const PAGES = ['index.html'];
+const PIN = JSON.parse(readFileSync(join(ROOT, 'studio.json'), 'utf8'));
 
-function run(cmd, args) {
-  const r = spawnSync(cmd, args, { cwd: SRC, stdio: 'inherit' });
-  if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed (${r.status})`);
+const args = process.argv.slice(2);
+const fromIndex = args.indexOf('--from');
+const localBundle = fromIndex === -1 ? null : args[fromIndex + 1];
+
+function run(cmd, cmdArgs, cwd = ROOT) {
+  const result = spawnSync(cmd, cmdArgs, { cwd, stdio: 'inherit' });
+  if (result.status !== 0) throw new Error(`${cmd} ${cmdArgs.join(' ')} failed (${result.status})`);
 }
 
-if (!existsSync(join(SRC, 'node_modules'))) run('npm', ['ci', '--no-audit', '--no-fund']);
-run(join(SRC, 'node_modules/.bin/tsc'), ['--noEmit']);
-run(join(SRC, 'node_modules/.bin/vite'), ['build', '--logLevel', 'warn']);
+/** The release tarball, verified against the checksum in studio.json so a build cannot silently change bundle. */
+function downloadBundle() {
+  const url = PIN.bundleUrl.replaceAll('${version}', PIN.version);
+  const work = mkdtempSync(join(tmpdir(), 'studio-bundle-'));
+  const archive = join(work, 'bundle.tar.gz');
+  run('curl', ['-fsSL', url, '-o', archive], work);
+  const digest = createHash('sha256').update(readFileSync(archive)).digest('hex');
+  if (PIN.sha256 && PIN.sha256 !== digest) {
+    throw new Error(`${url}\n  expected sha256 ${PIN.sha256}\n  got      sha256 ${digest}`);
+  }
+  if (!PIN.sha256) console.warn(`studio: no sha256 pinned; downloaded bundle is ${digest}`);
+  const out = join(work, 'bundle');
+  mkdirSync(out);
+  run('tar', ['-xzf', archive, '-C', out], work);
+  return out;
+}
 
-const manifest = JSON.parse(readFileSync(join(DIST, '.vite/manifest.json'), 'utf8'));
-const entry = manifest['src/main.ts'];
-if (!entry?.file || !entry.css?.length) throw new Error('studio entry (src/main.ts) or its CSS missing from manifest');
+const bundle = localBundle ? resolve(localBundle) : downloadBundle();
+const studioPage = join(bundle, 'index.html');
+if (!existsSync(studioPage)) throw new Error(`${bundle} is not a Studio bundle (no index.html)`);
 
+// Studio's own files, replacing the previous build's and nothing else in assets/.
 const walk = (dir) => readdirSync(dir).flatMap((name) => {
-  const p = join(dir, name);
-  return statSync(p).isDirectory() ? walk(p) : [p];
+  const path = join(dir, name);
+  return statSync(path).isDirectory() ? walk(path) : [path];
 });
-const emitted = walk(join(DIST, 'assets')).map((p) => relative(DIST, p));
-
-// Replace the previous build's files (never anything else in assets/).
-const previous = existsSync(LIST) ? JSON.parse(readFileSync(LIST, 'utf8')) : [];
-for (const file of previous) rmSync(join(ROOT, file), { force: true });
+const emitted = walk(join(bundle, 'assets')).map((path) => relative(bundle, path));
+for (const file of existsSync(LIST) ? JSON.parse(readFileSync(LIST, 'utf8')) : []) {
+  rmSync(join(ROOT, file), { force: true });
+}
 for (const file of emitted) {
   mkdirSync(dirname(join(ROOT, file)), { recursive: true });
-  copyFileSync(join(DIST, file), join(ROOT, file));
+  cpSync(join(bundle, file), join(ROOT, file));
 }
 writeFileSync(LIST, JSON.stringify(emitted.sort(), null, 2) + '\n');
 
-// The Studio entry is the only module script / stylesheet under ./assets/ in each page.
-for (const page of PAGES) {
-  const path = join(ROOT, page);
-  let html = readFileSync(path, 'utf8');
-  const scripts = html.match(/<script type="module" crossorigin src="\.\/assets\/[^"]+"><\/script>/g) ?? [];
-  const styles = html.match(/<link rel="stylesheet" crossorigin href="\.\/assets\/[^"]+"\s*\/?>/g) ?? [];
-  if (scripts.length !== 1 || styles.length !== 1) {
-    throw new Error(`${page}: expected one ./assets/ module script and stylesheet, found ${scripts.length}/${styles.length}`);
-  }
-  html = html
-    .replace(scripts[0], `<script type="module" crossorigin src="./${entry.file}"></script>`)
-    .replace(styles[0], entry.css.map((css) => `<link rel="stylesheet" crossorigin href="./${css}" />`).join('\n    '));
-  writeFileSync(path, html);
+// Compose the page: Studio's markup, this repo's head additions, this repo's card ahead of Studio's shell.
+const head = readFileSync(join(ROOT, 'web/page/head.html'), 'utf8').trimEnd();
+const card = readFileSync(join(ROOT, 'web/page/card.html'), 'utf8').trimEnd();
+let page = readFileSync(studioPage, 'utf8');
+
+page = page.replace(/<title>[^<]*<\/title>/, `<title>${PIN.title}</title>`);
+if (!page.includes('</head>')) throw new Error('Studio index.html has no </head>');
+// Ahead of Studio's entry script, so app.js installs the /api/* interceptor before Studio boots against it.
+const entryScript = page.match(/\s*<script type="module" crossorigin src="[^"]+"><\/script>/);
+if (!entryScript) throw new Error('Studio index.html has no module entry script');
+page = page.replace(entryScript[0], `\n${head}${entryScript[0]}`);
+const body = page.match(/<body[^>]*>/);
+if (!body) throw new Error('Studio index.html has no <body>');
+page = page.replace(body[0], `${body[0]}\n${card}`);
+// Studio's bundle is built to be served from the site root; this one lives under a project path on Pages.
+page = page.replaceAll('="/assets/', '="./assets/').replaceAll('="/guide/', '="./guide/');
+if (/(?:src|href)="\/[^"]/.test(page)) {
+  throw new Error(`composed page still has root-absolute paths: ${page.match(/(?:src|href)="\/[^"]+"/g)}`);
 }
 
-console.log(`studio: ${entry.file} + ${entry.css.join(', ')} (${emitted.length} files)`);
+writeFileSync(join(ROOT, 'index.html'), page);
+console.log(`studio: ${PIN.version}${localBundle ? ` (local: ${localBundle})` : ''}, ${emitted.length} files`);
 run('node', [join(ROOT, 'tools/stamp-modules.mjs')]);

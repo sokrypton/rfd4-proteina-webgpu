@@ -4,10 +4,10 @@ This site redistributes the following third-party software and data.
 
 ## AtomWorks Studio
 
-`studio-src/` is the web source of [AtomWorks Studio](https://github.com/RosettaCommons/atomworks-studio) v0.0.2
-(`packages/web`, plus the `wasm-pack` build of `packages/core`), with local modifications for this port (the
-`__rfd4p*` hooks, a same-document event bridge, in-place live frames and overlay structures, Mol* only); see
-`studio-src/UPSTREAM.md`. `assets/` (except Mol*, below) is its build output; `web/studio/`, `guide/`,
+`assets/` (except Mol*, below) is the released browser bundle of
+[AtomWorks Studio](https://github.com/RosettaCommons/atomworks-studio), downloaded unmodified at the version pinned in
+`studio.json` and composed into `index.html` by `tools/build-studio.mjs`. This repository carries no AtomWorks Studio
+source; earlier revisions vendored it under `studio-src/` and patched it locally. `web/studio/`, `guide/`,
 `annotation-studio.svg`, `atomworks_logo_dark.svg` and `manifest.webmanifest` also come from AtomWorks Studio.
 
 BSD 3-Clause License
