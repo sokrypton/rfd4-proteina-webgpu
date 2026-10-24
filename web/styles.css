@@ -401,3 +401,33 @@ body.studio-fullscreen-body {
 .rfd4p-sampling-body label:has(input:disabled) {
   opacity: 0.5;
 }
+
+/* Compact sequence dock: letter-width residue cells, no gaps, so more of a long chain fits without scrolling. */
+.sequence-dock .sequence-track {
+  gap: 0;
+}
+
+.sequence-dock .sequence-token {
+  width: 9px;
+  min-width: 9px;
+  height: 15px;
+  font-size: 10px;
+  line-height: 13px;
+  border-radius: 1px;
+}
+
+.sequence-dock .sequence-token.sequence-segment {
+  width: auto;
+  min-width: 48px;
+  padding: 0 4px;
+}
+
+.sequence-dock .sequence-chain {
+  gap: 4px;
+}
+
+/* The dashed index-condition outline boxes every letter at this width; mark it with a dashed underline instead. */
+.sequence-dock .sequence-token.condition-index {
+  outline: none;
+  border-bottom: 1px dashed var(--condition-index);
+}

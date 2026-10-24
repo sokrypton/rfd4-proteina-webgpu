@@ -245,8 +245,9 @@ export class Rfd4pGeneratorGpu {
       const wantDecodeStep = Boolean(opts.onStep) && (
         (decodeEvery > 0 && ((s + 1) % decodeEvery === 0 || s + 1 === nsteps)) || Boolean(opts.decodeStep?.(s, nsteps)));
       const wantLogits = isLast || Boolean(opts.wantStepLogits) || wantDecodeStep || Boolean(monitor);
-      // The insertion head normally runs on the last step only; run it on any step that could end the run.
-      const wantInsertion = isLast || Boolean(monitor?.mayStopAt(s));
+      // The insertion head normally runs on the last step only; run it on any step that could end the run, and on
+      // decoded live frames when asked (so the caller can place an unindexed motif in each frame).
+      const wantInsertion = isLast || Boolean(monitor?.mayStopAt(s)) || (wantDecodeStep && Boolean(opts.liveInsertion));
       let seqData = null;
       if (s === 0 || !gpuStepLoop) {
         seqData = trunkSeqFeatures(batch, {
@@ -346,6 +347,7 @@ export class Rfd4pGeneratorGpu {
             xt: { bb_ca: Float32Array.from(x.bb_ca), local_latents: Float32Array.from(x.local_latents) },
             logits: lastLogits,
             decoded: liveDecoded,
+            insertionLogits: liveDecoded ? lastInsertion : null,
             convergence,
           });
         }
@@ -412,6 +414,7 @@ export class Rfd4pGeneratorGpu {
           xt: { bb_ca: Float32Array.from(x.bb_ca), local_latents: Float32Array.from(x.local_latents) },
           logits: lastLogits,
           decoded: liveDecoded,
+          insertionLogits: liveDecoded ? lastInsertion : null,
           convergence,
         });
         await yieldToBrowser();

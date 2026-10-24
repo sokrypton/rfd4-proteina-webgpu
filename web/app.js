@@ -202,7 +202,8 @@ function buildMotifOverlayAtoms(inputAtoms) {
   for (let i = 0; i < inputAtoms.token_id.length; i += 1) {
     const crd = crdOf(i);
     const name = inputAtoms.atom_name[i];
-    if (!crd || !isMotifToken(inputAtoms.token_id[i]) || !name || name === 'UNK') continue;
+    // Ligands are drawn by the frame itself (atomized tokens are always emitted).
+    if (!crd || inputAtoms.hetero?.[i] || !isMotifToken(inputAtoms.token_id[i]) || !name || name === 'UNK') continue;
     out.push({
       groupPdb: 'HETATM', isHetero: true, atomName: name, resName: inputAtoms.res_name[i], chainId,
       resId: Number(inputAtoms.res_id[i]), authSeqId: Number(inputAtoms.res_id[i]), insCode: '',
@@ -211,6 +212,47 @@ function buildMotifOverlayAtoms(inputAtoms) {
     });
   }
   return out;
+}
+
+/**
+ * Side chains (Cα onward) of the design's own motif residues — an unindexed motif placed by the insertion mapping
+ * (e.g. an enzyme's catalytic residues), or a coordinate-conditioned residue in a chain that is otherwise designed —
+ * copied onto an unused chain so they draw as sticks on top of the cartoon. Target chains (every residue fixed) are
+ * left to the frame itself, as in `buildMotifOverlayAtoms`.
+ */
+function motifSideChainAtoms(structureAtoms, usedChains) {
+  const hasCrd = (a) => Boolean(a.crd && Number.isFinite(a.crd[0]));
+  const chainTokens = new Map();
+  const tokenFixed = new Map();
+  const motifTokens = new Set();
+  for (const a of structureAtoms) {
+    if (a.tokenId == null || a.isHetero) continue;
+    let tokens = chainTokens.get(a.chainId);
+    if (!tokens) chainTokens.set(a.chainId, (tokens = new Set()));
+    tokens.add(a.tokenId);
+    if (hasCrd(a)) tokenFixed.set(a.tokenId, true);
+    if (a.isUnindexedInsertion) motifTokens.add(a.tokenId);
+  }
+  for (const tokens of chainTokens.values()) {
+    const fixed = [...tokens].filter((t) => tokenFixed.get(t));
+    if (fixed.length < tokens.size) for (const t of fixed) motifTokens.add(t);
+  }
+  if (!motifTokens.size) return [];
+  const chainId = [...'NOPQRSTUVWXYZ'].find((c) => !usedChains.has(c)) ?? 'SC';
+  return structureAtoms
+    .filter((a) => motifTokens.has(a.tokenId) && !a.isHetero && !['N', 'C', 'O', 'OXT'].includes(a.atomName))
+    .map((a) => ({ ...a, groupPdb: 'HETATM', isHetero: true, chainId }));
+}
+
+/**
+ * CIF for the display-only overlay drawn beside a design: the reference motif plus the design's motif side chains,
+ * as one `non-polymer` entity `entityId` (empty if there is nothing to draw).
+ */
+function displayOverlayAtoms(structureAtoms, motifOverlay, entityId) {
+  const used = new Set(structureAtoms.map((a) => a.chainId).concat(motifOverlay.map((a) => a.chainId)));
+  return motifOverlay.concat(motifSideChainAtoms(structureAtoms, used)).map((a, k) => ({
+    ...a, serial: structureAtoms.length + k + 1, entityId,
+  }));
 }
 
 /** `_entity` loop for `atoms`: the given entity ids are `non-polymer` (drawn as sticks), the rest as before. */
@@ -993,9 +1035,8 @@ class Rfd4pStudioApp {
         const wantLiveFrame = (step, total) =>
           step === 0 || (step < total - 1 && performance.now() + lastStepMs - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS);
         const motifOverlay = buildMotifOverlayAtoms(atoms);
-        const motifOverlayCif = motifOverlay.length
-          ? toCifString(motifOverlay, { dataBlockName: 'motif' }) + entityCif(motifOverlay, new Set([0]))
-          : null;
+        const hasUnindexedMotif = Boolean(atoms.condition_index_1_residue?.some((v, i) =>
+          !v && !atoms.hetero?.[i] && atoms.condition_coordinate_1_atom?.[i]?.some?.(Number.isFinite)));
         const liveAllAtomCif = (info) => {
           if (!info.decoded) return null;
           try {
@@ -1006,17 +1047,17 @@ class Rfd4pStudioApp {
               paddingMask: batch.padding_mask?.data ?? null,
               inputAtoms: atoms,
               batch,
+              insertionLogits: info.insertionLogits ?? null,
             });
             // processSampleToAtoms already aligns coordinate-conditioned designs onto the input (motif) frame.
             if (!fixedAnchors && !isAnchored(structure.atoms) && referenceCaNm) {
               alignStructureAtomsToCa(structure.atoms, referenceCaNm, n);
             }
             liveSequence.update(structure.atoms, info.step, info.nsteps, info.convergence);
-            if (!motifOverlay.length) return toCifString(structure) + caSecondaryStructureCif(structure.atoms);
             const overlayEntity = Math.max(0, ...structure.atoms.map((a) => a.entityId ?? 0)) + 1;
-            const all = structure.atoms.concat(motifOverlay.map((a, k) => ({
-              ...a, serial: structure.atoms.length + k + 1, entityId: overlayEntity,
-            })));
+            const overlay = displayOverlayAtoms(structure.atoms, motifOverlay, overlayEntity);
+            if (!overlay.length) return toCifString(structure) + caSecondaryStructureCif(structure.atoms);
+            const all = structure.atoms.concat(overlay);
             return toCifString(all) + entityCif(all, new Set([overlayEntity])) + caSecondaryStructureCif(structure.atoms);
           } catch (err) {
             console.warn('Live all-atom frame failed; showing Cα frame:', err);
@@ -1092,6 +1133,7 @@ class Rfd4pStudioApp {
           inputAtoms: atoms,
           onStep,
           decodeStep: wantLiveFrame,
+          liveInsertion: hasUnindexedMotif,
           earlyStop: this.els.earlyStop?.checked ?? true,
           signal: abortController.signal,
         };
@@ -1116,6 +1158,11 @@ class Rfd4pStudioApp {
         this.lastResult = result;
         if (result.stepsRun != null && result.stepsRun < result.nsteps) earlyStops.push(`${result.stepsRun}/${result.nsteps}`);
 
+        const designOverlay = result.structure?.atoms ? displayOverlayAtoms(result.structure.atoms, motifOverlay, 1) : [];
+        const designOverlayCif = designOverlay.length
+          ? toCifString(designOverlay, { dataBlockName: 'motif' }) + entityCif(designOverlay, new Set([1]))
+          : null;
+
         // Register generated design in AtomWorks Studio session store with trajectory playback
         const trajectoryCif = buildTrajectoryCifFromFrames(
           trajectoryFrames,
@@ -1134,7 +1181,7 @@ class Rfd4pStudioApp {
           isInput: false,
           hasTrajectory: Boolean(trajectoryCif),
           filenameStem: `design-${sampleIdx + 1}`,
-          overlayCif: motifOverlayCif,
+          overlayCif: designOverlayCif,
         });
         viewChoices.push({ label: `Design ${sampleIdx + 1}`, sessionId: designSessionId });
       }
