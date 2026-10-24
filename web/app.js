@@ -215,7 +215,7 @@ function buildMotifOverlayAtoms(inputAtoms) {
 }
 
 /**
- * Side chains (Cα onward) of the design's own motif residues — an unindexed motif placed by the insertion mapping
+ * Side chains (Cβ onward) of the design's own motif residues — an unindexed motif placed by the insertion mapping
  * (e.g. an enzyme's catalytic residues), or a coordinate-conditioned residue in a chain that is otherwise designed —
  * as copies drawn as sticks on top of the cartoon. Target chains (every residue fixed) are
  * left to the frame itself, as in `buildMotifOverlayAtoms`.
@@ -239,7 +239,8 @@ function motifSideChainAtoms(structureAtoms) {
   }
   if (!motifTokens.size) return [];
   return structureAtoms
-    .filter((a) => motifTokens.has(a.tokenId) && !a.isHetero && !['N', 'C', 'O', 'OXT'].includes(a.atomName))
+    // Cβ onward: with a Cα, Mol* draws the lone residue's backbone trace as a cone. Cβ sits against the cartoon tube.
+    .filter((a) => motifTokens.has(a.tokenId) && !a.isHetero && !['N', 'CA', 'C', 'O', 'OXT'].includes(a.atomName))
     .map((a) => ({ ...a, groupPdb: 'HETATM', isHetero: true }));
 }
 
@@ -264,7 +265,10 @@ function designOverlays(structureAtoms, motifOverlay) {
 /** Shows `overlays` (from `designOverlays`) in the Studio viewer, clearing any that are absent. */
 async function showDesignOverlays(overlays) {
   if (typeof window.__rfd4pSetOverlay !== 'function') return;
-  await window.__rfd4pSetOverlay('motif', overlays?.motif ?? null, { label: 'Motif (reference)', alpha: 0.4 });
+  // One ghost color (not element colors) so the reference never reads as extra bonds on the sampled side chain.
+  await window.__rfd4pSetOverlay('motif', overlays?.motif ?? null, {
+    label: 'Motif (reference)', alpha: 0.35, color: 0xe2e8f0, sizeAspectRatio: 0.6,
+  });
   await window.__rfd4pSetOverlay('sideChains', overlays?.sideChains ?? null, { label: 'Motif side chains' });
 }
 
