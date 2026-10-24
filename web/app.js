@@ -405,6 +405,8 @@ class LiveSequenceStrip {
       if (!track) {
         const chain = document.createElement('div');
         chain.className = 'sequence-chain';
+        const color = window.__rfd4pChainColor?.(r.chainId);
+        if (color) chain.style.setProperty('--chain-color', color);
         const label = document.createElement('span');
         label.className = 'sequence-chain-label';
         label.textContent = r.chainId;

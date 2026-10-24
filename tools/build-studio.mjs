@@ -61,3 +61,4 @@ for (const page of PAGES) {
 }
 
 console.log(`studio: ${entry.file} + ${entry.css.join(', ')} (${emitted.length} files)`);
+run('node', [join(ROOT, 'tools/stamp-modules.mjs')]);

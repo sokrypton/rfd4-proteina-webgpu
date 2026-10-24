@@ -29,6 +29,7 @@ import { addSphere } from "molstar/lib/mol-geo/geometry/mesh/builder/sphere";
 import { Vec3 } from "molstar/lib/mol-math/linear-algebra";
 import "molstar/lib/mol-plugin-ui/skin/dark.scss";
 import { unpositionedAtomIndices } from "./unpositioned-atoms";
+import { StudioChainColorThemeProvider } from "./studio-chain-theme";
 
 import {
   ANNOTATION_PALETTE,
@@ -139,6 +140,8 @@ export class MolstarAdapter implements ViewerAdapter {
     if (!this.viewer.plugin.canvas3d) {
       throw new Error("Mol* could not create a WebGL rendering context.");
     }
+    // rfd4p: chain colours shared with the sequence bar and the design panel.
+    this.viewer.plugin.representation.structure.themes.colorThemeRegistry.add(StudioChainColorThemeProvider);
     // Camera changes belong to loading, explicit View actions, and user navigation.
     this.viewer.plugin.canvas3d.setProps({ camera: { manualReset: true } });
     // Docking the inspector and toggling sequence change the canvas without
@@ -259,7 +262,7 @@ export class MolstarAdapter implements ViewerAdapter {
         type: "ball-and-stick",
         ...(options?.color != null
           ? { color: "uniform" as const, colorParams: { value: Color(options.color) } }
-          : { color: "element-symbol" as const }),
+          : { color: "studio-chain" as never, colorParams: { carbonOnly: true } as never }),
         typeParams: {
           sizeAspectRatio: options?.sizeAspectRatio ?? 1,
           ...(options?.alpha != null ? { alpha: options.alpha } : {}),
@@ -281,6 +284,14 @@ export class MolstarAdapter implements ViewerAdapter {
     }).commit();
     if (structure.obj?.data.elementCount) {
       await plugin.builders.structure.representation.applyPreset(structure, "auto");
+      // rfd4p: the preset colours by Mol*'s order-based chain palette; use the shared one instead.
+      const components = plugin.managers.structure.hierarchy.current.structures
+        .find((entry) => entry.cell.transform.ref === structure.ref)?.components;
+      if (components?.length) {
+        await plugin.managers.structure.component.updateRepresentationsTheme(components, {
+          color: "studio-chain" as never, colorParams: { carbonOnly: true } as never,
+        });
+      }
     }
     this.context.container.dataset.renderedAtoms = String(
       plugin.managers.structure.hierarchy.current.structures.reduce((count, ref) => count + (ref.cell.obj?.data.elementCount ?? 0), 0),
@@ -510,8 +521,7 @@ export class MolstarAdapter implements ViewerAdapter {
         if (result && !component.ref) {
           await plugin.builders.structure.representation.addRepresentation(result, component.props ?? {
             type: plugin.representation.structure.registry.get(type),
-            color: plugin.representation.structure.themes.colorThemeRegistry.get(
-              type === "cartoon" || type === "backbone" ? "chain-id" : "element-symbol"),
+            color: plugin.representation.structure.themes.colorThemeRegistry.get("studio-chain"),
             ...(type === "ball-and-stick" ? { typeParams: { sizeAspectRatio: 1 } } : {}),
           });
         }
@@ -547,14 +557,17 @@ export class MolstarAdapter implements ViewerAdapter {
       return;
     }
     const theme = ({
-      atomic: "element-symbol",
-      chain: "chain-id",
+      atomic: "studio-chain",
+      chain: "studio-chain",
       ss: "secondary-structure",
       residue: "residue-name",
       rainbow: "sequence-id",
-    } as const)[color as "atomic"] ?? "chain-id";
+    } as const)[color as "atomic"] ?? "studio-chain";
     await clearStructureOverpaint(plugin, reference.components);
-    await plugin.managers.structure.component.updateRepresentationsTheme(reference.components, { color: theme });
+    await plugin.managers.structure.component.updateRepresentationsTheme(reference.components, {
+      color: theme as never,
+      ...(theme === "studio-chain" ? { colorParams: { carbonOnly: color === "atomic" } as never } : {}),
+    });
   }
 
   setBackground(color: "black" | "white"): void {

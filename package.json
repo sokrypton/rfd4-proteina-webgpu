@@ -39,6 +39,7 @@
     "test:gpu": "node tools/gpu-chrome.mjs tools/gpu/check-rfd4p.js",
     "serve": "node tools/serve.mjs 4173",
     "build:studio": "node tools/build-studio.mjs",
+    "stamp": "node tools/stamp-modules.mjs",
     "export:weights": "python3 tools/export_rfd4p_model.py"
   }
 }

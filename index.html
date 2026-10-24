@@ -9,10 +9,52 @@
     <link rel="manifest" href="./manifest.webmanifest" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/studio-DCmII2EW.css" />
-    <link rel="stylesheet" href="./web/styles.css?v=11" />
+    <link rel="stylesheet" href="./web/styles.css?v=355080c1c2" />
     <!-- app.js first: its import of studio-api.js installs the /api/* fetch interceptor the Studio bundle boots against. -->
-    <script type="module" src="./web/app.js?v=16"></script>
-    <script type="module" crossorigin src="./assets/studio-COqWvadX.js"></script>
+    <!-- module-versions:start (tools/stamp-modules.mjs) -->
+    <script type="importmap">
+      {
+        "imports": {
+          "./cpu/rfd4p/decoder.js": "./cpu/rfd4p/decoder.js?v=9d3b9d00c8",
+          "./cpu/rfd4p/encoder.js": "./cpu/rfd4p/encoder.js?v=66063810a5",
+          "./cpu/rfd4p/reference.js": "./cpu/rfd4p/reference.js?v=227ff8d4f7",
+          "./shared/rfd4p/conditions.js": "./shared/rfd4p/conditions.js?v=4de7c669b2",
+          "./shared/rfd4p/convergence.js": "./shared/rfd4p/convergence.js?v=21987a6537",
+          "./shared/rfd4p/encoding.js": "./shared/rfd4p/encoding.js?v=25c1523e88",
+          "./shared/rfd4p/features.js": "./shared/rfd4p/features.js?v=7b4bfa1cfc",
+          "./shared/rfd4p/flow.js": "./shared/rfd4p/flow.js?v=7714dd43c8",
+          "./shared/rfd4p/output.js": "./shared/rfd4p/output.js?v=094628b7f1",
+          "./shared/rfd4p/partial.js": "./shared/rfd4p/partial.js?v=0b1b0dcb10",
+          "./shared/rfd4p/pipeline/bonds.js": "./shared/rfd4p/pipeline/bonds.js?v=b28fecd9db",
+          "./shared/rfd4p/pipeline/ccd.js": "./shared/rfd4p/pipeline/ccd.js?v=e9727e564b",
+          "./shared/rfd4p/pipeline/chirality.js": "./shared/rfd4p/pipeline/chirality.js?v=1d629a526a",
+          "./shared/rfd4p/pipeline/cif.js": "./shared/rfd4p/pipeline/cif.js?v=c51d005201",
+          "./shared/rfd4p/pipeline/index.js": "./shared/rfd4p/pipeline/index.js?v=7f8502851c",
+          "./shared/rfd4p/pipeline/prepare.js": "./shared/rfd4p/pipeline/prepare.js?v=a51a48ad4d",
+          "./shared/rfd4p/pipeline/spec.js": "./shared/rfd4p/pipeline/spec.js?v=981c934ba3",
+          "./shared/rfd4p/pipeline/transforms.js": "./shared/rfd4p/pipeline/transforms.js?v=dd731cb375",
+          "./shared/rfd4p/pipeline/zstd.js": "./shared/rfd4p/pipeline/zstd.js?v=0c42c19441",
+          "./shared/rfd4p/presets.js": "./shared/rfd4p/presets.js?v=8db26644f7",
+          "./shared/rfd4p/safetensors.js": "./shared/rfd4p/safetensors.js?v=4daf05721a",
+          "./shared/rfd4p/vendor/fzstd.js": "./shared/rfd4p/vendor/fzstd.js?v=e6cdba40d4",
+          "./web/app.js": "./web/app.js?v=2ad4275a96",
+          "./web/design-panel.js": "./web/design-panel.js?v=21e6b50076",
+          "./web/design-spec.js": "./web/design-spec.js?v=7341ed7812",
+          "./web/studio-api.js": "./web/studio-api.js?v=6ab6b0499a",
+          "./web/vendor/py2dmol-ss.js": "./web/vendor/py2dmol-ss.js?v=f2ede21309",
+          "./webgpu/index.js": "./webgpu/index.js?v=e2150c5e17",
+          "./webgpu/rfd4p/blocks.js": "./webgpu/rfd4p/blocks.js?v=b5e38ecfd2",
+          "./webgpu/rfd4p/decoder.js": "./webgpu/rfd4p/decoder.js?v=c38285197a",
+          "./webgpu/rfd4p/encoder.js": "./webgpu/rfd4p/encoder.js?v=13f80743e2",
+          "./webgpu/rfd4p/engine.js": "./webgpu/rfd4p/engine.js?v=75f3430cd5",
+          "./webgpu/rfd4p/generate.js": "./webgpu/rfd4p/generate.js?v=ad271428d7",
+          "./webgpu/rfd4p/trunk.js": "./webgpu/rfd4p/trunk.js?v=50caf74d4e"
+        }
+      }
+    </script>
+    <!-- module-versions:end -->
+    <script type="module" src="./web/app.js?v=2ad4275a96"></script>
+    <script type="module" crossorigin src="./assets/studio-D2iUFLjW.js"></script>
   </head>
   <body>
     <!-- RFD4-Proteina Generation Card (mounted directly into AtomWorks Studio's right sidebar) -->

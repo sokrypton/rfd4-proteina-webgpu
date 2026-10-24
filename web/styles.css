@@ -873,3 +873,29 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
 #rfd4p-studio-card .rfd4p-contig-row code {
   overflow-wrap: anywhere;
 }
+
+/* Chain colours (studio-src/src/chain-colors.ts), shared by viewer, sequence bar and design panel. */
+.sequence-chain {
+  --chain-color: var(--text-muted, #b1b3b9);
+}
+
+.sequence-chain-label {
+  align-self: start;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #101114 !important;
+  background: var(--chain-color);
+  font-weight: 700;
+  text-align: center;
+}
+
+#rfd4p-studio-card .rfd4p-chain {
+  border-left-color: var(--chain-color, var(--border, #383a3f));
+}
+
+#rfd4p-studio-card .rfd4p-chain-id {
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #101114;
+  background: var(--chain-color, var(--text-muted, #b1b3b9));
+}

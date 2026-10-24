@@ -226,6 +226,9 @@ export class DesignPanel {
       }));
     const body = el('div', { class: 'rfd4p-chain-body' });
     const row = el('div', { class: `rfd4p-chain rfd4p-role-${c.role}` }, head, body);
+    // The chain's colour, as in the viewer and the sequence bar.
+    const color = window.__rfd4pChainColor?.(c.id);
+    if (color) row.style.setProperty('--chain-color', color);
 
     if (c.role === 'ligand') {
       for (const l of c.ligands) {
