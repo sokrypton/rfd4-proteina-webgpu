@@ -14,9 +14,12 @@
 import { main as checkTrunk } from './check-trunk.js';
 import { main as checkDecoder } from './check-decoder.js';
 import { main as checkEncoder } from './check-encoder.js';
+import { subgroupMode } from '../../webgpu/rfd4p/engine.js';
 
 export async function main(device, args = []) {
   if (args.includes('--no-submat=1') || args.includes('--no-submat')) device.noSubmat = true;
+  const sgArg = args.find((a) => a.startsWith('--subgroup-mode='));
+  if (sgArg) device.subgroupModeOverride = sgArg.split('=')[1];
   const trunkUncond = await checkTrunk(device, ['--case=uncond_short', ...args]);
   if (!trunkUncond.allOk) {
     throw new Error(`Rfd4pTrunkGpu (uncond_short) failed oracle check: ${JSON.stringify(trunkUncond.results)}`);
@@ -39,6 +42,7 @@ export async function main(device, args = []) {
 
   return {
     allOk: true,
+    subgroups: subgroupMode(device),
     trunk: {
       uncond_short: trunkUncond.results,
       motif_unidx_1prw: trunkUnidx.results,

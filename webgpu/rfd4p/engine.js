@@ -383,30 +383,30 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   ${sIdx.map((s) => `var a0_${s} = a[baseA0 + ${s * 32}u];`).join('\n  ')}
   ${mRows === 2 ? sIdx.map((s) => `var a1_${s} = a[baseA1 + ${s * 32}u];`).join('\n  ') : ''}
   ${inNorm === 'rmsCond' ? `let q0 = ${sIdx.map((s) => `a0_${s} * a0_${s}`).join(' + ')};
-  let inv0 = inverseSqrt(subgroupAdd(q0.x + q0.y + q0.z + q0.w) / ${K128 * 128}.0 + 1e-5);
+  let inv0 = inverseSqrt(r32Add(q0.x + q0.y + q0.z + q0.w) / ${K128 * 128}.0 + 1e-5);
   ${mRows === 2 ? `let q1 = ${sIdx.map((s) => `a1_${s} * a1_${s}`).join(' + ')};
-  let inv1 = inverseSqrt(subgroupAdd(q1.x + q1.y + q1.z + q1.w) / ${K128 * 128}.0 + 1e-5);` : ''}
+  let inv1 = inverseSqrt(r32Add(q1.x + q1.y + q1.z + q1.w) / ${K128 * 128}.0 + 1e-5);` : ''}
   if (b0 % 3u < 2u) {
     ${sIdx.map((s) => `a0_${s} *= inv0;`).join(' ')}
     ${mRows === 2 ? sIdx.map((s) => `a1_${s} *= inv1;`).join(' ') : ''}
   }` : inNorm === 'lnCond' ? `let s0 = ${sIdx.map((s) => `a0_${s}`).join(' + ')};
-  let mean0 = subgroupAdd(s0.x + s0.y + s0.z + s0.w) / ${K128 * 128}.0;
+  let mean0 = r32Add(s0.x + s0.y + s0.z + s0.w) / ${K128 * 128}.0;
   ${sIdx.map((s) => `let dm0_${s} = a0_${s} - vec4<f32>(mean0);`).join('\n  ')}
   let q0 = ${sIdx.map((s) => `dm0_${s} * dm0_${s}`).join(' + ')};
-  let inv0 = inverseSqrt(subgroupAdd(q0.x + q0.y + q0.z + q0.w) / ${K128 * 128}.0 + 1e-5);
+  let inv0 = inverseSqrt(r32Add(q0.x + q0.y + q0.z + q0.w) / ${K128 * 128}.0 + 1e-5);
   ${mRows === 2 ? `let s1 = ${sIdx.map((s) => `a1_${s}`).join(' + ')};
-  let mean1 = subgroupAdd(s1.x + s1.y + s1.z + s1.w) / ${K128 * 128}.0;
+  let mean1 = r32Add(s1.x + s1.y + s1.z + s1.w) / ${K128 * 128}.0;
   ${sIdx.map((s) => `let dm1_${s} = a1_${s} - vec4<f32>(mean1);`).join('\n  ')}
   let q1 = ${sIdx.map((s) => `dm1_${s} * dm1_${s}`).join(' + ')};
-  let inv1 = inverseSqrt(subgroupAdd(q1.x + q1.y + q1.z + q1.w) / ${K128 * 128}.0 + 1e-5);` : ''}
+  let inv1 = inverseSqrt(r32Add(q1.x + q1.y + q1.z + q1.w) / ${K128 * 128}.0 + 1e-5);` : ''}
   if (b0 % 3u < 2u) {
     ${sIdx.map((s) => `a0_${s} = dm0_${s} * inv0;`).join(' ')}
     ${mRows === 2 ? sIdx.map((s) => `a1_${s} = dm1_${s} * inv1;`).join(' ') : ''}
   }` : inNorm === 'rmsPre' ? `let q0 = ${sIdx.map((s) => `a0_${s} * a0_${s}`).join(' + ')};
-  let inv0 = inverseSqrt(subgroupAdd(q0.x + q0.y + q0.z + q0.w) / ${K128 * 128}.0 + 1e-5);
+  let inv0 = inverseSqrt(r32Add(q0.x + q0.y + q0.z + q0.w) / ${K128 * 128}.0 + 1e-5);
   ${sIdx.map((s) => `a0_${s} = a0_${s} * inv0 * wNorm[lane + ${s * 32}u];`).join('\n  ')}
   let q2 = ${sIdx.map((s) => `a0_${s} * a0_${s}`).join(' + ')};
-  let inv2 = inverseSqrt(subgroupAdd(q2.x + q2.y + q2.z + q2.w) / ${K128 * 128}.0 + 1e-5);
+  let inv2 = inverseSqrt(r32Add(q2.x + q2.y + q2.z + q2.w) / ${K128 * 128}.0 + 1e-5);
   ${sIdx.map((s) => `a0_${s} *= inv2;`).join(' ')}` : ''}
   let sBn4 = p.sBn / 4u;
   let baseB = (p.offB + b0 * p.sB0 + b1 * p.sB1) / 4u + cCol0 * sBn4 + lane;
@@ -419,8 +419,8 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     sum0_${j} += dot(a0_${s}, w);
     ${mRows === 2 ? `sum1_${j} += dot(a1_${s}, w);` : ''}
   }`).join('\n  ')}
-  let d0_${j} = subgroupAdd(sum0_${j});
-  ${mRows === 2 ? `let d1_${j} = subgroupAdd(sum1_${j});` : ''}`;
+  let d0_${j} = r32Add(sum0_${j});
+  ${mRows === 2 ? `let d1_${j} = r32Add(sum1_${j});` : ''}`;
   }).join('\n  ')}
   ${!hasBias ? '_ = bias[0];' : ''}
   if (!live) { return; }
@@ -479,10 +479,10 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     ${mRows === 2 ? `sv1_${j} += dot(a1_${s}, wv);
     sg1_${j} += dot(a1_${s}, wg_v);` : ''}
   }`).join('\n  ')}
-  let dv0_${j} = subgroupAdd(sv0_${j});
-  let dg0_${j} = subgroupAdd(sg0_${j});
-  ${mRows === 2 ? `let dv1_${j} = subgroupAdd(sv1_${j});
-  let dg1_${j} = subgroupAdd(sg1_${j});` : ''}`).join('\n  ')}
+  let dv0_${j} = r32Add(sv0_${j});
+  let dg0_${j} = r32Add(sg0_${j});
+  ${mRows === 2 ? `let dv1_${j} = r32Add(sv1_${j});
+  let dg1_${j} = r32Add(sg1_${j});` : ''}`).join('\n  ')}
   if (!live) { return; }
   if (lane != 0u) { return; }
   let v0 = vec4<f32>(dv0_0, dv0_1, dv0_2, dv0_3);
@@ -1417,11 +1417,11 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   ${k4Idx.map((k4) => `let sb${k4}_${r} = rb4_${r} + ${k4 * 128}u;
   let v${k4}_${r} = vec4<f32>(tile[sb${k4}_${r}], tile[sb${k4}_${r} + 1u], tile[sb${k4}_${r} + 2u], tile[sb${k4}_${r} + 3u]);`).join('\n  ')}
   let s4_${r} = v0_${r} + v1_${r};
-  let mean_${r} = subgroupAdd(s4_${r}.x + s4_${r}.y + s4_${r}.z + s4_${r}.w) / 256.0;
+  let mean_${r} = r32Add(s4_${r}.x + s4_${r}.y + s4_${r}.z + s4_${r}.w) / 256.0;
   let d0_${r} = v0_${r} - vec4<f32>(mean_${r});
   let d1_${r} = v1_${r} - vec4<f32>(mean_${r});
   let q4_${r} = d0_${r} * d0_${r} + d1_${r} * d1_${r};
-  let inv_${r} = inverseSqrt(subgroupAdd(q4_${r}.x + q4_${r}.y + q4_${r}.z + q4_${r}.w) / 256.0 + p.eps);
+  let inv_${r} = inverseSqrt(r32Add(q4_${r}.x + q4_${r}.y + q4_${r}.z + q4_${r}.w) / 256.0 + p.eps);
   if (baseRow + r_${r} < p.rows) {
     let yb4 = (baseRow + r_${r}) * 64u + lane;
     y[yb4] = ${outF16 ? `pack4f16(d0_${r} * inv_${r} * w0)` : `d0_${r} * inv_${r} * w0`};
@@ -1490,10 +1490,10 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     ${kIdx.map((k) => `z[xb + ${k * 32}u] = ${outF16 ? `pack4f16(v_${k})` : `v_${k}`};`).join('\n    ')}
   }
   ${noLn ? '' : `let s4 = v_0 + v_1 + v_2;
-  let mean = subgroupAdd(s4.x + s4.y + s4.z + s4.w) / 384.0;
+  let mean = r32Add(s4.x + s4.y + s4.z + s4.w) / 384.0;
   ${kIdx.map((k) => `let d_${k} = v_${k} - vec4<f32>(mean);`).join('\n  ')}
   let q4 = d_0 * d_0 + d_1 * d_1 + d_2 * d_2;
-  let inv = inverseSqrt(subgroupAdd(q4.x + q4.y + q4.z + q4.w) / 384.0 + p.eps);
+  let inv = inverseSqrt(r32Add(q4.x + q4.y + q4.z + q4.w) / 384.0 + p.eps);
   if (!live) { return; }
   let yb = row * 96u + lane;
   ${kIdx.map((k) => `zc[yb + ${k * 32}u] = ${outF16 ? `pack4f16(d_${k} * inv * w[lane + ${k * 32}u])` : `d_${k} * inv * w[lane + ${k * 32}u]`};`).join('\n  ')}`}
@@ -1543,26 +1543,26 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     ${kIdx.map((k) => `y[rb + ${k * 32}u] = v_${k};`).join('\n    ')}
   }
   ${!rms || (hasNorm2 && !norm2Rms) ? `let s4 = ${kIdx.map((k) => `v_${k}`).join(' + ')};
-  let mean = subgroupAdd(s4.x + s4.y + s4.z + s4.w) / ${width}.0;
+  let mean = r32Add(s4.x + s4.y + s4.z + s4.w) / ${width}.0;
   ${kIdx.map((k) => `let dl_${k} = v_${k} - vec4<f32>(mean);`).join('\n  ')}` : ''}
   ${hasNorm2 && !norm2Rms ? `let ql4 = ${kIdx.map((k) => `dl_${k} * dl_${k}`).join(' + ')};
-  let invL = inverseSqrt(subgroupAdd(ql4.x + ql4.y + ql4.z + ql4.w) / ${width}.0 + p.eps);
+  let invL = inverseSqrt(r32Add(ql4.x + ql4.y + ql4.z + ql4.w) / ${width}.0 + p.eps);
   if (live) {
     ${kIdx.map((k) => `yn2[rb + ${k * 32}u] = dl_${k} * invL * wb2[lane + ${k * 32}u] + wb2[${outC4}u + lane + ${k * 32}u];`).join('\n    ')}
   }` : ''}
   ${rms ? kIdx.map((k) => `let d_${k} = v_${k};`).join('\n  ') : kIdx.map((k) => `let d_${k} = dl_${k};`).join('\n  ')}
   let q4 = ${kIdx.map((k) => `d_${k} * d_${k}`).join(' + ')};
-  let inv = inverseSqrt(subgroupAdd(q4.x + q4.y + q4.z + q4.w) / ${width}.0 + p.eps);
+  let inv = inverseSqrt(r32Add(q4.x + q4.y + q4.z + q4.w) / ${width}.0 + p.eps);
   ${hasNorm2 && norm2Rms ? `if (live) {
     ${kIdx.map((k) => `yn2[rb + ${k * 32}u] = d_${k} * inv * wb2[lane + ${k * 32}u];`).join('\n    ')}
   }` : ''}
   ${hasAdaln && postNorm ? `let adaBase = p.gbOff4 + row * p.gbStride4 + lane;
   ${kIdx.map((k) => `let a_${k} = d_${k} * inv * sigm4(${gbVar}[adaBase + ${k * 32}u]) + ${gbVar}[adaBase + ${outC4 + k * 32}u];`).join('\n  ')}
   ${rms ? kIdx.map((k) => `let d2_${k} = a_${k};`).join('\n  ') : `let s2 = ${kIdx.map((k) => `a_${k}`).join(' + ')};
-  let mean2 = subgroupAdd(s2.x + s2.y + s2.z + s2.w) / ${width}.0;
+  let mean2 = r32Add(s2.x + s2.y + s2.z + s2.w) / ${width}.0;
   ${kIdx.map((k) => `let d2_${k} = a_${k} - vec4<f32>(mean2);`).join('\n  ')}`}
   let q2 = ${kIdx.map((k) => `d2_${k} * d2_${k}`).join(' + ')};
-  let inv2 = inverseSqrt(subgroupAdd(q2.x + q2.y + q2.z + q2.w) / ${width}.0 + p.eps);
+  let inv2 = inverseSqrt(r32Add(q2.x + q2.y + q2.z + q2.w) / ${width}.0 + p.eps);
   if (!live) { return; }
   ${kIdx.map((k) => `{
     let c = lane + ${k * 32}u;
@@ -1616,10 +1616,10 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     return `let v_${k} = (${sumExpr}) + qkvgB[biasBase4 + ${k * 32}u];`;
   }).join('\n  ')}
   ${rms ? kIdx.map((k) => `let d_${k} = v_${k};`).join('\n  ') : `let s4 = ${kIdx.map((k) => `v_${k}`).join(' + ')};
-  let mean = subgroupAdd(s4.x + s4.y + s4.z + s4.w) / 768.0;
+  let mean = r32Add(s4.x + s4.y + s4.z + s4.w) / 768.0;
   ${kIdx.map((k) => `let d_${k} = v_${k} - vec4<f32>(mean);`).join('\n  ')}`}
   let q4 = ${kIdx.map((k) => `d_${k} * d_${k}`).join(' + ')};
-  let inv = inverseSqrt(subgroupAdd(q4.x + q4.y + q4.z + q4.w) / 768.0 + p.eps);
+  let inv = inverseSqrt(r32Add(q4.x + q4.y + q4.z + q4.w) / 768.0 + p.eps);
   if (!live) { return; }
   if (seg < 2u) {
     let qkBase4 = row * 384u + seg * 192u + lane;
@@ -1763,17 +1763,17 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   let xb = (p.xOff + xRow * p.xStride) / 4u + lane;` : `let xb = (p.xOff + row * p.xStride) / 4u + lane;`}
   ${kIdx.map((k) => `let v_${k} = X4(xb + ${k * 32}u);`).join('\n  ')}
   ${rms ? kIdx.map((k) => `let d_${k} = v_${k};`).join('\n  ') : `let s4 = ${kIdx.map((k) => `v_${k}`).join(' + ')};
-  let mean = subgroupAdd(s4.x + s4.y + s4.z + s4.w) / ${width}.0;
+  let mean = r32Add(s4.x + s4.y + s4.z + s4.w) / ${width}.0;
   ${kIdx.map((k) => `let d_${k} = v_${k} - vec4<f32>(mean);`).join('\n  ')}`}
   let q4 = ${kIdx.map((k) => `d_${k} * d_${k}`).join(' + ')};
-  let inv = inverseSqrt(subgroupAdd(q4.x + q4.y + q4.z + q4.w) / ${width}.0 + p.eps);
+  let inv = inverseSqrt(r32Add(q4.x + q4.y + q4.z + q4.w) / ${width}.0 + p.eps);
   ${hasAdaln && postNorm ? `let gBase = (p.gbOff + row * p.gbStride) / 4u + lane;
   ${kIdx.map((k) => `let a_${k} = d_${k} * inv * sigm4(gb[gBase + ${k * 32}u]) + gb[gBase + ${width / 4 + k * 32}u];`).join('\n  ')}
   ${rms ? kIdx.map((k) => `let d2_${k} = a_${k};`).join('\n  ') : `let s2 = ${kIdx.map((k) => `a_${k}`).join(' + ')};
-  let mean2 = subgroupAdd(s2.x + s2.y + s2.z + s2.w) / ${width}.0;
+  let mean2 = r32Add(s2.x + s2.y + s2.z + s2.w) / ${width}.0;
   ${kIdx.map((k) => `let d2_${k} = a_${k} - vec4<f32>(mean2);`).join('\n  ')}`}
   let q2 = ${kIdx.map((k) => `d2_${k} * d2_${k}`).join(' + ')};
-  let inv2 = inverseSqrt(subgroupAdd(q2.x + q2.y + q2.z + q2.w) / ${width}.0 + p.eps);
+  let inv2 = inverseSqrt(r32Add(q2.x + q2.y + q2.z + q2.w) / ${width}.0 + p.eps);
   if (!live) { return; }
   let yb = (p.yOff + row * p.yStride) / 4u + lane;
   ${kIdx.map((k) => `{
@@ -1783,7 +1783,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     ${copyX ? `xCopy[yb + ${k * 32}u] = v_${k};` : ''}
   }`).join('\n  ')}` : preNorm ? `${kIdx.map((k) => `let a_${k} = d_${k} * inv * w[lane + ${k * 32}u];`).join('\n  ')}
   let q2 = ${kIdx.map((k) => `a_${k} * a_${k}`).join(' + ')};
-  let inv2 = inverseSqrt(subgroupAdd(q2.x + q2.y + q2.z + q2.w) / ${width}.0 + p.eps);
+  let inv2 = inverseSqrt(r32Add(q2.x + q2.y + q2.z + q2.w) / ${width}.0 + p.eps);
   if (!live) { return; }
   let yb = (p.yOff + row * p.yStride) / 4u + lane;
   ${hasAdaln ? `let gBase = (p.gbOff + row * p.gbStride) / 4u + lane;
@@ -1827,7 +1827,7 @@ var<workgroup> red: array<f32, 2>;
 fn X(i: u32) -> f32 { return ${inPlace ? 'y' : 'x'}[i]; }
 fn sigm(v: f32) -> f32 { return 1.0 / (1.0 + exp(-v)); }
 fn reduce(li: u32, val: f32) -> f32 {
-  let s = subgroupAdd(val);
+  let s = r32Add(val);
   if (li % 32u == 0u) { red[li / 32u] = s; }
   workgroupBarrier();
   return red[0] + red[1];
@@ -2060,7 +2060,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   let dy_${k} = seqF[ri_${k} + 1u] - seqF[rj_${k} + 1u];
   let dz_${k} = seqF[ri_${k} + 2u] - seqF[rj_${k} + 2u];
   let dist_${k} = sqrt(dx_${k} * dx_${k} + dy_${k} * dy_${k} + dz_${k} * dz_${k});
-  let bin_${k} = subgroupMax(select(0u, lane + 1u, lane < 29u && lim < dist_${k}));
+  let bin_${k} = r32MaxU(select(0u, lane + 1u, lane < 29u && lim < dist_${k}));
   let binOff_${k} = (1u + bin_${k}) * 96u + lane;
   let zb_${k} = rIdx_${k} * 96u + lane;
   var z0_${k} = ${zF16 ? `unpack4(zStatic[zb_${k}])` : `zStatic[zb_${k}]`} + wLnBins[binOff_${k}];
@@ -2069,7 +2069,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   {
     let eps = p.eps384 * (1.0 / 384.0);
     ${[0, 1, 2, 3].map((k) => `let sq1_${k} = dot(z0_${k}, z0_${k}) + dot(z1_${k}, z1_${k}) + dot(z2_${k}, z2_${k});`).join('\n    ')}
-    let inv1 = inverseSqrt(subgroupAdd(vec4<f32>(sq1_0, sq1_1, sq1_2, sq1_3)) * (1.0 / 384.0) + vec4<f32>(eps));
+    let inv1 = inverseSqrt(r32Add4(vec4<f32>(sq1_0, sq1_1, sq1_2, sq1_3)) * (1.0 / 384.0) + vec4<f32>(eps));
     let ln0 = wLnBins[lane];
     let ln1 = wLnBins[lane + 32u];
     let ln2 = wLnBins[lane + 64u];
@@ -2077,7 +2077,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     z1_${k} = z1_${k} * inv1[${k}] * ln1;
     z2_${k} = z2_${k} * inv1[${k}] * ln2;
     let sq2_${k} = dot(z0_${k}, z0_${k}) + dot(z1_${k}, z1_${k}) + dot(z2_${k}, z2_${k});`).join('\n    ')}
-    let inv2 = inverseSqrt(subgroupAdd(vec4<f32>(sq2_0, sq2_1, sq2_2, sq2_3)) * (1.0 / 384.0) + vec4<f32>(eps));
+    let inv2 = inverseSqrt(r32Add4(vec4<f32>(sq2_0, sq2_1, sq2_2, sq2_3)) * (1.0 / 384.0) + vec4<f32>(eps));
     let g0 = sigm4(gb[lane]);
     let g1 = sigm4(gb[lane + 32u]);
     let g2 = sigm4(gb[lane + 64u]);
@@ -2098,7 +2098,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   var z1_${k} = ${zF16 ? `unpack4(z[zb_${k} + 32u])` : `z[zb_${k} + 32u]`};
   var z2_${k} = ${zF16 ? `unpack4(z[zb_${k} + 64u])` : `z[zb_${k} + 64u]`};`).join('\n  ')}
   ${[0, 1, 2, 3].map((k) => `let sq_${k} = dot(z0_${k}, z0_${k}) + dot(z1_${k}, z1_${k}) + dot(z2_${k}, z2_${k});`).join('\n  ')}
-  let inv4 = inverseSqrt(subgroupAdd(vec4<f32>(sq_0, sq_1, sq_2, sq_3)) + vec4<f32>(p.eps384));
+  let inv4 = inverseSqrt(r32Add4(vec4<f32>(sq_0, sq_1, sq_2, sq_3)) + vec4<f32>(p.eps384));
   ${[0, 1, 2, 3].map((k) => `z0_${k} *= inv4[${k}];
   z1_${k} *= inv4[${k}];
   z2_${k} *= inv4[${k}];`).join('\n  ')}
@@ -2124,7 +2124,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
       dot(z0_2, b0) + dot(z1_2, b1) + dot(z2_2, b2),
       dot(z0_3, b0) + dot(z1_3, b1) + dot(z2_3, b2),
     );
-    let sum4 = subgroupAdd(d4);
+    let sum4 = r32Add4(d4);
     if (lane == 0u) {
       let tb = h * 32u + sg * 4u;
       outTile[tb] = sum4.x;
@@ -2182,7 +2182,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   let sb_${k} = row_${k} * 192u + lane;
   ${mIdx.map((m) => `var s${m}_${k} = s[sb_${k} + ${m * 32}u];`).join('\n  ')}
   let sq_${k} = ${mIdx.map((m) => `dot(s${m}_${k}, s${m}_${k})`).join(' + ')};`).join('\n  ')}
-  let inv4 = inverseSqrt(subgroupAdd(vec4<f32>(sq_0, sq_1, sq_2, sq_3)) + vec4<f32>(p.eps768));
+  let inv4 = inverseSqrt(r32Add4(vec4<f32>(sq_0, sq_1, sq_2, sq_3)) + vec4<f32>(p.eps768));
   ${[0, 1, 2, 3].map((k) => mIdx.map((m) => `s${m}_${k} *= inv4[${k}];`).join('\n  ')).join('\n  ')}
   for (var c = 0u; c < 3u; c += 1u) {
     let wb = c * 192u + lane;
@@ -2190,7 +2190,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     let d4 = vec4<f32>(
       ${[0, 1, 2, 3].map((k) => mIdx.map((m) => `dot(s${m}_${k}, b_${m})`).join(' + ')).join(',\n      ')}
     );
-    let sum4 = subgroupAdd(d4);
+    let sum4 = r32Add4(d4);
     if (lane == 0u) {
       if (rBase < p.n) { out[rBase * 3u + c] = sum4.x; }
       if (rBase + 1u < p.n) { out[(rBase + 1u) * 3u + c] = sum4.y; }
@@ -2204,7 +2204,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     let d4 = vec4<f32>(
       ${[0, 1, 2, 3].map((k) => mIdx.map((m) => `dot(s${m}_${k}, b_${m})`).join(' + ')).join(',\n      ')}
     );
-    let sum4 = subgroupAdd(d4);
+    let sum4 = r32Add4(d4);
     if (lane == 0u) {
       let tb = sg * 128u + c;
       outTile[tb] = sum4.x;
@@ -2251,21 +2251,21 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     v_${k} = ${valExpr(`base + j_${k}`)};
     mx = max(mx, v_${k});
   }`).join('\n  ')}
-  let top = subgroupMax(mx);
+  let top = r32MaxF(mx);
   var s = 0.0;
   ${kIdx.map((k) => `var e_${k} = 0.0;
   if (j_${k} < p.len) {
     e_${k} = exp(v_${k} - top);
     s += e_${k};
   }`).join('\n  ')}
-  let invTotal = 1.0 / subgroupAdd(s);
+  let invTotal = 1.0 / r32Add(s);
   if (!live) { return; }
   ${kIdx.map((k) => `if (j_${k} < p.len) { l[base + j_${k}] = ${lt}(e_${k} * invTotal); }`).join('\n  ')}` : `var mx = -3.0e38;
   for (var j = lane; j < p.len; j += 32u) { mx = max(mx, ${valExpr('base + j')}); }
-  let top = subgroupMax(mx);
+  let top = r32MaxF(mx);
   var s = 0.0;
   for (var j = lane; j < p.len; j += 32u) { s += exp((${valExpr('base + j')}) - top); }
-  let invTotal = 1.0 / subgroupAdd(s);
+  let invTotal = 1.0 / r32Add(s);
   if (!live) { return; }
   for (var j = lane; j < p.len; j += 32u) { l[base + j] = ${lt}(exp((${valExpr('base + j')}) - top) * invTotal); }`}
 }`;
@@ -2387,11 +2387,109 @@ export function packHalf(values) {
   return words;
 }
 
+/**
+ * How the kernels' 32-lane reductions run on this device. Every kernel lays its threads out as rows of 32 lanes
+ * (`lane = li % 32`) and reduces a row with `r32Add` / `r32Add4` / `r32MaxU` / `r32MaxF`, which `subgroupLib` defines:
+ *   native  subgroups are exactly 32 lanes (Apple, NVIDIA): the subgroup op itself.
+ *   xor     subgroups are 32 lanes or wider (Adreno, AMD wave64): a shuffle butterfly confined to each 32-lane row.
+ *   pin32   the size varies but 32 is allowed (Intel): `@subgroup_size(32)` on every subgroup kernel.
+ *   fixed   subgroups are a fixed 16 lanes (Mali): subgroup op, then the row's halves are added in workgroup memory.
+ *   shared  anything else: the whole row is reduced in workgroup memory.
+ * A plain subgroupAdd on a 16-lane Mali GPU sums half a row, which silently wrecked every norm and GEMV there.
+ */
+export function subgroupMode(device) {
+  // Checkers can force a mode (`--subgroup-mode=xor|shared`) to exercise it on any GPU.
+  if (device.subgroupModeOverride) return { mode: device.subgroupModeOverride, size: 32 };
+  const info = device.adapterInfo ?? {};
+  const lo = info.subgroupMinSize;
+  const hi = info.subgroupMaxSize;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { mode: 'native', size: 32 };
+  if (lo === 32 && hi === 32) return { mode: 'native', size: 32 };
+  if (lo >= 32) return { mode: 'xor', size: lo };
+  if (hi >= 32 && device.features?.has?.('subgroup-size-control')) return { mode: 'pin32', size: 32 };
+  if (lo === hi && lo >= 16) return { mode: 'fixed', size: lo };
+  return { mode: 'shared', size: lo };
+}
+
+const R32_TYPES = [['r32Add', 'f32', 'Add'], ['r32Add4', 'vec4<f32>', 'Add'], ['r32MaxU', 'u32', 'Max'], ['r32MaxF', 'f32', 'Max']];
+
+/** WGSL definitions of the 32-lane reductions a kernel uses (see `subgroupMode`); `wgSize` threads per workgroup. */
+function subgroupLib(sg, used, wgSize) {
+  const defs = [];
+  const pre = [];
+  for (const [name, type, op] of R32_TYPES.filter(([name]) => used.has(name))) {
+    const comb = (a, b) => (op === 'Add' ? `${a} + ${b}` : `max(${a}, ${b})`);
+    if (sg.mode === 'native' || sg.mode === 'pin32') {
+      defs.push(`fn ${name}(x: ${type}) -> ${type} { return subgroup${op}(x); }`);
+    } else if (sg.mode === 'xor') {
+      defs.push(`fn ${name}(x: ${type}) -> ${type} {
+  var v = x;
+  ${[16, 8, 4, 2, 1].map((m) => `v = ${comb('v', `subgroupShuffleXor(v, ${m}u)`)};`).join('\n  ')}
+  return v;
+}`);
+    } else {
+      // One workgroup slot per subgroup (fixed) or per thread (shared); barrier, write, barrier, read the row.
+      const per = sg.mode === 'fixed' ? 32 / sg.size : 32;
+      const buf = `${name}_buf`;
+      pre.push(`var<workgroup> ${buf}: array<${type}, ${(wgSize / 32) * per}>;`);
+      const first = sg.mode === 'fixed' ? `subgroup${op}(x)` : 'x';
+      const slot = sg.mode === 'fixed' ? `r32_li / ${sg.size}u` : 'r32_li';
+      const write = sg.mode === 'fixed' ? `if (r32_li % ${sg.size}u == 0u) { ${buf}[${slot}] = s; }` : `${buf}[${slot}] = s;`;
+      defs.push(`fn ${name}(x: ${type}) -> ${type} {
+  let s = ${first};
+  workgroupBarrier();
+  ${write}
+  workgroupBarrier();
+  let base = (r32_li / 32u) * ${per}u;
+  var v = ${buf}[base];
+  for (var k = 1u; k < ${per}u; k += 1u) { v = ${comb('v', `${buf}[base + k]`)}; }
+  return v;
+}`);
+    }
+  }
+  if (pre.length) pre.unshift('var<private> r32_li: u32;');
+  return [...pre, ...defs].join('\n');
+}
+
+/** Insert the reduction helpers (and, where needed, `@subgroup_size(32)` and the lane index) into a kernel. */
+function applySubgroupMode(source, sg) {
+  const uses = source.includes('enable subgroups;');
+  if (!uses) return source;
+  const used = new Set(R32_TYPES.map(([name]) => name).filter((name) => new RegExp(`\\b${name}\\(`).test(source)));
+  let src = source;
+  if (sg.mode === 'pin32') {
+    src = src.replace('enable subgroups;', 'enable subgroups;\nenable subgroup_size_control;')
+      .replace(/(@workgroup_size\([^)]*\))/, '$1 @subgroup_size(32)');
+  }
+  if (!used.size) return src;
+  const wg = /@workgroup_size\(([^)]*)\)/.exec(src)[1].split(',').map((v) => Number.parseInt(v, 10) || 1)
+    .reduce((a, b) => a * b, 1);
+  const lib = subgroupLib(sg, used, wg);
+  // After the enable directives, which must come first.
+  const enables = [...src.matchAll(/^enable [^;]+;\s*$/gm)];
+  const at = enables.length ? enables[enables.length - 1].index + enables[enables.length - 1][0].length : 0;
+  src = `${src.slice(0, at)}\n${lib}\n${src.slice(at)}`;
+  if (lib.includes('r32_li')) {
+    // The parameter list has parentheses of its own (`@builtin(...)`): find its closing one by depth.
+    const start = src.indexOf('fn main(') + 'fn main('.length;
+    let end = start;
+    for (let depth = 1; depth > 0; end += 1) depth += src[end] === '(' ? 1 : src[end] === ')' ? -1 : 0;
+    const paramList = src.slice(start, end - 1);
+    const body = src.indexOf('{', end);
+    const named = /@builtin\(local_invocation_index\)\s+(\w+)/.exec(paramList);
+    const params = named ? paramList
+      : `${paramList.trim().replace(/,\s*$/, '')}${paramList.trim() ? ', ' : ''}@builtin(local_invocation_index) r32_li_in: u32`;
+    src = `${src.slice(0, start)}${params})${src.slice(end, body + 1)}\n  r32_li = ${named ? named[1] : 'r32_li_in'};${src.slice(body + 1)}`;
+  }
+  return src;
+}
+
 export class Rfd4pEngine {
   /** @param {GPUDevice} device */
   constructor(device) {
     this.device = device;
     this.hasF16 = device.features?.has?.('shader-f16') === true;
+    this.subgroups = subgroupMode(device);
     const smConfigs = [...(device.adapterInfo?.subgroupMatrixConfigs ?? device.subgroupMatrixConfigs ?? [])];
     this.subgroupMatrixConfigs = smConfigs.map((c) => ({
       componentType: c.componentType,
@@ -2424,10 +2522,11 @@ export class Rfd4pEngine {
   async pipeline(key, source) {
     let p = this.pipelines.get(key);
     if (!p) {
+      const code = applySubgroupMode(source, this.subgroups);
       p = this.device.createComputePipelineAsync({
         label: `rfd4p.${key}`,
         layout: 'auto',
-        compute: { module: this.device.createShaderModule({ label: `rfd4p.${key}`, code: source }), entryPoint: 'main' },
+        compute: { module: this.device.createShaderModule({ label: `rfd4p.${key}`, code }), entryPoint: 'main' },
       });
       this.pipelines.set(key, p);
     }
