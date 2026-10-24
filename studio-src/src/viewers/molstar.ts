@@ -48,6 +48,9 @@ import {
   type ViewerRepresentation,
   type ViewerRepresentationAction,
   type ViewerTarget,
+  type ViewerColor,
+  type ViewerLoadOptions,
+  type ViewerOverlayOptions,
 } from "./contract";
 
 // The render root contains only positioned atoms. Focus, camera, representations,
@@ -85,7 +88,7 @@ export class MolstarAdapter implements ViewerAdapter {
   readonly backend = "molstar" as const;
   readonly capabilities = {
     representations: true,
-    colors: false,
+    colors: true, // rfd4p: setColor below
     background: true,
     commands: false,
     picking: true,
@@ -108,6 +111,11 @@ export class MolstarAdapter implements ViewerAdapter {
   private measurements: ViewerMeasurement[] = [];
   private interactionRepresentation: ShapeRepresentation<ViewerInteraction[], Lines, typeof Lines.Params> | null = null;
   private unpositionedAtoms = new Set<number>();
+  // rfd4p: raw-data node of the last loadCif, and of the structure live frames are updating in place.
+  private lastDataRef: string | undefined;
+  private liveDataRef: string | undefined;
+  // rfd4p: display-only overlay structures by key (raw-data node + the CIF it holds).
+  private overlayRefs = new Map<string, { ref: string; data: string }>();
   private markerRepresentation: ShapeRepresentation<ViewerMarker[], Mesh, typeof Mesh.Params> | null = null;
 
   constructor(private readonly context: ViewerAdapterContext) {}
@@ -182,8 +190,9 @@ export class MolstarAdapter implements ViewerAdapter {
     });
   }
 
-  async loadCif(cif: string, name: string): Promise<void> {
+  async loadCif(cif: string, name: string, options?: ViewerLoadOptions): Promise<void> {
     if (!this.viewer) throw new Error("Mol* is not initialized");
+    this.liveDataRef = undefined;
     this.displayComponents.clear();
     this.comparisonColors.clear();
     this.annotationGroups = [];
@@ -196,12 +205,75 @@ export class MolstarAdapter implements ViewerAdapter {
     this.context.container.dataset.renderedStructures = "0";
     this.unpositionedAtoms = new Set(unpositionedAtomIndices(cif));
     await this.loadPositionedStructure(cif, name);
-    this.viewer.plugin.managers.camera.reset();
+    if (!options?.keepCamera) this.viewer.plugin.managers.camera.reset();
+  }
+
+  /**
+   * rfd4p: swap the live structure's raw CIF and let Mol* rebuild only what depends on it. `loadCif` clears the whole
+   * scene, which flashes black between diffusion frames.
+   */
+  async updateLiveCif(cif: string, name: string, options?: ViewerLoadOptions): Promise<void> {
+    if (!this.viewer) throw new Error("Mol* is not initialized");
+    const plugin = this.viewer.plugin;
+    const ref = this.liveDataRef;
+    if (!ref || !plugin.state.data.cells.has(ref)) {
+      await this.loadCif(cif, name, options);
+      this.liveDataRef = this.lastDataRef;
+      return;
+    }
+    await plugin.state.data.build().to(ref).update({ data: cif, label: name }).commit();
+    this.unpositionedAtoms = new Set(unpositionedAtomIndices(cif));
+    if (!options?.keepCamera) plugin.managers.camera.reset();
+  }
+
+  /** rfd4p: see `ViewerAdapter.setOverlayCif`. Overlays are separate structures, so Mol* never bonds across them. */
+  async setOverlayCif(key: string, cif: string | null, options?: ViewerOverlayOptions): Promise<void> {
+    if (!this.viewer) throw new Error("Mol* is not initialized");
+    const plugin = this.viewer.plugin;
+    const dataset = this.context.container.dataset;
+    const current = this.overlayRefs.get(key);
+    // loadCif clears the scene, which takes overlays with it.
+    const live = current !== undefined && plugin.state.data.cells.has(current.ref);
+    if (!cif) {
+      if (live) await plugin.state.data.build().delete(current.ref).commit();
+      this.overlayRefs.delete(key);
+      delete dataset[`overlay_${key}`];
+      return;
+    }
+    const label = options?.label ?? key;
+    if (live) {
+      if (current.data !== cif) {
+        await plugin.state.data.build().to(current.ref).update({ data: cif, label }).commit();
+        current.data = cif;
+      }
+      return;
+    }
+    const data = await plugin.builders.data.rawData({ data: cif, label });
+    this.overlayRefs.set(key, { ref: data.ref, data: cif });
+    const trajectory = await plugin.builders.structure.parseTrajectory(data, "mmcif");
+    const model = await plugin.builders.structure.createModel(trajectory);
+    const structure = await plugin.state.data.build().to(model).apply(PositionedStructure, { excluded: [] }).commit();
+    const component = await plugin.builders.structure.tryCreateComponentStatic(structure, "all", { label });
+    if (component) {
+      await plugin.builders.structure.representation.addRepresentation(component, {
+        type: "ball-and-stick",
+        ...(options?.color != null
+          ? { color: "uniform" as const, colorParams: { value: Color(options.color) } }
+          : { color: "element-symbol" as const }),
+        typeParams: {
+          sizeAspectRatio: options?.sizeAspectRatio ?? 1,
+          ...(options?.alpha != null ? { alpha: options.alpha } : {}),
+        },
+      });
+    }
+    // Atom count drawn per overlay, for tests.
+    dataset[`overlay_${key}`] = String(component ? structure.obj?.data.elementCount ?? 0 : 0);
   }
 
   private async loadPositionedStructure(cif: string, name: string): Promise<string> {
     const plugin = this.viewer!.plugin;
     const data = await plugin.builders.data.rawData({ data: cif, label: name });
+    this.lastDataRef = data.ref;
     const trajectory = await plugin.builders.structure.parseTrajectory(data, "mmcif");
     const model = await plugin.builders.structure.createModel(trajectory);
     const structure = await plugin.state.data.build().to(model).apply(PositionedStructure, {
@@ -233,6 +305,7 @@ export class MolstarAdapter implements ViewerAdapter {
 
   async loadCifs(structures: ViewerStructure[]): Promise<void> {
     if (!this.viewer) throw new Error("Mol* is not initialized");
+    this.liveDataRef = undefined;
     this.unpositionedAtoms.clear();
     this.displayComponents.clear();
     this.comparisonColors.clear();
@@ -458,6 +531,30 @@ export class MolstarAdapter implements ViewerAdapter {
         Color((group.color ?? ANNOTATION_PALETTE[index % ANNOTATION_PALETTE.length]).value),
         async () => this.lociFor(group.atomIndices));
     }
+  }
+
+  /** rfd4p: the Style menu's color actions (upstream Mol* adapter had none). */
+  async setColor(color: ViewerColor, target: ViewerTarget): Promise<void> {
+    if (!this.viewer) throw new Error("Mol* is not initialized");
+    const plugin = this.viewer.plugin;
+    const { reference } = this.currentStructure();
+    if (color in COMPARISON_COLORS) {
+      const value = Color(COMPARISON_COLORS[color as keyof typeof COMPARISON_COLORS]);
+      await setStructureOverpaint(plugin, reference.components, value, async (structure) =>
+        target === "selection" && this.selectedAtomIndices.length
+          ? StructureElement.Schema.toLoci(structure, { items: { atom_index: this.selectedAtomIndices } })
+          : StructureElement.Loci.all(structure));
+      return;
+    }
+    const theme = ({
+      atomic: "element-symbol",
+      chain: "chain-id",
+      ss: "secondary-structure",
+      residue: "residue-name",
+      rainbow: "sequence-id",
+    } as const)[color as "atomic"] ?? "chain-id";
+    await clearStructureOverpaint(plugin, reference.components);
+    await plugin.managers.structure.component.updateRepresentationsTheme(reference.components, { color: theme });
   }
 
   setBackground(color: "black" | "white"): void {

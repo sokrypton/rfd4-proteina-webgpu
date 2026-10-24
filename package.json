@@ -39,6 +39,7 @@
     "test": "node $(node --v8-options 2>/dev/null | grep -qe '--js-float16array' && node -e 'process.exit(typeof Float16Array === \"undefined\" ? 0 : 1)' && echo --js-float16array) --test --test-concurrency=1 $(ls test/*.test.js | grep -v '\\.gpu\\.')",
     "test:gpu": "node tools/gpu-chrome.mjs tools/gpu/check-rfd4p.js",
     "serve": "node tools/serve.mjs 4173",
+    "build:studio": "node tools/build-studio.mjs",
     "export:weights": "python3 tools/export_rfd4p_model.py"
   }
 }

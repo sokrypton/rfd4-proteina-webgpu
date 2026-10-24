@@ -19,6 +19,8 @@ import type {
   ViewerStructure,
   ViewerTarget,
   ViewerMarker,
+  ViewerLoadOptions,
+  ViewerOverlayOptions,
 } from "./contract";
 import {
   normalizeViewerMeasurementRequest,
@@ -42,6 +44,8 @@ export type {
   ViewerSelection,
   ViewerStructure,
   ViewerTarget,
+  ViewerLoadOptions,
+  ViewerOverlayOptions,
 } from "./contract";
 
 const BACKEND_LABELS: Record<ViewerBackend, string> = {
@@ -49,16 +53,14 @@ const BACKEND_LABELS: Record<ViewerBackend, string> = {
   patinae: "Patinae · WebGPU",
 };
 
+// rfd4p: Mol* only. The Patinae WebGPU viewer (and its 4 MB WASM) is not shipped, so every mode parser below yields
+// "molstar" and the adapter is always Mol*.
 async function createAdapter(
-  backend: ViewerBackend,
+  _backend: ViewerBackend,
   context: ViewerAdapterContext,
 ): Promise<ViewerAdapter> {
-  if (backend === "molstar") {
-    const { createMolstarAdapter } = await import("./molstar");
-    return createMolstarAdapter(context);
-  }
-  const { createPatinaeAdapter } = await import("./patinae");
-  return createPatinaeAdapter(context);
+  const { createMolstarAdapter } = await import("./molstar");
+  return createMolstarAdapter(context);
 }
 
 export class MolecularViewer {
@@ -177,11 +179,11 @@ export class MolecularViewer {
     }
   }
 
-  async loadCif(cif: string, name: string): Promise<void> {
+  async loadCif(cif: string, name: string, options?: ViewerLoadOptions): Promise<void> {
     this.structures = [{ cif, name }];
     this.container.dataset.comparisonStructures = "0";
     this.updateAnnotationDiagnostics();
-    await this.adapter?.loadCif(cif, name);
+    await this.adapter?.loadCif(cif, name, options);
     await this.replayRepresentations();
     await this.replayTransientVisuals();
   }
@@ -196,6 +198,21 @@ export class MolecularViewer {
     }
     await this.adapter?.setTrajectoryFrame?.(index);
     this.container.dataset.trajectoryFrame = String(index);
+  }
+
+  /** rfd4p: show one live diffusion frame, updating the current structure in place when the backend can. */
+  async renderLiveCif(cif: string, name: string, options?: ViewerLoadOptions): Promise<void> {
+    if (!this.adapter?.updateLiveCif) {
+      await this.loadCif(cif, name, options);
+      return;
+    }
+    this.structures = [{ cif, name }];
+    await this.adapter.updateLiveCif(cif, name, options);
+  }
+
+  /** rfd4p: see `ViewerAdapter.setOverlayCif`; a no-op on backends without overlays. */
+  async setOverlayCif(key: string, cif: string | null, options?: ViewerOverlayOptions): Promise<void> {
+    await this.adapter?.setOverlayCif?.(key, cif, options);
   }
 
   async loadCifs(structures: ViewerStructure[]): Promise<void> {

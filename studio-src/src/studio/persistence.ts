@@ -6,7 +6,7 @@ export const VIEWER_STORAGE_KEY = "annotation-studio-viewer-v2";
 export const PENDING_EXAMPLE_KEY = "annotation-studio-pending-example";
 
 export function parseViewerMode(value: string | null): ViewerMode | null {
-  return value === "patinae" || value === "molstar" ? value : null;
+  return value === "molstar" ? value : null; // rfd4p: Mol* only
 }
 
 export function requestedViewerMode(

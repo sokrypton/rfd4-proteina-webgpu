@@ -25,7 +25,7 @@ import type {
   StructureSummary,
   StudioSchema,
 } from "./types";
-import { MolecularViewer, type AtomPick } from "./viewers";
+import { MolecularViewer, type AtomPick, type ViewerOverlayOptions } from "./viewers";
 import "./style.css";
 
 const combineInput = element<HTMLInputElement>("combine-input");
@@ -77,6 +77,12 @@ element<HTMLAnchorElement>("guide-link").addEventListener("click", (event) => {
 });
 
 function notifyHost(type: "ready" | "changed" | "example", task?: string): void {
+  // rfd4p: the RFD4-Proteina host shares this document, so it gets the same message as a window event.
+  if (sessionId) {
+    window.dispatchEvent(new CustomEvent("atomworks-studio-message", {
+      detail: { source: "atomworks-annotation-studio", type, session_id: sessionId, ...(task ? { task } : {}) },
+    }));
+  }
   const parentOrigin = query.get("parent_origin");
   if (!parentOrigin || window.parent === window || !sessionId) return;
   try {
@@ -363,6 +369,55 @@ function mutate(path: string, body?: unknown, propagateError = false): Promise<v
   });
 }
 
+declare global {
+  interface Window {
+    __rfd4pRenderLiveFrame?: (cif: string, name: string, keepCamera?: boolean) => Promise<void>;
+    __rfd4pRestoreInputView?: () => Promise<void>;
+    __rfd4pSetOverlay?: (key: string, cif: string | null, options?: ViewerOverlayOptions) => Promise<void>;
+    __rfd4pOpenSession?: (id: string, trajectoryUrl?: string | null) => Promise<void>;
+  }
+}
+
+/** rfd4p: entry points for the RFD4-Proteina host (web/app.js), which drives this Studio in the same page. */
+function installRfd4pHooks(): void {
+  // One live diffusion frame, updated in place.
+  window.__rfd4pRenderLiveFrame = async (cif, name, keepCamera) => {
+    if (!molecularViewer?.initialized) return;
+    element("empty-state").hidden = true;
+    element("unpositioned-state").hidden = true;
+    element("coordinate-summary").hidden = true;
+    await molecularViewer.renderLiveCif(cif, name, { keepCamera });
+  };
+  // Back to the open document after a failed run.
+  window.__rfd4pRestoreInputView = async () => {
+    if (sessionId) await refreshFromServer(lastSummary ?? undefined);
+  };
+  window.__rfd4pSetOverlay = async (key, cif, options) => {
+    if (molecularViewer?.initialized) await molecularViewer.setOverlayCif(key, cif, options);
+  };
+  // Show a session the host created (a design), optionally with its trajectory.
+  window.__rfd4pOpenSession = (id, trajectoryUrl) => runViewerUpdate(async () => {
+    trajectoryController?.dispose();
+    trajectoryController = null;
+    sessionId = id;
+    const response = await api<SessionResponse>(`/api/sessions/${sessionId}`);
+    currentName = response.structure.name;
+    selectionController.clear();
+    await molecularViewer.clearAllVisuals();
+    persistSession(response);
+    await refreshFromServer(response.structure, false);
+    enableSessionControls(true);
+    if (trajectoryUrl) {
+      trajectoryController = new TrajectoryController(molecularViewer, async () => {
+        await molecularViewer.clearAllVisuals();
+        await refreshFromServer();
+      }, log);
+      trajectoryController.bind(trajectoryUrl);
+    }
+    notifyHost("ready");
+  });
+}
+
 async function initialize(): Promise<void> {
   element("dismiss-error").addEventListener("click", () => { element("error-banner").hidden = true; });
   document.body.classList.toggle("embedded", query.get("embed") === "1");
@@ -390,6 +445,7 @@ async function initialize(): Promise<void> {
       }
     }).catch((failure) => log(`Renderer recovery failed: ${String(failure)}`, "error")),
   );
+  installRfd4pHooks();
   viewerToolbarController = new ViewerToolbarController({
     viewer: () => molecularViewer,
     selection: selectionController,
@@ -557,8 +613,6 @@ async function initialize(): Promise<void> {
   }
 }
 
-if (import.meta.env.PROD && window.parent === window && "serviceWorker" in navigator) {
-  void navigator.serviceWorker.register("/sw.js").catch(error => console.warn("Offline installation unavailable", error));
-}
+// rfd4p: no service worker (upstream's offline cache would pin stale bundles on GitHub Pages).
 
 void initialize().catch((error) => log(`Initialization failed: ${String(error)}`, "error"));

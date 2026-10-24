@@ -248,7 +248,7 @@ export class ViewerToolbarController {
   }
 
   private parseMode(value: string | null): ViewerMode | null {
-    return value === "patinae" || value === "molstar" ? value : null;
+    return value === "molstar" ? value : null; // rfd4p: Mol* only
   }
 
   private async executeCommand(

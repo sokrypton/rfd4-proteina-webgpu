@@ -1,4 +1,4 @@
-import annotationPalette from "../../../editing/atomworks_studio_editing/annotation_palette.json" with { type: "json" };
+import annotationPalette from "../annotation_palette.json" /* rfd4p: vendored from packages/editing */ with { type: "json" };
 
 export type ViewerBackend = "patinae" | "molstar";
 export type ViewerMode = ViewerBackend;
@@ -143,11 +143,29 @@ export type ViewerAdapterContext = {
   onPick: (pick: AtomPick) => void;
 };
 
+/** rfd4p: `keepCamera` leaves the view where it is (live diffusion frames). */
+export type ViewerLoadOptions = { keepCamera?: boolean };
+
+/** rfd4p: how a display-only overlay structure is drawn (ball-and-stick; element colors unless `color` is set). */
+export type ViewerOverlayOptions = {
+  label?: string;
+  alpha?: number;
+  color?: number;
+  sizeAspectRatio?: number;
+};
+
 export interface ViewerAdapter {
   readonly backend: ViewerBackend;
   readonly capabilities: ViewerCapabilities;
   initialize(): Promise<void>;
-  loadCif(cif: string, name: string): Promise<void>;
+  loadCif(cif: string, name: string, options?: ViewerLoadOptions): Promise<void>;
+  /** rfd4p: replace the shown structure's data in place (no scene rebuild, so no flicker between live frames). */
+  updateLiveCif?(cif: string, name: string, options?: ViewerLoadOptions): Promise<void>;
+  /**
+   * rfd4p: show a display-only structure under `key`, separate from the main one (so nothing is bonded across them),
+   * updated in place on later calls; `null` removes it.
+   */
+  setOverlayCif?(key: string, cif: string | null, options?: ViewerOverlayOptions): Promise<void>;
   loadCifs(structures: ViewerStructure[]): Promise<void>;
   trajectoryFrameCount?(): number;
   setTrajectoryFrame?(index: number): Promise<void>;

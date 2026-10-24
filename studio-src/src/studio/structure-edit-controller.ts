@@ -89,11 +89,15 @@ export class StructureEditController {
     element("insert-segment").addEventListener("click", () => {
       const newChain = element<HTMLInputElement>("segment-new-chain").checked;
       const chainId = element<HTMLInputElement>("segment-chain-id").value.trim();
+      // rfd4p: any selection anchors the segment — before its first atom or after its last, so selecting a residue
+      // (all its atoms) inserts beside that residue.
+      const selected = [...this.options.selection.values].sort((a, b) => a - b);
+      const before = element<HTMLInputElement>("segment-before").checked;
       void this.options.mutate("/segments", {
         minimum: Number(element<HTMLInputElement>("segment-min").value),
         maximum: Number(element<HTMLInputElement>("segment-max").value),
-        atom_index: newChain ? null : [...this.options.selection.values][0],
-        before: element<HTMLInputElement>("segment-before").checked,
+        atom_index: newChain ? null : before ? selected[0] : selected[selected.length - 1],
+        before,
         new_chain: newChain,
         chain_id: newChain && chainId ? chainId : null,
         chain_type: newChain ? element<HTMLSelectElement>("segment-chain-type").value : null,
@@ -110,7 +114,7 @@ export class StructureEditController {
     element<HTMLButtonElement>("delete-atoms").disabled = !hasSession || count === 0;
     const newSegmentChain = element<HTMLInputElement>("segment-new-chain").checked;
     element<HTMLButtonElement>("insert-segment").disabled =
-      !hasSession || (!newSegmentChain && count !== 1);
+      !hasSession || (!newSegmentChain && count === 0);
     element<HTMLButtonElement>("add-bond").disabled = !hasSession || count !== 2;
     element<HTMLButtonElement>("remove-bond").disabled = !hasSession || count !== 2;
     this.feedback.textContent = !hasSession
