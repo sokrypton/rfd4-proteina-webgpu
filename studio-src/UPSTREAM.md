@@ -11,7 +11,7 @@ Local changes are ordinary commits on top of the import commit; `git log -- stud
 ## Build
 
 ```sh
-cd studio-src && npm ci && npm run build   # writes ../assets/studio-*.js|css and updates ../index.html, ../studio.html
+cd studio-src && npm ci && npm run build   # writes ../assets/studio-*.js|css and updates ../index.html
 ```
 
 Commit the rebuilt `assets/` together with the source change. Emitted files are content-hashed, so browsers never

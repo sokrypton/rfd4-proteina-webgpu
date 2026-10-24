@@ -56,8 +56,6 @@ export class Rfd4pDecoderGpu {
       return t.data ?? t;
     };
     const opt = (k) => (src[k] ? src[k].data ?? src[k] : null);
-    const mat = (k) => e.weight(k, get(k), this.half);
-    const vec = (k) => e.weight(k, get(k), false);
     const cat = (...arrs) => {
       const out = new Float32Array(arrs.reduce((s, a) => s + a.length, 0));
       let o = 0;

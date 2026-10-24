@@ -87,10 +87,7 @@ export function decodeLatentsCpu(batch, { n, caNm, z, seq, weights, cfg }) {
   const D = cfg.token_dim;
   const C = cfg.dim_cond;
   const nTypes = cfg.n_residue_types ?? 147;
-  const latentDim = cfg.latent_z_dim ?? 32;
-  const { attn, emit } = aeMasks(batch, n);
-  const tokenType = data(batch, 'token_type');
-  const groups = batch[COND.CRDGRP] ? data(batch, COND.CRDGRP) : null;
+  const { attn } = aeMasks(batch, n);
 
   // c: empty cond factory -> ZeroFeat(128) -> two bias-free SwiGLU transitions (stays zero).
   let c = new Float32Array(n * C);

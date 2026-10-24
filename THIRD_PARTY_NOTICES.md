@@ -7,7 +7,7 @@ This site redistributes the following third-party software and data.
 `studio-src/` is the web source of [AtomWorks Studio](https://github.com/RosettaCommons/atomworks-studio) v0.0.2
 (`packages/web`, plus the `wasm-pack` build of `packages/core`), with local modifications for this port (the
 `__rfd4p*` hooks, a same-document event bridge, in-place live frames and overlay structures, Mol* only); see
-`studio-src/UPSTREAM.md`. `assets/` (except Mol*, below) is its build output; `studio.html`, `web/studio/`, `guide/`,
+`studio-src/UPSTREAM.md`. `assets/` (except Mol*, below) is its build output; `web/studio/`, `guide/`,
 `annotation-studio.svg`, `atomworks_logo_dark.svg` and `manifest.webmanifest` also come from AtomWorks Studio.
 
 BSD 3-Clause License
@@ -64,6 +64,11 @@ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 
 `web/vendor/py2dmol-ss.js` is extracted from [py2Dmol](https://github.com/sokrypton/py2Dmol)
 (`src/cartoon/geom.js`, by `tools/vendor-py2dmol-ss.mjs`) under its Beer-Ware License (Revision 42).
+
+## fzstd
+
+`shared/rfd4p/vendor/fzstd.js` is [fzstd](https://github.com/101arrowz/fzstd) 0.1.1, unmodified, under the MIT License
+(`shared/rfd4p/vendor/LICENSE-fzstd.txt`).
 
 ## RFD4-Proteina weights
 

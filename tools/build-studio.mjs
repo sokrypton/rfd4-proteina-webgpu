@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Build the vendored AtomWorks Studio (studio-src/) into assets/ and point index.html / studio.html at it.
+ * Build the vendored AtomWorks Studio (studio-src/) into assets/ and point index.html at it.
  *
  * Vite emits content-hashed files, so each build replaces the previous Studio files (listed in
- * assets/studio-files.json) and rewrites the entry <script>/<link> tags. Run via `npm run build:studio`.
+ * assets/studio-files.json) and rewrites the page's entry <script>/<link> tags. Run via `npm run build:studio`.
  */
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -15,7 +15,7 @@ const SRC = join(ROOT, 'studio-src');
 const DIST = join(SRC, 'dist');
 const ASSETS = join(ROOT, 'assets');
 const LIST = join(ASSETS, 'studio-files.json');
-const PAGES = ['index.html', 'studio.html'];
+const PAGES = ['index.html'];
 
 function run(cmd, args) {
   const r = spawnSync(cmd, args, { cwd: SRC, stdio: 'inherit' });

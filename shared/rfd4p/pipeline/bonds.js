@@ -5,7 +5,7 @@
  * Ports `rfproteina.datapipes.bonds`.
  */
 
-import { BOND_TYPE, CHAIN_TYPE, getResidueSegments, getPolymerizationAtoms } from './cif.js';
+import { BOND_TYPE, getResidueSegments, getPolymerizationAtoms } from './cif.js';
 import { getDefaultIndexGroups } from './spec.js';
 
 export const TOKEN_TYPE = {

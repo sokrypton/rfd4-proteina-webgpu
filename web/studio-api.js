@@ -1,20 +1,15 @@
 /**
  * Client-side in-browser implementation of the AtomWorks Studio `/api/v1/*` REST contract.
  *
- * Allows the official prebuilt `AtomWorks Studio` web frontend (`studio.html` + Mol* WebGL +
- * Patinae WebGPU + `annotation_studio_core.wasm`) and the RFD4-Proteina generation host (`index.html`)
- * to run 100% locally in the browser on WebGPU without any Python/FastAPI backend server.
+ * Lets the AtomWorks Studio web frontend (built from `studio-src/`) and the RFD4-Proteina generation host
+ * (`web/app.js`), which share `index.html`, run 100% locally in the browser without a Python/FastAPI backend.
  */
 
 import { assignSecondary } from './vendor/py2dmol-ss.js';
 import {
-  AA_RESIDUES,
   BOND_TYPE,
   CHAIN_TYPE,
-  DNA_RESIDUES,
-  ELEMENT_TO_ATOMIC_NUMBER,
   NONSCALAR_1BODY_ANNOTATIONS,
-  RNA_RESIDUES,
   SCALAR_1BODY_ANNOTATIONS,
   STD_RESIDUE_AROMATIC,
   buildBondsForAtomArray,
@@ -2612,8 +2607,8 @@ export function buildTrajectoryCifFromFrames(trajectoryFrames, tokens, finalResi
 }
 
 /**
- * Shared in-browser Studio store accessible from both the outer RFD4-Proteina host (`window.top`)
- * and the embedded `studio.html` iframe.
+ * Shared in-browser Studio store (kept on the top window, so a test harness that mounts the page in an iframe
+ * still sees one store).
  */
 export function getSharedStudioStore() {
   let rootWin = globalThis;

@@ -1,5 +1,5 @@
 /**
- * End-to-end browser verification of `index.html` + `web/app.js` + `studio.html` in headless Chrome:
+ * End-to-end browser verification of `index.html` (AtomWorks Studio + `web/app.js`) in headless Chrome:
  *   1. Mounts `/index.html` (AtomWorks Studio and the RFD4-Proteina card share one document) in a harness iframe.
  *   2. Verifies all 9 official AtomWorks Studio examples and `/api/v1/*` routes (conditions, internal-coords,
  *      distance-restraints, segments insert/realize/collapse, undo, export) work end-to-end.
@@ -271,7 +271,6 @@ export async function main() {
 
   // Verify clicking #predict directly inside the embedded Studio DOM triggers runDesign
   const latestStudioDoc = win.document;
-  const latestStudioWin = win;
   const predictInStudio = latestStudioDoc?.getElementById('predict');
   if (!predictInStudio || typeof predictInStudio.onclick !== 'function') {
     throw new Error('#predict button inside embedded Studio is missing onclick handler');
