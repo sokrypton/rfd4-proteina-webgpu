@@ -1,0 +1,17 @@
+{
+  "name": "annotation-studio-core",
+  "type": "module",
+  "description": "Lossless AtomWorks annotated-CIF inspection for the browser",
+  "version": "0.0.2",
+  "license": "BSD-3-Clause",
+  "files": [
+    "annotation_studio_core_bg.wasm",
+    "annotation_studio_core.js",
+    "annotation_studio_core.d.ts"
+  ],
+  "main": "annotation_studio_core.js",
+  "types": "annotation_studio_core.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
