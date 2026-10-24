@@ -144,6 +144,8 @@ function updateSelectionUi(): void {
   element("active-selection-count").textContent =
     `${count} atom${count === 1 ? "" : "s"} in active selection`;
   const hasSession = sessionId !== null;
+  // rfd4p: the design panel offers selection-based actions (scaffold selection, hotspots).
+  window.dispatchEvent(new CustomEvent("atomworks-studio-selection", { detail: { count } }));
   conditionController?.updateSelectionUi(hasSession);
   structureEditController?.updateSelectionUi(hasSession);
   element<HTMLButtonElement>("run-analysis").disabled = !hasSession;
@@ -375,6 +377,10 @@ declare global {
     __rfd4pRestoreInputView?: () => Promise<void>;
     __rfd4pSetOverlay?: (key: string, cif: string | null, options?: ViewerOverlayOptions) => Promise<void>;
     __rfd4pOpenSession?: (id: string, trajectoryUrl?: string | null) => Promise<void>;
+    __rfd4pMutate?: (path: string, body?: unknown) => Promise<void>;
+    __rfd4pSelection?: () => number[];
+    __rfd4pLoadExample?: (id: string) => Promise<void>;
+    __rfd4pOpenFile?: (file: File) => Promise<boolean>;
   }
 }
 
@@ -395,6 +401,11 @@ function installRfd4pHooks(): void {
   window.__rfd4pSetOverlay = async (key, cif, options) => {
     if (molecularViewer?.initialized) await molecularViewer.setOverlayCif(key, cif, options);
   };
+  // An edit through the Studio's own path: undo, viewer refresh and the "changed" message all follow.
+  window.__rfd4pMutate = (path, body) => mutate(path, body, true);
+  window.__rfd4pSelection = () => [...selectionController.values].sort((a, b) => a - b);
+  window.__rfd4pLoadExample = async (id) => { await sessionFileController?.loadPendingExample(id); };
+  window.__rfd4pOpenFile = async (file) => sessionFileController?.open(file) ?? false;
   // Show a session the host created (a design), optionally with its trajectory.
   window.__rfd4pOpenSession = (id, trajectoryUrl) => runViewerUpdate(async () => {
     trajectoryController?.dispose();

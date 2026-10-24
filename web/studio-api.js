@@ -1131,14 +1131,46 @@ export class StudioDoc {
     return this.atoms.annotations[col];
   }
 
-  setCondition(name, indices, { enabled = true, value = null, scope = 'atom' } = {}) {
+  /**
+   * Several condition edits as one undoable step (the design panel's chain roles and guided set-ups). Each edit is
+   * `{condition, atom_indices, enabled, value, scope}` as for `setCondition`.
+   */
+  setConditions(edits) {
+    if (!Array.isArray(edits) || !edits.length) throw new Error('no condition edits');
+    this.snapshot();
+    let affected = 0;
+    for (const e of edits) {
+      affected += this.setCondition(e.condition, e.atom_indices, {
+        enabled: e.enabled ?? true, value: e.value ?? null, scope: e.scope || 'atom', snapshot: false,
+      }).affected_count;
+    }
+    return { affected_count: affected, changed: true, message: `Updated conditions on ${affected} atoms.` };
+  }
+
+  /** Change an expandable segment's length range (its sentinel atom's min/max, and its `min-max` name). */
+  setSegmentRange(atomIndex, minimum, maximum) {
+    const a = this.atoms;
+    const segMin = a.annotations?.annotation_expsegmin_1_residue;
+    if (!segMin || !(atomIndex >= 0 && atomIndex < a.nAtoms) || !(Number(segMin[atomIndex]) > 0)) {
+      throw new Error('not an expandable segment');
+    }
+    const minLen = Math.max(1, Math.round(Number(minimum)) || 1);
+    const maxLen = Math.max(minLen, Math.round(Number(maximum)) || minLen);
+    this.snapshot();
+    a.annotations.annotation_expsegmin_1_residue[atomIndex] = minLen;
+    this._ensureAnnotationArray('annotation_expsegmax_1_residue', { default: -1 })[atomIndex] = maxLen;
+    if (/^\d+-\d+$/.test(String(a.res_name[atomIndex]))) a.res_name[atomIndex] = `${minLen}-${maxLen}`;
+    return { changed: true, message: `Segment length set to ${minLen}-${maxLen}.` };
+  }
+
+  setCondition(name, indices, { enabled = true, value = null, scope = 'atom', snapshot = true } = {}) {
     const spec = CONDITION_BY_KEY.get(name);
     if (!spec) throw new Error(`unsupported condition: ${name}`);
     const spreadScope = spec.level === 'chain' ? 'chain' : spec.level === 'residue' ? 'residue' : scope;
     const selected = this.resolveIndices(indices, spreadScope);
     if (selected.length === 0) throw new Error('at least one atom must be selected');
 
-    this.snapshot();
+    if (snapshot) this.snapshot();
     const n = this.atoms.nAtoms;
 
     if (spec.key === 'sequence') {
@@ -2843,6 +2875,10 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
         const bonds = doc.inspectBonds(filterIndices);
         return jsonResponse({ bonds, count: bonds.length });
       }
+      if (subpath === '/conditions/batch' && method === 'POST') {
+        const editResult = doc.setConditions(body.edits);
+        return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
+      }
       if (subpath === '/conditions' && method === 'POST') {
         const editResult = doc.setCondition(body.condition, body.atom_indices, {
           enabled: body.enabled ?? true,
@@ -2916,6 +2952,10 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
           chainId: body.chain_id,
           chainType: body.chain_type,
         });
+        return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
+      }
+      if (subpath === '/segments/range' && method === 'POST') {
+        const editResult = doc.setSegmentRange(body.atom_index, body.minimum, body.maximum);
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
       if (subpath === '/segments/realize' && method === 'POST') {

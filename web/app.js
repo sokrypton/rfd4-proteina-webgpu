@@ -35,6 +35,7 @@ import {
   getSharedStudioStore,
   installStudioApiInterceptor,
 } from './studio-api.js';
+import { DesignPanel } from './design-panel.js';
 
 installStudioApiInterceptor();
 
@@ -164,6 +165,22 @@ function alignStructureAtomsToCa(atoms, refCaNm, n) {
 }
 
 /**
+ * Tokens with no input coordinates at all (unmodelled residues of a fetched structure). They cannot be held fixed, so
+ * they do not make an otherwise fixed target chain count as "partly fixed" (a motif) for the overlays.
+ */
+function unmodelledTokens(inputAtoms) {
+  const modelled = new Set();
+  const all = new Set();
+  for (let i = 0; i < (inputAtoms?.token_id?.length ?? 0); i += 1) {
+    const tid = inputAtoms.token_id[i];
+    all.add(tid);
+    const c = inputAtoms.coord?.[i];
+    if (c && Number.isFinite(c[0]) && Number.isFinite(c[1]) && Number.isFinite(c[2])) modelled.add(tid);
+  }
+  return new Set([...all].filter((t) => !modelled.has(t)));
+}
+
+/**
  * The reference motif, as atom records at their conditioning coordinates (Å, input frame), for drawing beside each
  * live frame so a motif-scaffolding run keeps showing what it is scaffolding. A motif is a coordinate-conditioned
  * token that is unindexed, or indexed inside a chain that is otherwise designed; a chain whose residues are all
@@ -179,8 +196,10 @@ function buildMotifOverlayAtoms(inputAtoms) {
   const tokenChain = new Map();
   const tokenHasCrd = new Map();
   const tokenIndexed = new Map();
+  const unmodelled = unmodelledTokens(inputAtoms);
   for (let i = 0; i < inputAtoms.token_id.length; i += 1) {
     const tid = inputAtoms.token_id[i];
+    if (unmodelled.has(tid)) continue;
     tokenChain.set(tid, inputAtoms.chain_id[i]);
     if (crdOf(i)) tokenHasCrd.set(tid, true);
     if (!tokenIndexed.has(tid)) {
@@ -220,13 +239,13 @@ function buildMotifOverlayAtoms(inputAtoms) {
  * as copies drawn as sticks on top of the cartoon. Target chains (every residue fixed) are
  * left to the frame itself, as in `buildMotifOverlayAtoms`.
  */
-function motifSideChainAtoms(structureAtoms) {
+function motifSideChainAtoms(structureAtoms, skipTokens = new Set()) {
   const hasCrd = (a) => Boolean(a.crd && Number.isFinite(a.crd[0]));
   const chainTokens = new Map();
   const tokenFixed = new Map();
   const motifTokens = new Set();
   for (const a of structureAtoms) {
-    if (a.tokenId == null || a.isHetero) continue;
+    if (a.tokenId == null || a.isHetero || skipTokens.has(a.tokenId)) continue;
     let tokens = chainTokens.get(a.chainId);
     if (!tokens) chainTokens.set(a.chainId, (tokens = new Set()));
     tokens.add(a.tokenId);
@@ -255,10 +274,10 @@ function overlayCifOf(atoms, name) {
  * Display-only overlays drawn beside a design, each as its own Mol* structure so none can be distance-bonded to the
  * design or to each other: the reference motif (drawn translucent) and the design's motif side chains.
  */
-function designOverlays(structureAtoms, motifOverlay) {
+function designOverlays(structureAtoms, motifOverlay, skipTokens) {
   return {
     motif: overlayCifOf(motifOverlay, 'motif'),
-    sideChains: overlayCifOf(motifSideChainAtoms(structureAtoms), 'motif_side_chains'),
+    sideChains: overlayCifOf(motifSideChainAtoms(structureAtoms, skipTokens), 'motif_side_chains'),
   };
 }
 
@@ -550,9 +569,11 @@ class Rfd4pStudioApp {
     this._bindControls();
     await this._loadPreset(RFD4P_PRESETS[0].id, { syncStudio: false });
     this._initStudioBridge();
+    this.designPanel = new DesignPanel(this);
     await this._initWebGpu();
     this._syncThinkingRadios('none');
     this.els.predictBtn.disabled = false;
+    this.designPanel.render();
     const backendLabel = this.gpuDevice ? 'WebGPU FP16' : 'CPU Float32';
     if (this.els.webgpuBadge) {
       this.els.webgpuBadge.textContent = backendLabel;
@@ -1049,6 +1070,7 @@ class Rfd4pStudioApp {
         const wantLiveFrame = (step, total) =>
           step === 0 || (step < total - 1 && performance.now() + lastStepMs - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS);
         const motifOverlay = buildMotifOverlayAtoms(atoms);
+        const unmodelled = unmodelledTokens(atoms);
         // Overlays for the frame being built; shown once its structure has been drawn.
         let liveOverlays = null;
         const hasUnindexedMotif = Boolean(atoms.condition_index_1_residue?.some((v, i) =>
@@ -1070,7 +1092,7 @@ class Rfd4pStudioApp {
               alignStructureAtomsToCa(structure.atoms, referenceCaNm, n);
             }
             liveSequence.update(structure.atoms, info.step, info.nsteps, info.convergence);
-            liveOverlays = designOverlays(structure.atoms, motifOverlay);
+            liveOverlays = designOverlays(structure.atoms, motifOverlay, unmodelled);
             return toCifString(structure) + caSecondaryStructureCif(structure.atoms);
           } catch (err) {
             console.warn('Live all-atom frame failed; showing Cα frame:', err);
@@ -1174,7 +1196,7 @@ class Rfd4pStudioApp {
         this.lastResult = result;
         if (result.stepsRun != null && result.stepsRun < result.nsteps) earlyStops.push(`${result.stepsRun}/${result.nsteps}`);
 
-        const overlays = designOverlays(result.structure?.atoms ?? [], motifOverlay);
+        const overlays = designOverlays(result.structure?.atoms ?? [], motifOverlay, unmodelled);
 
         // Register generated design in AtomWorks Studio session store with trajectory playback
         const trajectoryCif = buildTrajectoryCifFromFrames(
@@ -1246,6 +1268,7 @@ class Rfd4pStudioApp {
       this.els.predictBtn.textContent = 'Generate design';
       this.els.predictBtn.classList.remove('secondary');
       this.els.predictBtn.disabled = false;
+      this.designPanel?.render();
     }
   }
 }

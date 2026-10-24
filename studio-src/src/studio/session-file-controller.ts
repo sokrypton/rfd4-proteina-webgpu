@@ -141,6 +141,11 @@ export class SessionFileController {
     if (example && button) await this.loadExample(example, button);
   }
 
+  /** rfd4p: open a file the host fetched (e.g. by PDB ID) exactly as if it came from the Open button. */
+  open(file: File): Promise<boolean> {
+    return this.openFile(file);
+  }
+
   private openFile(file: File, targetSession: string | null = null): Promise<boolean> {
     const generation = ++this.openGeneration;
     this.importDialog?.close("cancel");

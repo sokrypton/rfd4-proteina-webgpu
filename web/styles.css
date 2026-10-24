@@ -431,3 +431,295 @@ body.studio-fullscreen-body {
   outline: none;
   border-bottom: 1px dashed var(--condition-index);
 }
+
+/* ---- Simple mode (default): only the RFD4-Proteina card, the viewer, the sequence and Open/Style/picking.
+   "Advanced editor" (body.rfd4p-advanced, web/design-panel.js) brings back every AtomWorks Studio tool. ---- */
+body:not(.rfd4p-advanced) .header-actions .load-options,
+body:not(.rfd4p-advanced) .header-actions label.file-button.secondary,
+body:not(.rfd4p-advanced) .header-actions #download,
+body:not(.rfd4p-advanced) #viewer-toolbar details[data-menu="analyze"],
+body:not(.rfd4p-advanced) #viewer-backend,
+body:not(.rfd4p-advanced) #picking-help,
+body:not(.rfd4p-advanced) #viewer-command-form,
+body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
+  display: none !important;
+}
+
+.rfd4p-advanced-toggle {
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border, #383a3f);
+  font-size: 11.5px;
+  color: var(--text-muted, #b1b3b9);
+}
+
+.rfd4p-lead {
+  margin: 4px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #f1f1f2);
+}
+
+.rfd4p-lead-sub {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-secondary, #d1d2d5);
+}
+
+.rfd4p-eyebrow {
+  display: block;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted, #b1b3b9);
+}
+
+/* Start screen task cards */
+.rfd4p-task-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.rfd4p-task-card,
+.rfd4p-flow {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  min-height: 0;
+  padding: 8px 9px;
+  text-align: left;
+  white-space: normal;
+  background: var(--surface-recessed, #191a1c);
+  border: 1px solid var(--border, #383a3f);
+  border-radius: 5px;
+  color: var(--text, #f1f1f2);
+}
+
+.rfd4p-task-card:hover,
+.rfd4p-flow:hover:not(:disabled),
+.rfd4p-flow.active {
+  border-color: var(--accent, #82aaff);
+  background: var(--accent-soft, #26354c);
+}
+
+.rfd4p-task-card strong,
+.rfd4p-flow strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rfd4p-task-card span,
+.rfd4p-flow span {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--text-muted, #b1b3b9);
+}
+
+.rfd4p-task-card.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.rfd4p-fetch-row {
+  display: flex;
+  gap: 6px;
+}
+
+.rfd4p-fetch-row input {
+  flex: 1;
+  min-width: 0;
+  text-transform: uppercase;
+}
+
+/* Design panel */
+.rfd4p-design {
+  margin-bottom: 10px;
+}
+
+.rfd4p-design.rfd4p-busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.rfd4p-task-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rfd4p-task-head strong {
+  font-size: 14px;
+}
+
+.rfd4p-task-detail {
+  margin: 2px 0 8px;
+  font-size: 11.5px;
+}
+
+.rfd4p-guided {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 8px;
+  border: 1px dashed var(--border-strong, #50535a);
+  border-radius: 5px;
+}
+
+.rfd4p-guided .rfd4p-lead {
+  margin: 0 0 2px;
+  font-size: 12px;
+}
+
+.rfd4p-flow:disabled {
+  opacity: 0.5;
+}
+
+.rfd4p-flow-form {
+  display: grid;
+  gap: 6px;
+  padding: 4px 2px 6px;
+  font-size: 11.5px;
+}
+
+.rfd4p-flow-length {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rfd4p-flow-length input {
+  width: 64px;
+  height: 26px;
+}
+
+.rfd4p-chain-list {
+  display: grid;
+  gap: 6px;
+}
+
+.rfd4p-chain {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #383a3f);
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: var(--surface-recessed, #191a1c);
+}
+
+.rfd4p-role-fixed { border-left-color: var(--condition-coordinate, #ffb86c); }
+.rfd4p-role-backbone { border-left-color: var(--condition-sequence, #c3e88d); }
+.rfd4p-role-motif { border-left-color: var(--condition-index, #c792ea); }
+.rfd4p-role-free,
+.rfd4p-role-new { border-left-color: var(--accent, #82aaff); }
+.rfd4p-role-ligand { border-left-color: var(--text-muted, #b1b3b9); }
+
+.rfd4p-chain-id {
+  font: 600 12px var(--font-mono, monospace);
+}
+
+.rfd4p-chain-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rfd4p-chain-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11.5px;
+}
+
+.rfd4p-chain-line select {
+  max-width: 62%;
+  font-size: 11px;
+}
+
+.rfd4p-seg-inputs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rfd4p-seg-inputs input {
+  width: 58px;
+  height: 24px;
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.rfd4p-chain-note {
+  margin: 0;
+  font-size: 10.5px;
+}
+
+.rfd4p-chain-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.rfd4p-total {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rfd4p-contig-row {
+  margin: 0;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.rfd4p-contig-row code {
+  font: 11px var(--font-mono, monospace);
+  color: var(--text-secondary, #d1d2d5);
+}
+
+.rfd4p-warning {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  border-radius: 4px;
+  color: var(--text, #f1f1f2);
+  background: var(--danger-soft, #3d2427);
+}
+
+.rfd4p-readonly select,
+.rfd4p-readonly input {
+  pointer-events: none;
+}
+
+/* Run settings: designs + thinking on one line */
+.rfd4p-settings-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.rfd4p-designs-field {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.rfd4p-designs-field input {
+  width: 56px;
+}
+
+.rfd4p-settings-row .rfd4p-thinking-group {
+  flex: 1;
+  margin: 0;
+}
+
+#rfd4p-studio-card .rfd4p-flow,
+#rfd4p-studio-card .rfd4p-task-card {
+  place-items: start;
+  justify-content: stretch;
+  text-align: left;
+}
