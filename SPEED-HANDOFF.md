@@ -164,6 +164,11 @@ before writing from scratch.
 
 ### P3 - App overhead outside the trunk (~10%)
 
+> **2026-10-25: every step's frame is shown, by the owner's decision.** Do not speed this up by skipping frames.
+> Decoding a frame every 2-3 steps saved 1.10x at n=100 (e4531d2) and was reverted in 2ae2968. Live frames
+> cost ~14% at n=100 (a 33 ms all-atom decode per step on an M2) and ~4% for Mol* and CIF. What is left is making
+> each frame cheaper, for example overlapping the decode with the next trunk pass.
+
 Per rendered frame: decoder pass, `processSampleToAtoms`, CIF serialization, `caSecondaryStructureCif`
 (py2Dmol `assignSecondary`), Mol* in-place update, live sequence strip (`web/app.js:988-1060`). Options: decode
 the live frame every 2-3 steps when steps are fast (the predicate is `wantLiveFrame`); move CIF building and
