@@ -402,6 +402,14 @@ All gates run strictly sequentially with zero concurrent GPU processes:
    - Loading `aPref`/`bPref` immediately after `workgroupBarrier()` #1 instead of after the 16 FMAs overlaps global load destination registers with the `ta`/`tb` shared-memory reads.
 5. **`patience = 3` and fixed `nsteps = 45`**:
    - On `uncond_short` seed 44, a 3-step Cα plateau occurs at steps 41–44 before 4 residues flip at step 45 (`seqId` drops to `0.960`, `aaRmsdA = 0.281 Å`). `patience = 4` rides through that plateau and matches `patience = 5` on 12/12 runs.
+6. **f16 accumulators in stock `triProjG` (2026-10-25, `acc16`): 1.027x / 1.033x a pass at n=100 / 200, drift doubled**:
+   - Eight `vec4<f16>` accumulators in the K-loop, widened to f32 for the unchanged epilogue. Interleaved, one
+     process, stock flags: 286-290 -> 278-280 ms (n=100), 1097-1107 -> 1061-1070 ms (n=200), about 1.07x on the
+     kernel. Drift against f32 accumulators 1.2e-3 bb_ca, 3-5e-3 latents, about twice FP16's existing trunk drift.
+   - localfold's 1.43-1.55x with the same idea (`6e996fa8`) came from accumulators held in a WGSL ARRAY, which
+     spilled; halving them ended the spill. Ours are scalar `vec4` variables and do not spill, so there is little
+     to win. Together with section 5, this kernel is at the M2's f32 ceiling for its class (localfold's best fused
+     triangle projection on the same M2: 1.07-1.29 TFLOP/s; ours ~1.1).
 
 
 ## 11. Open bug (2026-10-24): intermittent GPU reset on chiral-ligand inputs, slow first forwards
