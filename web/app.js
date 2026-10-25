@@ -1103,10 +1103,15 @@ class Rfd4pStudioApp {
         let lastStepEnd = performance.now();
         let lastStepMs = 0;
         const LIVE_FRAME_INTERVAL_MS = 320;
+        // A live decode is real GPU work (33 ms at n=100 on an M2, 12% of a step), so frames also wait until the last
+        // decode is at most this share of the time since the previous frame: short designs get a frame every 2-3 steps.
+        const LIVE_DECODE_SHARE = 0.05;
+        let lastDecodeMs = 0;
         // Not gated on liveRenderBusy: the previous frame's Mol* update almost always finishes during this trunk pass,
         // and a skipped decode used to fall back to a CA-only frame (frozen sequence, sheets twisted by invented O).
         const wantLiveFrame = (step, total) =>
-          step === 0 || (step < total - 1 && performance.now() + lastStepMs - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS);
+          step === 0 || (step < total - 1 && performance.now() + lastStepMs - lastLiveRenderTime >=
+            Math.max(LIVE_FRAME_INTERVAL_MS, lastDecodeMs / LIVE_DECODE_SHARE));
         const motifOverlay = buildMotifOverlayAtoms(atoms);
         const unmodelled = unmodelledTokens(atoms);
         // Overlays for the frame being built; shown once its structure has been drawn.
@@ -1142,6 +1147,7 @@ class Rfd4pStudioApp {
           const stepEnd = performance.now();
           lastStepMs = stepEnd - lastStepEnd;
           lastStepEnd = stepEnd;
+          if (info.decodeMs) lastDecodeMs = info.decodeMs;
           let alignedCaNm = Float32Array.from(info.x1.bb_ca);
           if (fixedAnchors) {
             alignedCaNm = alignCaNmToAnchors(alignedCaNm, fixedAnchors.tokenIndices, fixedAnchors.fixedCoordsNm);
