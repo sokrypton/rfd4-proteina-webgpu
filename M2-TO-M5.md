@@ -129,14 +129,14 @@ Stock vs subgroup-matrix on M2 after the PR: 2.2× at n = 400 and 600. The P0 le
 This is now the third bug that shipped or nearly shipped because only developer flags were tested (see
 SPEED-HANDOFF.md section 1). The M5 numbers in the PR body are all developer-flag numbers. Quote both.
 
-### 6.2 Put a ragged tail in the default chunked sweep
+### 6.2 Put a ragged tail in the default chunked sweep — done in #4 (`--tails=`, default 64)
 
 - The default `--chunks=3,5` at n = 200 gives one ragged plan (4-row tail) and one even plan.
 - An even split never reaches the small kernel, because full chunks are thousands of rows.
 - Add an explicit tail case of 33–640 rows, for example `--rows=13312` (64-row tail), to the defaults. A
   short tail is the only way the stock small kernel gets exercised by the chunked arm.
 
-### 6.3 Audit for other silently dropped GEMM options
+### 6.3 Audit for other silently dropped GEMM options — done in #4 (gemv `inNorm` set, non-`'ln'` on tiled kernels, f16 operands without `shader-f16` all throw)
 
 `inLn` was a capability that the selected kernel could quietly fail to provide. Look for the same pattern:
 
