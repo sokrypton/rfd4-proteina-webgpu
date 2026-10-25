@@ -29,6 +29,91 @@ const T = 256; // tri_mult_c
 const LAYERS_PER_SUBMIT = 2;
 const OUT = 3 + 32 + 147;
 
+/** The default bound on the R-indexed pair scratch; see `chunkPlan`. */
+export const DEFAULT_CHUNK_BYTES = 896 * 1024 * 1024;
+
+/**
+ * How the pair track is sliced, and in which arithmetic.
+ *
+ * 🔴 THE ARITHMETIC IS CHOSEN BEFORE THE SLICE, NOT AFTER, and it used to be the other way
+ * round: `triF16` tested `R === nn` while R came from a bound computed in f32 terms. So
+ * narrowing the pair track - the thing that HALVES this scratch - could never buy any of the
+ * length it paid for, and at n = 363 the whole f16 path switched off at once. Measured on an
+ * Apple M5 (8-core GPU), one trunk pass over 14 layers:
+ *
+ *        n=100    n=200    n=362    n=400
+ *   f16   115.8    444.5   1437.7   1815.8     one chunk
+ *   f32       -        -        -   3523.7     two chunks, and 495 ms of it a COPY
+ *
+ * n=362 -> n=400 is 1.22x the pairs and was 2.45x the time, because the fallback is also the
+ * path that never got the f16 kernels or the fused gate. The cliff sat just below the lengths
+ * people design at, which is the trap worth naming outright: a kernel measured at one
+ * length is measured at one length.
+ *
+ * 🔴 AND THE BOUND IS IN BYTES BECAUSE THAT IS WHAT IT WAS ALWAYS MEASURING. The old divisor
+ * was `2 * T`, the per-row cost of `proj` ALONE - a buffer only the CHUNKED path allocates -
+ * so the real f32 scratch at the old R was 939 MB rather than the 256 MB the float bound
+ * appeared to state. 896 MB is that same figure said plainly, which is why f32 lands exactly
+ * where it did.
+ *
+ * 🔴 AND THE TWO SHAPES COST DIFFERENT AMOUNTS A ROW, so the question is asked in that order:
+ * does the whole pair tensor fit as ONE chunk, which allocates no `proj` and may be f16 - and
+ * only if it does not, how many rows fit the chunked f32 shape, which pays for `proj` as
+ * well. Sizing R once from one of the two costs and then picking the other shape is how a
+ * bound gets quietly doubled; an earlier draft of this did exactly that, taking f16's row
+ * cost and then allocating f32 buffers against it.
+ *
+ * @param {number} nn pairs, i.e. n * n
+ * @param {{wantF16?: boolean, chunkBytes?: number}} [opts]
+ * @returns {{triF16: boolean, R: number, chunks: number, scratchBytes: number}}
+ */
+export function chunkPlan(nn, opts = {}) {
+  const wantF16 = opts.wantF16 === true;
+  const chunkBytes = opts.chunkBytes ?? DEFAULT_CHUNK_BYTES;
+  // zc + xc + gz + phid, as `Rfd4pEngine.buffer` floats a pair row.
+  const oneChunkRow = wantF16 ? (P / 2 + T / 2 + P / 2 + P) : (P + T + P + 2 * P);
+  // 🔴 AND THE CHUNKED SHAPE NO LONGER PAYS FOR gz A ROW: it is nn-indexed now, written
+  // once and read once, so that the output gate is not recomputed per chunk (see
+  // `triangle`). What is left R-indexed is zc + xc + phid + proj. The bound has always
+  // described the R-indexed scratch and nothing else, so moving a buffer out of that set
+  // raises R rather than the total - 101944 rows to 122332 at the default bound.
+  //
+  // 🔴 AND THE CHUNKED SHAPE NARROWS TOO, which is what decouples the arithmetic from the
+  // slicing. It used to be that `triF16` REQUIRED one chunk, because the chunked kernels
+  // were f32-only: so at n = 513 the pair track widened back to f32 at the same residue
+  // the slicing changed, and memory jumped 46% (2056 -> 3001 MiB) while the pass took 2.02x
+  // as long. The chunked kernels read and write halves now, so f16 is a property of the
+  // DEVICE and the request, and the slicing is a property of the length.
+  const chunkedRow = wantF16 ? (P / 2 + T / 2 + P + T) : ((P + T + 2 * P) + 2 * T);
+  const oneChunk = nn * oneChunkRow * 4 <= chunkBytes;
+  const fits = Math.max(1, Math.min(nn, Math.floor(chunkBytes / (chunkedRow * 4))));
+  // 🔴 AND A CHUNK MUST START ON A MULTIPLE OF FOUR PAIR ROWS, which is `transposeLnOut`'s
+  // requirement and not an alignment anybody chose for tidiness: it reads the contraction
+  // output as `array<vec4<f32>>` along the ROW axis - `x[c * nnStride4 + (r0 + rLocal) / 4]`
+  // - so four consecutive pair rows share a word, and a chunk beginning off that boundary
+  // reads every row of every channel from the wrong place. `rLocal` is already a multiple
+  // of four, so the whole requirement lands on r0 = k * R, i.e. on R.
+  //
+  // Measured at n = 60 against the single-chunk arm, which is what found this: R = 1800,
+  // 1208, 1200, 900 and 512 all agree at 1.3e-6, and R = 515, 450 and 225 come back at
+  // relRMS 0.89 to 1.04 on `z`. **RAGGEDNESS IS NOT THE DISCRIMINATOR** - 450 and 225
+  // divide 3600 exactly and still fail, while 1208 and 512 leave a short tail and pass -
+  // so a tail of any length is fine and a misaligned START is not.
+  //
+  // 🔴 NOTHING EVER SHIPPED WRONG, and the reason is luck rather than design: the default
+  // bound gives R = 101944, which is 4 * 25486. This has always been one changed constant
+  // away from silently wrong structures past the single-chunk threshold - a smaller
+  // `chunkBytes`, a different pair width, another buffer in the row cost - so the invariant
+  // is stated here instead of being a property of one arithmetic.
+  const R = oneChunk ? nn : Math.min(nn, Math.max(4, fits - (fits % 4)));
+  return {
+    triF16: wantF16,
+    R,
+    chunks: Math.ceil(nn / R),
+    scratchBytes: R * (oneChunk ? oneChunkRow : chunkedRow) * 4,
+  };
+}
+
 /**
  * @param {object} weights name -> {data: Float32Array, shape}
  * @param {object} cfg bundle `config.nn`
@@ -46,14 +131,17 @@ export class Rfd4pTrunkGpu {
    * @param {GPUDevice} device
    * @param {object} weights
    * @param {object} cfg bundle `config.nn`
-   * @param {{half?: boolean, chunkFloats?: number}} [opts]
+   * @param {{half?: boolean, chunkBytes?: number}} [opts]
+   *   `chunkBytes` bounds the R-indexed pair scratch; see `record` for why it is bytes.
    */
   constructor(device, weights, cfg, opts = {}) {
     checkConfig(cfg);
     this.engine = new Rfd4pEngine(device);
     this.cfg = cfg;
     this.half = opts.half ?? false;
-    this.chunkFloats = opts.chunkFloats ?? 64 * 1024 * 1024;
+    // 896 MB, which is what the old `64 * 1024 * 1024` float bound came to in f32 once the
+    // buffers it did not count are counted: one chunk to n = 362 in f32, n = 512 in f16.
+    this.chunkBytes = opts.chunkBytes ?? DEFAULT_CHUNK_BYTES;
     this.nlayers = cfg.nlayers;
     this.n = 0;
     this.w = this.uploadWeights(weights);
@@ -266,11 +354,11 @@ export class Rfd4pTrunkGpu {
     const nPad = Math.ceil(n / 16) * 16;
     const nnPad = n * nPad;
     this.nPad = nPad;
-    const R = Math.max(1, Math.min(nn, Math.floor(this.chunkFloats / (2 * T))));
+    // The slice and the arithmetic together; `chunkPlan` carries why.
+    const { triF16, R } = chunkPlan(nn, { wantF16: this.half && e.hasF16, chunkBytes: this.chunkBytes });
+    this.triF16 = triF16;
     this.R = R;
     const b = (label, floats) => e.buffer(label, floats);
-    const triF16 = this.half && e.hasF16 && R === nn;
-    this.triF16 = triF16;
     const B = (this.buf = {
       seqF: b('seqF', n * seqStride), condF: b('condF', batchCondRows * condStride),
       pairF: b('pairF', nn * pairStride), pairCondF: b('pairCondF', dims.pairCond),
@@ -281,12 +369,20 @@ export class Rfd4pTrunkGpu {
       zInitStatic: b('zInitStatic', triF16 ? Math.ceil((nn * P) / 2) : nn * P),
       zInit: b('zInit', triF16 ? Math.ceil((nn * P) / 2) : nn * P),
       z: b('z', triF16 ? Math.ceil((nn * P) / 2) : nn * P),
-      aT: b('aT', triF16 ? Math.ceil((T * nnPad) / 2) : T * nn),
-      bT: b('bT', triF16 ? Math.ceil((T * nnPad) / 2) : T * nn),
+      // 🔴 nPad x nPad IN f16, NOT n x nPad: the chunked incoming triangle reads its
+      // operand transposed by stride, so k reaches row nPad - 1 and that row has to EXIST
+      // and be zero. A slice of n*nPad has no such row and the read lands in the next
+      // channel's data. Costs nPad/n, about 1%. The single-chunk arm uses the narrower
+      // n*nPad layout and fits inside this.
+      aT: b('aT', triF16 ? Math.ceil((T * nPad * nPad) / 2) : T * nn),
+      bT: b('bT', triF16 ? Math.ceil((T * nPad * nPad) / 2) : T * nn),
       x: b('x', triF16 ? Math.ceil((T * Math.ceil(nn / 4) * 4) / 2) : T * Math.ceil(nn / 4) * 4),
-      zc: b('zc', triF16 ? Math.ceil((R * P) / 2) : R * P), proj: R < nn ? b('proj', R * 2 * T) : null,
+      zc: b('zc', triF16 ? Math.ceil((R * P) / 2) : R * P),
+      proj: R < nn ? b('proj', triF16 ? R * T : R * 2 * T) : null,
       xc: b('xc', triF16 ? Math.ceil((R * T) / 2) : R * T),
-      gz: b('gz', triF16 ? Math.ceil((R * P) / 2) : R * P),
+      // nn-indexed, not R-indexed: written once by the triangle's first chunk loop and read
+      // by its second, so the output gate is never recomputed. See `triangle`.
+      gz: b('gz', triF16 ? Math.ceil((nn * P) / 2) : nn * P),
       phid: b('phid', triF16 ? R * P : R * 2 * P),
       zcond: b('zcond', C), zcondN: b('zcondN', C), zgb: b('zgb', 2 * P), out: b('out', n * (OUT + 35)),
       simBuf: b('simBuf', 16 + n * 35), emitBuf: b('emitBuf', 2 * n),
@@ -481,6 +577,19 @@ export class Rfd4pTrunkGpu {
     return this.blocks.layer(L, B.s, condBuf, i, B.bias, biasSteps, opts);
   }
 
+  /**
+   * The `rows` pair rows of `gz` starting at `r0`, as a binding view.
+   *
+   * 🔴 A VIEW RATHER THAN A ROW OFFSET, so the chunked arm runs the single-chunk arm's own
+   * kernel text (see `Rfd4pEngine.step`). A pair row of gz is 384 f32s (1536 bytes) or 192
+   * packed words (768 bytes), both multiples of the 256-byte binding alignment, so every r0
+   * is representable - and `step` throws if a future width stops being.
+   */
+  gzView(r0, rows) {
+    const rowBytes = this.triF16 ? (P / 2) * 4 : P * 4;
+    return { buffer: this.buf.gz, offsetBytes: r0 * rowBytes, sizeBytes: rows * rowBytes };
+  }
+
   async triangle(t, incoming, fusePairWrite = false, zIn = null, splitPp = false) {
     const e = this.engine;
     const { n, nPad } = this;
@@ -504,31 +613,101 @@ export class Rfd4pTrunkGpu {
       ];
     }
     const xBatchStride = Math.ceil(nn / 4) * 4;
+    const triF16 = this.triF16;
+    // 🔴 THE SCATTER IS A COPY, SO IN f16 IT COPIES HALVES RATHER THAN CONVERTING. `proj`
+    // and aT/bT are all `array<f16>` here, and the a/b values pass through untouched - only
+    // the incoming transpose rearranges them - so the binding TYPE carries the arithmetic
+    // and the body is the same text either way.
+    const triType = triF16 ? 'f16' : 'f32';
+    // 🔴 AND IN f16 THE TRIANGLE'S OPERANDS ARE ROW-PADDED TO 16, WHICH IS THE CONTRACTION'S
+    // REQUIREMENT AND NOT A LAYOUT PREFERENCE. The subgroup-matrix GEMM wants k divisible by
+    // 16; the single-chunk arm has always padded for it (`stride = nPad`), and the first
+    // draft of the chunked arm kept the f32 strides and contracted over k = n. At n = 200
+    // that is 200 % 16 = 8 - ragged - and it came back at relRMS 0.19 on the alpha carbons
+    // and 0.69 on the latents, flat in the chunk count. The ragged-k branch it lands on is
+    // `gemm-sm8-f-ve`, whose A-tail read named the wrong index until this session and so had
+    // never compiled, let alone run.
+    //
+    // The pad costs nothing and corrupts nothing: WebGPU zero-initialises, the scatter never
+    // writes the padding, and a zero contributes zero to the contraction - which is the same
+    // reason the single-chunk arm can contract over nPad.
+    // 🔴 AND THE INCOMING TRIANGLE NO LONGER TRANSPOSES ANY DATA - THE GEMM READS THE
+    // TRANSPOSE BY SWAPPING TWO STRIDES. The contraction is x[i][j] = sum_k a[k][i] b[k][j]
+    // going in, against sum_k a[i][k] b[j][k] going out, and both are the SAME bytes read
+    // with `m` and `k` exchanged: {m: st, k: 1} outgoing, {m: 1, k: st} incoming. So the
+    // scatter writes one natural layout for both directions and `tri-gate-in` stops being
+    // a transpose.
+    //
+    // It was 1510.7 ms of a 5846.4 ms pass at n = 600 - 25.8%, and 16x its own outgoing
+    // twin at 90.9 - entirely because of the write pattern: `at = c*bs + (r%n)*st + r/n`
+    // advances by `st` as r advances, so consecutive workgroups wrote a row apart and
+    // nothing coalesced, where the outgoing index advances by 1 and does. Measured, the two
+    // scatters together go 1601.6 ms -> 103.98, and the pass 5846.4 -> 4401.7.
+    //
+    // 🔴 AND THE STRIDED READ COSTS THE CONTRACTION NOTHING, which was the risk worth
+    // measuring rather than assuming: {m: 1, k: st} fails `vecIO`'s `A.k === 1`, so the
+    // incoming GEMM drops off the vectorised submatrix path. It reads **297.9 ms against
+    // the outgoing direction's 300.3** - the two are the same kernel cost to within noise,
+    // so what the vector path buys here is nothing and what the transpose cost was
+    // everything.
+    //
+    // 🔴 THE ROW DIMENSION HAS TO BE PADDED TOO, not just the column one, and getting that
+    // wrong reads the NEXT CHANNEL rather than zeros: with k running to nPad, the incoming
+    // read k*st + i reaches row nPad - 1, which is past n - 1. A per-channel slice of
+    // n*nPad has no such row and the read lands in channel c+1's data. nPad*nPad does, and
+    // WebGPU zero-initialises it, so those k contribute nothing. It costs nPad/n - about 1%
+    // of aT and bT.
+    const stride = triF16 ? nPad : n;
+    const batchStride = triF16 ? nPad * nPad : nn;
     const steps = [];
     for (const [r0, rows] of this.chunks) {
       steps.push(
         fusePairWrite
-          ? await e.pairWriteLnIn({ z: B.z, zIn, pp: B.pp, zc: B.zc, w: t.lnIn, rows, n, r0, splitPp })
-          : await e.norm({ type: 'ln', x: B.z, y: B.zc, rows, width: P, w: t.lnIn, xOff: r0 * P }),
-        await e.triProjG({ x: B.zc, w: t.projG, proj: B.proj, gz: B.gz, rows }),
-        await e.map(incoming ? 'tri-gate-in' : 'tri-gate-out', rows * T,
-          [{ buffer: B.aT, write: true }, { buffer: B.bT, write: true }, { buffer: B.proj }],
+          ? await e.pairWriteLnIn({ z: B.z, zIn, pp: B.pp, zc: B.zc, w: t.lnIn, rows, n, r0, splitPp, outF16: triF16 })
+          : await e.norm({ type: 'ln', x: B.z, y: B.zc, rows, width: P, w: t.lnIn, xOff: r0 * P, inF16: triF16, outF16: triF16 }),
+        await e.triProjG({ x: B.zc, w: t.projG, proj: B.proj, gz: this.gzView(r0, rows), rows, aF16: triF16, outF16: triF16 }),
+        // One layout, both directions - so one pipeline, and the name no longer says which.
+        await e.map('tri-gate', rows * T,
+          [{ buffer: B.aT, write: true, type: triType }, { buffer: B.bT, write: true, type: triType }, { buffer: B.proj, type: triType }],
           `let rr = i / 256u; let c = i % 256u; let r = U(0u) + rr; let n = U(1u);
+  let st = U(2u); let bs = U(3u);
   let pr = rr * 512u;
   let av = b2[pr + c];
   let bv = b2[pr + 256u + c];
-  ${incoming ? 'let at = c * n * n + (r % n) * n + r / n;' : 'let at = c * n * n + r;'}
-  b0[at] = av; b1[at] = bv;`, [r0, n]),
+  let at = c * bs + (r / n) * st + r % n;
+  b0[at] = av; b1[at] = bv;`, [r0, n, stride, batchStride]),
       );
     }
-    steps.push(await e.gemm({ m: n, n, k: n, a: B.aT, b: B.bT, c: B.x, batches: [T, 1], f16: this.half,
-      A: { s0: nn, m: n, k: 1 }, B: { s0: nn, n: n, k: 1 }, C: { s0: xBatchStride, m: n, n: 1 }, label: incoming ? 'tri-in' : 'tri-out' }));
+    // The transpose lives here now, as two strides rather than a pass over the data.
+    const opA = incoming ? { s0: batchStride, m: 1, k: stride } : { s0: batchStride, m: stride, k: 1 };
+    const opB = incoming ? { s0: batchStride, n: 1, k: stride } : { s0: batchStride, n: stride, k: 1 };
+    steps.push(await e.gemm({ m: n, n, k: stride, a: B.aT, b: B.bT, c: B.x, batches: [T, 1], f16: this.half, aF16: triF16, cF16: triF16,
+      A: opA, B: opB, C: { s0: xBatchStride, m: n, n: 1 }, label: incoming ? 'tri-in' : 'tri-out' }));
+    // 🔴 THE GATE IS NOT RECOMPUTED. This loop used to re-run `norm` and `triProjG` per
+    // chunk purely to rebuild `gz`, because gz was R-indexed and the first loop's later
+    // chunks had overwritten the earlier ones. triProjG is one fused m x 1408 x 384 GEMM
+    // and the largest kernel in the pass, so paying for it twice cost - profiled at
+    // n = 600, where the pass is 8118.6 ms - 4116.1 ms of triProjG over 112 calls where 56
+    // are the rebuild, plus 115 ms of its norms: 26.8% of a trunk pass to avoid holding one
+    // buffer whole.
+    //
+    // gz is nn-indexed now, written once by the first loop through a per-chunk binding
+    // VIEW, and read here through the same kind of view - so the gate offset stays 0 and no
+    // f16 index arithmetic is reasoned about twice. It costs nn * 384 instead of R * 384
+    // (at n = 600 that is 553 MB against 157 in f32, 276 against 78 in f16) and `chunkPlan`
+    // no longer counts gz as R-indexed scratch.
+    //
+    // 🔴 THE CHEAPER-IN-MEMORY ALTERNATIVE, MEASURED AND NOT TAKEN: the rebuild only needs
+    // the LAST 384 of triProjG's 1408 columns, so a gate-only kernel would be 27% of the
+    // work rather than 100% - about 18% of the pass saved with no extra buffer at all. It
+    // wants a weight slice of `projG`, which is packed interleaved for the fused kernel, so
+    // it is a new kernel and a new pack rather than a narrower call. Worth doing if the
+    // extra buffer ever becomes the binding constraint on length.
     for (const [r0, rows] of this.chunks) {
       steps.push(
-        await e.transposeLnOut({ x: B.x, y: B.xc, rows, nn: xBatchStride, w: t.lnOut, r0 }),
-        await e.norm({ type: 'ln', x: B.z, y: B.zc, rows, width: P, w: t.lnIn, xOff: r0 * P }),
-        await e.triProjG({ x: B.zc, w: t.projG, proj: B.proj, gz: B.gz, rows }),
-        await e.linear({ x: B.xc, w: t.z, y: B.z, rows, inC: T, outC: P, yOff: r0 * P, gate: { sc: B.gz, off: 0, stride: P, sigmoid: false } }),
+        await e.transposeLnOut({ x: B.x, y: B.xc, rows, nn: xBatchStride, w: t.lnOut, r0, inF16: triF16, outF16: triF16 }),
+        await e.linear({ x: B.xc, w: t.z, y: B.z, rows, inC: T, outC: P, yOff: r0 * P, aF16: triF16, cF16: triF16,
+          gate: { sc: this.gzView(r0, rows), off: 0, stride: P, sigmoid: false, f16: triF16 } }),
       );
     }
     return steps;
@@ -581,7 +760,14 @@ export class Rfd4pTrunkGpu {
     for (const [r0, rows] of this.chunks) {
       if (this.chunks.length > 1) {
         steps.push(
-          await e.norm({ type: 'rms', x: B.z, y: B.zc, rows, width: P, w: w.zCycNorm, outF16: triF16, xOff: r0 * P }),
+          // 🔴 `inF16` AS WELL AS `outF16`, and its absence was a real bug the moment f16
+          // stopped implying one chunk: this branch runs only when the track is sliced, the
+          // slicing used to force f32, so reading `z` as f32 was right by accident. With an
+          // f16 chunked track it read a packed pair track as floats - the output's alpha
+          // carbons came back at relRMS 0.19 and the latents at 0.69, IDENTICALLY for two
+          // equal chunks and for four ragged ones, which is the signature of a code path
+          // rather than an accumulation and is what located it.
+          await e.norm({ type: 'rms', x: B.z, y: B.zc, rows, width: P, w: w.zCycNorm, inF16: triF16, outF16: triF16, xOff: r0 * P }),
         );
       }
       steps.push(
