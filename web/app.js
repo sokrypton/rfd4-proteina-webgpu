@@ -613,6 +613,7 @@ class Rfd4pStudioApp {
     if (this.els.webgpuBadge) {
       this.els.webgpuBadge.textContent = backendLabel;
     }
+    this._initSpeedHint();
     this.setStatus('Ready to generate.', false, { visible: false });
 
     const params = new URLSearchParams(window.location.search);
@@ -672,6 +673,36 @@ class Rfd4pStudioApp {
     } catch (err) {
       console.warn('Motif overlay failed:', err);
     }
+  }
+
+  /**
+   * Desktop Chrome exposes subgroup matrices (about 2x faster designs, `hasSubgroupMatrix` in the engine) only behind
+   * chrome://flags/#enable-unsafe-webgpu. Pages cannot open chrome:// URLs, so the hint offers to copy the address.
+   */
+  _initSpeedHint() {
+    const hint = document.getElementById('rfd4p-speed-hint');
+    if (!hint || !this.gpuDevice) return;
+    const KEY = 'rfd4p.speedHintDismissed';
+    let dismissed = false;
+    try { dismissed = localStorage.getItem(KEY) === '1'; } catch { /* storage blocked: show it */ }
+    const brands = navigator.userAgentData?.brands?.map((b) => b.brand) ?? [];
+    const desktopChrome = brands.includes('Google Chrome') && navigator.userAgentData?.mobile === false;
+    const hasMatrix = this.gpuDevice.features?.has?.('chromium-experimental-subgroup-matrix') === true;
+    if (dismissed || !desktopChrome || hasMatrix) return;
+    hint.hidden = false;
+    const copy = document.getElementById('rfd4p-speed-copy');
+    copy?.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText('chrome://flags/#enable-unsafe-webgpu');
+        copy.textContent = 'Copied';
+      } catch {
+        copy.textContent = 'Copy failed: select the address above';
+      }
+    });
+    document.getElementById('rfd4p-speed-dismiss')?.addEventListener('click', () => {
+      hint.hidden = true;
+      try { localStorage.setItem(KEY, '1'); } catch { /* not remembered; fine */ }
+    });
   }
 
   async _initWebGpu() {

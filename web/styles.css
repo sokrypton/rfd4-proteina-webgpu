@@ -933,3 +933,28 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   color: #101114;
   background: var(--chain-color, var(--text-muted, #b1b3b9));
 }
+
+.rfd4p-speed-hint {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong, #50535a);
+  border-radius: 4px;
+  background: var(--accent-soft, #26354c);
+  font-size: 12px;
+  color: var(--text-secondary, #d1d2d5);
+}
+
+.rfd4p-speed-hint p {
+  margin: 0 0 6px;
+  line-height: 1.4;
+}
+
+.rfd4p-speed-hint code {
+  word-break: break-all;
+  color: var(--text, #f1f1f2);
+}
+
+.rfd4p-speed-hint-actions {
+  display: flex;
+  gap: 6px;
+}
