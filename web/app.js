@@ -1124,25 +1124,13 @@ class Rfd4pStudioApp {
         let referenceCaNm = null;
         let liveFramesRendered = 0;
         let liveCamRadius = 0;
-        let lastLiveRenderTime = 0;
-        let liveRenderBusy = false;
         let liveRenderPromise = null;
 
         // Live frames use the decoder's all-atom x1 (real backbone geometry, so Mol* can assign secondary
         // structure, and in-context targets keep their input atoms); CA-only frames are the fallback.
-        // Asked before the step's trunk pass, so predict whether a render will be due once it finishes.
-        let lastStepEnd = performance.now();
-        let lastStepMs = 0;
-        const LIVE_FRAME_INTERVAL_MS = 320;
-        // A live decode is real GPU work (33 ms at n=100 on an M2, 12% of a step), so frames also wait until the last
-        // decode is at most this share of the time since the previous frame: short designs get a frame every 2-3 steps.
-        const LIVE_DECODE_SHARE = 0.05;
-        let lastDecodeMs = 0;
-        // Not gated on liveRenderBusy: the previous frame's Mol* update almost always finishes during this trunk pass,
-        // and a skipped decode used to fall back to a CA-only frame (frozen sequence, sheets twisted by invented O).
-        const wantLiveFrame = (step, total) =>
-          step === 0 || (step < total - 1 && performance.now() + lastStepMs - lastLiveRenderTime >=
-            Math.max(LIVE_FRAME_INTERVAL_MS, lastDecodeMs / LIVE_DECODE_SHARE));
+        // Every step is shown: each one is decoded (the last is replaced by the final structure), and a step waits
+        // for the previous frame's Mol* update rather than dropping its own frame.
+        const wantLiveFrame = (step, total) => step < total - 1;
         const motifOverlay = buildMotifOverlayAtoms(atoms);
         const unmodelled = unmodelledTokens(atoms);
         // Overlays for the frame being built; shown once its structure has been drawn.
@@ -1174,11 +1162,7 @@ class Rfd4pStudioApp {
           }
         };
 
-        const onStep = (info) => {
-          const stepEnd = performance.now();
-          lastStepMs = stepEnd - lastStepEnd;
-          lastStepEnd = stepEnd;
-          if (info.decodeMs) lastDecodeMs = info.decodeMs;
+        const onStep = async (info) => {
           let alignedCaNm = Float32Array.from(info.x1.bb_ca);
           if (fixedAnchors) {
             alignedCaNm = alignCaNmToAnchors(alignedCaNm, fixedAnchors.tokenIndices, fixedAnchors.fixedCoordsNm);
@@ -1198,18 +1182,16 @@ class Rfd4pStudioApp {
             caCoordsNm: alignedCaNm,
           });
 
-          const now = performance.now();
           const isStopping = info.step > 0 && (info.step === info.nsteps - 1 || Boolean(info.convergence?.stop));
           // On the GPU path only decoded frames are shown; the CA-only frame is for the CPU backend (no live decode).
           const frameReady = Boolean(info.decoded) || !useGpu;
-          if (frameReady && !liveRenderBusy && !isStopping && (info.step === 0 || now - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS)) {
+          if (frameReady && !isStopping) {
             if (typeof window.__rfd4pRenderLiveFrame === 'function') {
+              if (liveRenderPromise) await liveRenderPromise;
               liveOverlays = { motif: overlayCifOf(motifOverlay, 'motif'), sideChains: null };
               const liveCif = liveAllAtomCif(info) ?? buildLiveFrameCifFromCa(alignedCaNm, tokens, null, UNIFIED_ATOM37_TOKENS);
               const frameOverlays = liveOverlays;
               if (liveCif) {
-                liveRenderBusy = true;
-                lastLiveRenderTime = now;
                 // Early x1 estimates are a collapsed blob that later expands several-fold, so a camera
                 // fit once to step 1 ends up inside the protein; refit whenever the extent drifts.
                 const radius = caExtentRadiusNm(alignedCaNm);
@@ -1220,10 +1202,7 @@ class Rfd4pStudioApp {
                   window.__rfd4pRenderLiveFrame(liveCif, `step_${info.step + 1}.cif`, keepCam),
                 )
                   .then(() => showDesignOverlays(frameOverlays))
-                  .catch(() => {})
-                  .finally(() => {
-                    liveRenderBusy = false;
-                  });
+                  .catch(() => {});
               }
             }
           }

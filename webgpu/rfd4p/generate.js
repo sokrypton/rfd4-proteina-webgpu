@@ -137,7 +137,7 @@ export class Rfd4pGeneratorGpu {
    * @param {boolean|{patience?: number, caTolA?: number, minFrac?: number}} [opts.earlyStop] stop once the x1 Cα and
    *   the designed sequence have both been still for `patience` steps (`shared/rfd4p/convergence.js`); the stopping
    *   step's x1 is the sample. `onStep` info carries `convergence`; the result reports `stepsRun`.
-   * @param {(info: object) => void|Promise<void>} [opts.onStep] info carries `decodeMs`, the live decode's wall time (0 if none)
+   * @param {(info: object) => void|Promise<void>} [opts.onStep]
    * @param {AbortSignal} [opts.signal]
    */
   async generate(batch, opts = {}) {
@@ -333,13 +333,10 @@ export class Rfd4pGeneratorGpu {
         const convergence = monitor?.observe(s, out.x1.bb_ca, sequenceForDecoder(batch, n, lastLogits)) ?? null;
         if (opts.onStep) {
           let liveDecoded = null;
-          let decodeMs = 0;
           if (wantDecodeStep && (!convergence?.stop || decodeEvery > 0)) {
-            const tDecode = performance.now();
             const liveSeq = sequenceForDecoder(batch, n, lastLogits);
             const dec = await this.decoder.decode(batch, { n, caNm: out.x1.bb_ca, z: out.x1.local_latents, seq: liveSeq });
             liveDecoded = formatSampleLocalLatents(batch, { n, caNm: out.x1.bb_ca, decoded: dec });
-            decodeMs = performance.now() - tDecode;
           }
           await opts.onStep({
             step: s,
@@ -350,7 +347,6 @@ export class Rfd4pGeneratorGpu {
             xt: { bb_ca: Float32Array.from(x.bb_ca), local_latents: Float32Array.from(x.local_latents) },
             logits: lastLogits,
             decoded: liveDecoded,
-            decodeMs,
             insertionLogits: liveDecoded ? lastInsertion : null,
             convergence,
           });
@@ -404,13 +400,10 @@ export class Rfd4pGeneratorGpu {
       const convergence = monitor?.observe(s, x1.bb_ca, sequenceForDecoder(batch, n, lastLogits)) ?? null;
       if (opts.onStep) {
         let liveDecoded = null;
-        let decodeMs = 0;
         if (wantDecodeStep && (!convergence?.stop || decodeEvery > 0)) {
-          const tDecode = performance.now();
           const liveSeq = sequenceForDecoder(batch, n, lastLogits);
           const dec = await this.decoder.decode(batch, { n, caNm: x1.bb_ca, z: x1.local_latents, seq: liveSeq });
           liveDecoded = formatSampleLocalLatents(batch, { n, caNm: x1.bb_ca, decoded: dec });
-          decodeMs = performance.now() - tDecode;
         }
         await opts.onStep({
           step: s,
@@ -421,7 +414,6 @@ export class Rfd4pGeneratorGpu {
           xt: { bb_ca: Float32Array.from(x.bb_ca), local_latents: Float32Array.from(x.local_latents) },
           logits: lastLogits,
           decoded: liveDecoded,
-          decodeMs,
           insertionLogits: liveDecoded ? lastInsertion : null,
           convergence,
         });
