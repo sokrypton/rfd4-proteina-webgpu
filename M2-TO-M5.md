@@ -148,6 +148,15 @@ Make those throw like `inLn` does now. Performance-only fallbacks (`vecIO`, `vec
 
 ### 6.4 Command-buffer length past n ≈ 400 on slower GPUs
 
+> **Tested 2026-10-25 in a visible stock Chrome on the M2** (`LOCALFOLD_HEADED=1 LOCALFOLD_STOCK_FLAGS=1`).
+> `bench-trunk.js` at n = 400, 513, 600 and 800 lost no device, even at ~2.7 s per command buffer on average. A
+> full 60-step app design at n = 400 with live frames also ran clean. That's without heavy Mol* contention;
+> the known intermittent hang (SPEED-HANDOFF.md section 11) came under contention at n = 177. Not a priority.
+>
+> Also: `check-generate.js` defaults to FP32 (`--half=1` for the app's path). Six seeded FP16 designs at n = 400
+> (60 steps) were compact with intact chains. Live frames match FP32 and the pre-PR #3 code step for step.
+> Runs with 12–20 steps show early frames as a disconnected cloud. That comes from the coarse schedule, not a bug.
+
 `LAYERS_PER_SUBMIT = 2`, so a cycle is 7 command buffers. Average per command buffer on M2 stock after the
 PR:
 

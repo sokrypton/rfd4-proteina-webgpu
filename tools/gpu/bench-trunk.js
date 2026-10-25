@@ -31,6 +31,8 @@ export async function main(device, args = []) {
   const lengths = (opt.lengths ?? '200,400').split(',').map(Number);
   const half = opt.half !== '0';
   const reps = Number(opt.reps ?? 3);
+  let lost = null;
+  device.lost?.then((info) => { lost = `${info.reason}: ${info.message}`; });
   const { tensors: weights, config } = await fetchShardedWeights(DEFAULT_LOCAL_SHARDED_DIR);
   const rows = [];
   for (const n of lengths) {
@@ -48,10 +50,10 @@ export async function main(device, args = []) {
       t.sort((a, b) => a - b);
       rows.push({ n, chunks: trunk.chunks.length, triF16: trunk.triF16, medianMs: Math.round(t[Math.floor(t.length / 2)]), allMs: t.map(Math.round) });
     } catch (err) {
-      rows.push({ n, error: String(err.message ?? err).slice(0, 200) });
+      rows.push({ n, error: String(err.message ?? err).slice(0, 200), lost });
     } finally {
       trunk.engine.destroy();
     }
   }
-  return { half, rows };
+  return { half, rows, lost };
 }

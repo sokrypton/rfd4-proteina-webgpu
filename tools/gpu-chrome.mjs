@@ -254,7 +254,9 @@ async function main() {
   const profile = ANDROID ? null
     : join(process.env.TMPDIR ?? "/tmp", `gpu-chrome-${process.pid}-${Date.now()}`);
   const chrome = ANDROID ? null : spawn(CHROME, [
-    ...(process.platform === "linux" && !LINUX_HEADLESS ? [] : ["--headless=new"]),
+    // LOCALFOLD_HEADED=1 opens a real window on macOS too: headless Chrome tolerates
+    // command buffers that a visible one kills as a GPU hang (SPEED-HANDOFF.md rule 4).
+    ...((process.platform === "linux" && !LINUX_HEADLESS) || process.env.LOCALFOLD_HEADED === "1" ? [] : ["--headless=new"]),
     ...(STOCK_FLAGS ? [] : ["--enable-unsafe-webgpu"]), "--disable-gpu-sandbox",
     ...PLATFORM_FLAGS,
     // performance.memory rounds to 100 KiB without this, which is too coarse to
