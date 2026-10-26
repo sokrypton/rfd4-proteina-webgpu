@@ -448,6 +448,9 @@ const PRESET_TO_TASK = {
   custom_cath_monomer: 'unconditional',
 };
 
+const NO_WEBGPU_MESSAGE = 'This browser has no WebGPU, which designs need. Use Chrome or Edge (version 113 or later) '
+  + 'or Safari 26 or later. You can still open and edit structures here.';
+
 class Rfd4pStudioApp {
   constructor() {
     this.gpuDevice = null;
@@ -609,14 +612,22 @@ class Rfd4pStudioApp {
     this._syncThinkingRadios('none');
     this.els.predictBtn.disabled = false;
     this.designPanel.render();
-    const backendLabel = this.gpuDevice ? 'WebGPU FP16' : 'CPU Float32';
+    const params = new URLSearchParams(window.location.search);
+    // Without WebGPU a design runs on the CPU path on the main thread: hours for 60 steps, with the page frozen on
+    // its last status. Say so instead; `?cpu=1` keeps the CPU path for development.
+    this.noWebGpu = !this.gpuDevice && params.get('cpu') !== '1';
+    const backendLabel = this.gpuDevice ? 'WebGPU FP16' : this.noWebGpu ? 'No WebGPU' : 'CPU Float32';
     if (this.els.webgpuBadge) {
       this.els.webgpuBadge.textContent = backendLabel;
     }
     this._initSpeedHint();
+    if (this.noWebGpu) {
+      this.els.predictBtn.disabled = true;
+      this.setStatus(NO_WEBGPU_MESSAGE, true);
+      return;
+    }
     this.setStatus('Ready to generate.', false, { visible: false });
 
-    const params = new URLSearchParams(window.location.search);
     if (params.get('autorun') === '1') {
       await this.runDesign();
     }
@@ -649,7 +660,8 @@ class Rfd4pStudioApp {
                 this.activeAbortController.abort();
               }
               this._setPartialDiffusion(event.data.task === 'partial_diffusion');
-              this.setStatus('Ready to generate.', false, { visible: false });
+              if (this.noWebGpu) this.setStatus(NO_WEBGPU_MESSAGE, true);
+              else this.setStatus('Ready to generate.', false, { visible: false });
             }
           }
         }
@@ -1018,6 +1030,10 @@ class Rfd4pStudioApp {
   }
 
   async runDesign(overrides = {}) {
+    if (this.noWebGpu) {
+      this.setStatus(NO_WEBGPU_MESSAGE, true);
+      return;
+    }
     if (this.activeAbortController) {
       this.activeAbortController.abort();
     }
