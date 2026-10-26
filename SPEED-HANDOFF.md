@@ -177,6 +177,12 @@ secondary structure into a Worker; skip frames while a Mol* update is still pend
 
 ### P4 - The subgroup-matrix path itself (for when P0 lands)
 
+> **2026-10-25: measured, and at the ceiling.** A synthetic kernel that only loads f16 8x8 tiles from workgroup
+> memory and multiply-accumulates them peaks at 2.75 TFLOP/s for a 64x16 block per subgroup (our layout), 2.98 for
+> 64x32 and 2.92 for 32x64; 16x16 gives 2.06. `triProjG` runs at ~2.7 (55.6 ms for 14 calls at n=100), the other
+> pair GEMMs at 2.2-2.6. So re-blocking `gemmSubmatSource` to 64x32 could buy at most ~8% on `triProjG`, ~3% of a
+> pass. Pass totals on this path: 132 ms at n=100, 529 ms at n=207.
+
 At ~2.7 TFLOP/s `triProjG` is still well under the f16 ceiling. HANDOFF.md section 5 priority 5 and
 `../localfold` notes on 8x8x8 on M2/M5 apply. Lower priority until visitors can run it.
 
