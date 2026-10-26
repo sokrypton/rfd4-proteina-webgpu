@@ -40,6 +40,7 @@
     "serve": "node tools/serve.mjs 4173",
     "build:studio": "node tools/build-studio.mjs",
     "stamp": "node tools/stamp-modules.mjs",
-    "export:weights": "python3 tools/export_rfd4p_model.py"
+    "export:weights": "python3 tools/export_rfd4p_model.py",
+    "check:safari": "node tools/check-safari-syntax.mjs"
   }
 }
