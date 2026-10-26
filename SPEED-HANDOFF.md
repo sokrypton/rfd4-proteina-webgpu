@@ -415,6 +415,16 @@ All gates run strictly sequentially with zero concurrent GPU processes:
      spilled; halving them ended the spill. Ours are scalar `vec4` variables and do not spill, so there is little
      to win. Together with section 5, this kernel is at the M2's f32 ceiling for its class (localfold's best fused
      triangle projection on the same M2: 1.07-1.29 TFLOP/s; ours ~1.1).
+7. **Handing `onStep` off without waiting, so the next trunk pass overlaps frame building (2026-10-25): 1.000x**.
+   - Visible window, n=100, 60 steps, 3 interleaved rounds: 20.78 s both arms, all 59 frames in order. The GPU
+     was not waiting on the CPU's frame building.
+8. **The small-tile GEMM for row counts up to 128 (token track and decoder at n=100): 0.80x** (19.2 -> 24.1 s,
+   identical output). The 64x128 tile's reuse matters more than filling the 10 cores.
+
+Where a 60-step design's time goes at n=100 (M2, stock, visible window, every frame shown, Mol* live mode):
+trunk passes 17.1 s (82%), live decodes ~1.9 s (9%), Mol* drawing ~0.35 s, the rest (setup, final decode,
+session, per-step readback) ~1.1 s. The trunk's GEMMs and the decoder's run at 0.85-1.1 TFLOP/s against an
+f32 ceiling of ~1.1-1.3 on this device.
 
 
 ## 11. Open bug (2026-10-24): intermittent GPU reset on chiral-ligand inputs, slow first forwards
