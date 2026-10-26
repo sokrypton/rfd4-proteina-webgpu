@@ -1,0 +1,141 @@
+    <!-- RFD4-Proteina Generation Card (mounted directly into AtomWorks Studio's right sidebar) -->
+    <div id="rfd4p-card-staging" hidden>
+        <section id="rfd4p-studio-card" class="card rfd4p-card" aria-label="RFD4-Proteina generation controls">
+            <div class="card-title-row">
+                <h2>RFD4-Proteina</h2>
+                <span id="webgpu-badge" class="viewer-backend">WebGPU FP16</span>
+            </div>
+            <!-- Shown by web/app.js only on desktop Chrome whose GPU lacks subgroup matrices. -->
+            <div id="rfd4p-speed-hint" class="rfd4p-speed-hint" role="note" hidden>
+                <p>Designs can run about <strong>2× faster</strong> with Chrome's experimental WebGPU features.
+                    Paste <code>chrome://flags/#enable-unsafe-webgpu</code> into the address bar, set it to
+                    <em>Enabled</em> and relaunch Chrome. It applies to every site, not just this one.</p>
+                <div class="rfd4p-speed-hint-actions">
+                    <button id="rfd4p-speed-copy" type="button" class="secondary compact">Copy address</button>
+                    <button id="rfd4p-speed-dismiss" type="button" class="secondary compact">Dismiss</button>
+                </div>
+            </div>
+
+            <!-- Start: nothing open yet. Each task opens a ready-made input (web/design-panel.js). -->
+            <div id="rfd4p-start" class="rfd4p-start">
+                <p class="rfd4p-lead">What do you want to design?</p>
+                <div id="rfd4p-task-grid" class="rfd4p-task-grid"></div>
+                <p class="rfd4p-lead rfd4p-lead-sub">Or start from your own structure</p>
+                <form id="rfd4p-fetch-form" class="rfd4p-fetch-row">
+                    <input id="rfd4p-pdb-id" type="text" inputmode="latin" autocomplete="off" spellcheck="false"
+                        maxlength="4" placeholder="PDB ID, e.g. 1QYS" aria-label="PDB ID" />
+                    <button id="rfd4p-fetch-btn" type="submit" class="secondary compact">Fetch</button>
+                    <button id="rfd4p-open-file" type="button" class="secondary compact">Open file…</button>
+                </form>
+                <p id="rfd4p-fetch-status" class="inline-feedback muted" aria-live="polite"></p>
+                <button id="rfd4p-back" type="button" class="secondary compact" hidden>← Back to the current design</button>
+            </div>
+
+            <!-- Design: what will be generated, read from the open document. -->
+            <div id="rfd4p-design" class="rfd4p-design" hidden>
+                <div class="rfd4p-task-head">
+                    <div>
+                        <span class="rfd4p-eyebrow">Task</span>
+                        <strong id="rfd4p-task-label"></strong>
+                    </div>
+                    <span class="rfd4p-task-buttons">
+                        <button id="rfd4p-change-task" type="button" class="secondary compact">Change…</button>
+                        <button id="rfd4p-new" type="button" class="secondary compact" title="Start over with an example, a PDB ID or your own file">New…</button>
+                    </span>
+                </div>
+                <p id="rfd4p-task-detail" class="rfd4p-task-detail muted"></p>
+                <div id="rfd4p-guided" class="rfd4p-guided" hidden></div>
+                <div id="rfd4p-chain-list" class="rfd4p-chain-list"></div>
+                <div class="rfd4p-chain-actions">
+                    <button id="rfd4p-add-chain" type="button" class="secondary compact">+ New chain</button>
+                    <button id="rfd4p-undo" type="button" class="secondary compact" disabled>Undo</button>
+                </div>
+                <p id="rfd4p-total" class="rfd4p-total"></p>
+                <p class="rfd4p-contig-row"><span class="muted">Contig</span> <code id="rfd4p-contig"></code></p>
+                <div id="rfd4p-warnings" class="rfd4p-warnings"></div>
+            </div>
+
+            <div id="rfd4p-run-settings" class="rfd4p-run-settings" hidden>
+            <div class="rfd4p-settings-row">
+                <label for="samples-input" class="rfd4p-designs-field">Designs
+                    <input type="number" id="samples-input" value="1" min="1" max="8" step="1" />
+                </label>
+                <fieldset class="representation-mode rfd4p-thinking-group" id="thinking-radio-group" aria-label="Thinking">
+                    <legend title="Extra recycling passes: slower, sometimes better designs">Thinking</legend>
+                    <label><input type="radio" name="thinking-radio" value="none" checked />none</label>
+                    <label><input type="radio" name="thinking-radio" value="low" />low</label>
+                    <label><input type="radio" name="thinking-radio" value="medium" />med</label>
+                    <label><input type="radio" name="thinking-radio" value="high" />high</label>
+                </fieldset>
+            </div>
+            <div class="rfd4p-seed-row">
+                <label for="seed-input" title="Same seed and settings give the same design. A new random seed is drawn after each run unless you type one.">Seed
+                    <input type="number" id="seed-input" value="" min="0" max="4294967295" step="1" />
+                </label>
+                <button id="seed-random" type="button" class="secondary compact" title="New random seed" aria-label="New random seed">🎲</button>
+                <span id="seed-mode" class="rfd4p-seed-mode muted"></span>
+            </div>
+
+            <details class="rfd4p-sampling-details" id="sampling-accordion">
+                <summary>More settings</summary>
+                <div class="rfd4p-sampling-body">
+                    <p class="rfd4p-sampling-note">Lower K = higher temperature and more variation. Defaults give stronger low-temperature sampling.</p>
+                    <label for="backbone-k">
+                        <span class="rfd4p-slider-head">
+                            <span>Backbone K</span>
+                            <input type="number" id="backbone-k-num" class="rfd4p-slider-num" min="1" max="20" step="0.1" value="16" />
+                        </span>
+                        <input type="range" id="backbone-k" class="rfd4p-slider" min="1" max="20" step="0.1" value="16" />
+                    </label>
+                    <label for="latent-k">
+                        <span class="rfd4p-slider-head">
+                            <span>Latents (sequence) K</span>
+                            <input type="number" id="latent-k-num" class="rfd4p-slider-num" min="1" max="6" step="0.1" value="4" />
+                        </span>
+                        <input type="range" id="latent-k" class="rfd4p-slider" min="1" max="6" step="0.1" value="4" />
+                    </label>
+                    <label class="checkbox" for="partial-diffusion">
+                        <input type="checkbox" id="partial-diffusion" /> Partial diffusion
+                    </label>
+                    <label for="partial-diffusion-percent" title="About 70% is a good starting point. Higher values change the input more. Requires an input with defined residues and coordinates.">
+                        <span class="rfd4p-slider-head">
+                            <span>Partial diffusion (% of trajectory)</span>
+                            <input type="number" id="partial-diffusion-percent-num" class="rfd4p-slider-num" min="1" max="100" step="1" value="70" disabled />
+                        </span>
+                        <input type="range" id="partial-diffusion-percent" class="rfd4p-slider" min="1" max="100" step="1" value="70" disabled />
+                    </label>
+                    <label class="checkbox" for="early-stop" title="Stop once the structure and sequence have both stopped changing for 5 steps (identical sequence, under 0.1 Å from a full run in testing)">
+                        <input type="checkbox" id="early-stop" checked /> Early stop when converged
+                    </label>
+                </div>
+            </details>
+
+            <button id="predict" class="primary rfd4p-generate-btn" type="button" disabled>
+                Generate design
+            </button>
+            </div>
+
+            <div id="design-results" class="rfd4p-results-box" hidden>
+                <fieldset class="representation-mode rfd4p-view-group" aria-label="View">
+                    <legend>View</legend>
+                    <div id="design-view-radios" class="rfd4p-view-radios" role="radiogroup" aria-label="View"></div>
+                </fieldset>
+                <div class="button-row" id="downloads" hidden>
+                    <button id="download-cif-btn" class="secondary compact" type="button" hidden>Download CIF</button>
+                    <button id="download-all-btn" class="secondary compact" type="button">Download all (.zip)</button>
+                </div>
+            </div>
+
+            <div id="generation-status" class="rfd4p-status-box" hidden>
+                <p id="rfd4p-status-message" class="inline-feedback muted" aria-live="polite"></p>
+                <div id="rfd4p-model-load" class="rfd4p-model-load" hidden>
+                    <span id="rfd4p-model-load-text"></span>
+                </div>
+                <progress id="rfd4p-progress" class="rfd4p-progress" max="1" value="0" data-state="idle" hidden></progress>
+            </div>
+
+            <label class="checkbox rfd4p-advanced-toggle" title="Show AtomWorks Studio's full editor: conditions, bonds, analysis, measurements, query bar">
+                <input type="checkbox" id="rfd4p-advanced" /> Advanced editor
+            </label>
+        </section>
+    </div>

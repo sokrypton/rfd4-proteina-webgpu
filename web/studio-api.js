@@ -1,7 +1,7 @@
 /**
  * Client-side in-browser implementation of the AtomWorks Studio `/api/v1/*` REST contract.
  *
- * Lets the AtomWorks Studio web frontend (built from `studio-src/`) and the RFD4-Proteina generation host
+ * Lets the embedded AtomWorks Studio frontend and the RFD4-Proteina generation host
  * (`web/app.js`), which share `index.html`, run 100% locally in the browser without a Python/FastAPI backend.
  */
 
@@ -2845,6 +2845,14 @@ export function buildTrajectoryCifFromFrames(trajectoryFrames, tokens, finalResi
  * still sees one store).
  */
 export function getSharedStudioStore() {
+  // Sessions live in memory for this page load, so anything Studio remembered from a previous one is already gone.
+  // Clearing it here keeps Studio from reporting a lost document on every reload.
+  if (!globalThis.__rfd4pStudioStore) {
+    try {
+      sessionStorage.removeItem('annotation-studio-session');
+      sessionStorage.removeItem('annotation-studio-name');
+    } catch { /* private window */ }
+  }
   let rootWin = globalThis;
   try {
     if (globalThis.top && globalThis.top.location?.origin === globalThis.location?.origin) {

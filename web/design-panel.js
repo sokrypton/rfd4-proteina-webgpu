@@ -3,8 +3,8 @@
  * panel that states what the open document will generate (task, chain roles, lengths, contig) and edits it, and the
  * simple/advanced switch that hides Studio's expert tools.
  *
- * Every edit goes through Studio's own mutate path (`window.__rfd4pMutate`), so Undo, the viewer and the
- * `atomworks-studio-message` "changed" event behave exactly as for edits made in the Studio panels.
+ * Every edit goes through Studio's own mutate path (`window.atomworksStudio?.applyEdit`), so Undo, the viewer and the
+ * `atomworks-studio` "changed" event behave exactly as for edits made in the Studio panels.
  */
 import { designSpec, ROLE_LABELS } from './design-spec.js';
 import { getSharedStudioStore } from './studio-api.js';
@@ -117,14 +117,18 @@ export class DesignPanel {
     }));
     els.undo?.addEventListener('click', () => document.getElementById('undo')?.click());
     els.advanced?.addEventListener('change', () => this._applyAdvanced(els.advanced.checked, true));
-    window.addEventListener('atomworks-studio-message', () => queueMicrotask(() => this.render()));
+    window.addEventListener('atomworks-studio', (ev) => {
+      if (ev.detail?.type === 'selection') return;
+      queueMicrotask(() => this.render());
+    });
     document.addEventListener('pointerdown', (ev) => {
       if (this.pop.contains(ev.target)) return;
       const src = ev.target.closest?.('#viewer, #sequence-view');
       this.lastPointer = src ? { x: ev.clientX, y: ev.clientY } : null;
       if (!src) this.pop.hidden = true;
     }, true);
-    window.addEventListener('atomworks-studio-selection', (ev) => {
+    window.addEventListener('atomworks-studio', (ev) => {
+      if (ev.detail?.type !== 'selection') return;
       this.selectionCount = ev.detail?.count ?? 0;
       queueMicrotask(() => this._renderPop());
       if (!this.els.guided || this.els.guided.hidden) return;
@@ -241,7 +245,7 @@ export class DesignPanel {
     const body = el('div', { class: 'rfd4p-chain-body' });
     const row = el('div', { class: `rfd4p-chain rfd4p-role-${c.role}` }, head, body);
     // The chain's colour, as in the viewer and the sequence bar.
-    const color = window.__rfd4pChainColor?.(c.id);
+    const color = window.atomworksStudio?.chainColor?.(c.id);
     if (color) row.style.setProperty('--chain-color', color);
 
     if (c.role === 'ligand') {
@@ -349,7 +353,7 @@ export class DesignPanel {
   _renderPop() {
     const pop = this.pop;
     const doc = this._inputDoc();
-    const sel = window.__rfd4pSelection?.() ?? [];
+    const sel = window.atomworksStudio?.getSelection?.() ?? [];
     if (!sel.length || !doc || this._viewingDesign() || document.body.classList.contains('rfd4p-advanced') || this.busy) {
       pop.hidden = true;
       return;
@@ -534,7 +538,7 @@ export class DesignPanel {
 
   _selectedResidueCount() {
     const a = this._inputDoc()?.atoms;
-    const sel = window.__rfd4pSelection?.() ?? [];
+    const sel = window.atomworksStudio?.getSelection?.() ?? [];
     if (!a) return sel.length;
     return new Set(sel.map((i) => `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code?.[i] ?? ''}`)).size;
   }
@@ -618,7 +622,7 @@ export class DesignPanel {
     const polymers = spec.chains.filter((c) => c.residues > 0);
     const ligandAtoms = spec.chains.flatMap((c) => c.ligandAtomIndices);
     const roleEdits = (c, role) => this._roleEdits(c, role);
-    const selection = window.__rfd4pSelection?.() ?? [];
+    const selection = window.atomworksStudio?.getSelection?.() ?? [];
     // Each step must succeed before the next; a failure keeps the form open with its error shown.
     let ok = true;
     if (key === 'binder') {
@@ -713,11 +717,11 @@ export class DesignPanel {
 
   /** One edit through Studio's mutate path; resolves true on success. A failure stays shown until the next success. */
   async _mutate(path, body) {
-    if (typeof window.__rfd4pMutate !== 'function' || this.busy) return false;
+    if (typeof window.atomworksStudio?.applyEdit !== 'function' || this.busy) return false;
     this.busy = true;
     this.els.design?.classList.add('rfd4p-busy');
     try {
-      await window.__rfd4pMutate(path, body);
+      await window.atomworksStudio?.applyEdit(path, body);
       this.lastError = null;
       return true;
     } catch (err) {
@@ -734,11 +738,11 @@ export class DesignPanel {
   // ---- start screen -------------------------------------------------------------------------------------------
 
   async _startTask(task) {
-    if (typeof window.__rfd4pLoadExample !== 'function') return;
+    if (typeof window.atomworksStudio?.openExample !== 'function') return;
     const button = this.els.taskGrid?.querySelector(`[data-example="${task.example}"]`);
     button?.classList.add('loading');
     try {
-      await window.__rfd4pLoadExample(task.example);
+      await window.atomworksStudio?.openExample(task.example);
       this.showStart = false;
       if (task.then) {
         const spec = this._spec();
@@ -762,7 +766,7 @@ export class DesignPanel {
       const res = await fetch(`https://files.rcsb.org/download/${id}.cif`);
       if (!res.ok) throw new Error(res.status === 404 ? `${id} was not found` : `RCSB returned ${res.status}`);
       const text = await res.text();
-      const opened = await window.__rfd4pOpenFile?.(new File([text], `${id}.cif`, { type: 'chemical/x-mmcif' }));
+      const opened = await window.atomworksStudio?.openFile?.(new File([text], `${id}.cif`, { type: 'chemical/x-mmcif' }));
       status.textContent = opened === false ? `Opening ${id} was cancelled.` : '';
       if (opened !== false) this.showStart = false;
       this.showFlows = true;

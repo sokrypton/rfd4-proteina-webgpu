@@ -958,3 +958,6 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   display: flex;
   gap: 6px;
 }
+
+/* Studio's own example cards: this site drives the task choice from the RFD4-Proteina card instead. */
+#example-cards { display: none; }

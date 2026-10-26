@@ -1,0 +1,8 @@
+    <!-- This site serves the Studio bundle itself; its offline cache would pin stale assets on Pages. -->
+    <meta name="atomworks-studio-service-worker" content="off" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <link rel="stylesheet" href="./web/styles.css" />
+    <!-- app.js first: its import of studio-api.js installs the /api/* fetch interceptor the Studio bundle boots against. -->
+    <!-- module-versions:start (tools/stamp-modules.mjs) -->
+    <!-- module-versions:end -->
+    <script type="module" src="./web/app.js"></script>
