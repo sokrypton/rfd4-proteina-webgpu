@@ -166,6 +166,11 @@ export interface ViewerAdapter {
    * updated in place on later calls; `null` removes it.
    */
   setOverlayCif?(key: string, cif: string | null, options?: ViewerOverlayOptions): Promise<void>;
+  /**
+   * rfd4p: while a design generates, draw cheaply (no ambient occlusion, bloom or temporal multi-sampling), so the
+   * viewer competes less with WebGPU for the same GPU; `false` restores the previous look.
+   */
+  setLiveMode?(on: boolean): void;
   loadCifs(structures: ViewerStructure[]): Promise<void>;
   trajectoryFrameCount?(): number;
   setTrajectoryFrame?(index: number): Promise<void>;

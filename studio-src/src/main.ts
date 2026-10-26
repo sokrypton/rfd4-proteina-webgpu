@@ -375,6 +375,7 @@ function mutate(path: string, body?: unknown, propagateError = false): Promise<v
 declare global {
   interface Window {
     __rfd4pRenderLiveFrame?: (cif: string, name: string, keepCamera?: boolean) => Promise<void>;
+    __rfd4pLiveMode?: (on: boolean) => void;
     __rfd4pRestoreInputView?: () => Promise<void>;
     __rfd4pSetOverlay?: (key: string, cif: string | null, options?: ViewerOverlayOptions) => Promise<void>;
     __rfd4pOpenSession?: (id: string, trajectoryUrl?: string | null) => Promise<void>;
@@ -396,6 +397,8 @@ function installRfd4pHooks(): void {
     element("coordinate-summary").hidden = true;
     await molecularViewer.renderLiveCif(cif, name, { keepCamera });
   };
+  // Cheap drawing while a design generates; see `ViewerAdapter.setLiveMode`.
+  window.__rfd4pLiveMode = (on) => { if (molecularViewer?.initialized) molecularViewer.setLiveMode(on); };
   // Back to the open document after a failed run.
   window.__rfd4pRestoreInputView = async () => {
     if (sessionId) await refreshFromServer(lastSummary ?? undefined);

@@ -1231,6 +1231,8 @@ class Rfd4pStudioApp {
         };
 
         let result;
+        // Mol* draws cheaply while frames stream in, so it competes less with WebGPU for the GPU.
+        window.__rfd4pLiveMode?.(true);
         try {
           result = useGpu
             ? await this.gpuModel.generate(batch, genOpts)
@@ -1239,6 +1241,7 @@ class Rfd4pStudioApp {
           if (liveRenderPromise) {
             await liveRenderPromise;
           }
+          window.__rfd4pLiveMode?.(false);
         }
 
         if (!fixedAnchors && referenceCaNm && result.structure?.atoms && !isAnchored(result.structure.atoms) &&

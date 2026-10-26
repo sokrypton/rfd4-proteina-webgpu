@@ -210,6 +210,11 @@ export class MolecularViewer {
     await this.adapter.updateLiveCif(cif, name, options);
   }
 
+  /** rfd4p: see `ViewerAdapter.setLiveMode`; a no-op on backends without it. */
+  setLiveMode(on: boolean): void {
+    this.adapter?.setLiveMode?.(on);
+  }
+
   /** rfd4p: see `ViewerAdapter.setOverlayCif`; a no-op on backends without overlays. */
   async setOverlayCif(key: string, cif: string | null, options?: ViewerOverlayOptions): Promise<void> {
     await this.adapter?.setOverlayCif?.(key, cif, options);

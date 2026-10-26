@@ -119,6 +119,8 @@ export class MolstarAdapter implements ViewerAdapter {
   private overlayRefs = new Map<string, { ref: string; data: string }>();
   private markerRepresentation: ShapeRepresentation<ViewerMarker[], Mesh, typeof Mesh.Params> | null = null;
 
+  private savedLook: { postprocessing: unknown; multiSample: unknown } | null = null;
+
   constructor(private readonly context: ViewerAdapterContext) {}
 
   async initialize(): Promise<void> {
@@ -227,6 +229,27 @@ export class MolstarAdapter implements ViewerAdapter {
     await plugin.state.data.build().to(ref).update({ data: cif, label: name }).commit();
     this.unpositionedAtoms = new Set(unpositionedAtomIndices(cif));
     if (!options?.keepCamera) plugin.managers.camera.reset();
+  }
+
+  /** rfd4p: see `ViewerAdapter.setLiveMode`. Keeps the look in force before live mode, to restore it exactly. */
+  setLiveMode(on: boolean): void {
+    const canvas = this.viewer?.plugin.canvas3d;
+    if (!canvas) return;
+    if (on) {
+      if (this.savedLook) return;
+      this.savedLook = { postprocessing: canvas.props.postprocessing, multiSample: canvas.props.multiSample };
+      canvas.setProps({
+        postprocessing: {
+          occlusion: { name: "off", params: {} },
+          bloom: { name: "off", params: {} },
+          antialiasing: { name: "fxaa", params: canvas.props.postprocessing.antialiasing.name === "fxaa" ? canvas.props.postprocessing.antialiasing.params : {} },
+        } as never,
+        multiSample: { mode: "off" },
+      });
+    } else if (this.savedLook) {
+      canvas.setProps(this.savedLook as never);
+      this.savedLook = null;
+    }
   }
 
   /** rfd4p: see `ViewerAdapter.setOverlayCif`. Overlays are separate structures, so Mol* never bonds across them. */
