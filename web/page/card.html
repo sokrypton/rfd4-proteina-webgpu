@@ -5,6 +5,16 @@
                 <h2>RFD4-Proteina</h2>
                 <span id="webgpu-badge" class="viewer-backend">WebGPU FP16</span>
             </div>
+            <!-- Shown by web/app.js only on desktop Chrome whose GPU lacks subgroup matrices. -->
+            <div id="rfd4p-speed-hint" class="rfd4p-speed-hint" role="note" hidden>
+                <p>Designs can run about <strong>2× faster</strong> with Chrome's experimental WebGPU features.
+                    Paste <code>chrome://flags/#enable-unsafe-webgpu</code> into the address bar, set it to
+                    <em>Enabled</em> and relaunch Chrome. It applies to every site, not just this one.</p>
+                <div class="rfd4p-speed-hint-actions">
+                    <button id="rfd4p-speed-copy" type="button" class="secondary compact">Copy address</button>
+                    <button id="rfd4p-speed-dismiss" type="button" class="secondary compact">Dismiss</button>
+                </div>
+            </div>
 
             <!-- Start: nothing open yet. Each task opens a ready-made input (web/design-panel.js). -->
             <div id="rfd4p-start" class="rfd4p-start">

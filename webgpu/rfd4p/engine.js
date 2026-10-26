@@ -34,6 +34,8 @@ function gemmSource(half, b16 = false, pair = null, gate = false, aF16 = false, 
   const rows = [0, 1, 2, 3];
   const EA = aF16 ? 'f16' : 'f32';
   const EB = b16 ? 'f16' : 'f32';
+  // Elementwise B shares A's type, as in `gemmSubmatSource`; packed (`half`) B is read as words.
+  const EBelem = aF16 ? 'f16' : 'f32';
   const isBase = Boolean(variant?.baseline);
   const useShufTa2 = Boolean(!isBase && (variant?.shufTa2 ?? true) && vecA);
   const useShufTa = useShufTa2;
@@ -53,7 +55,7 @@ struct P { m: u32, n: u32, k: u32, b1: u32,
   gOff: u32, gStride: u32, gSigm: u32, pad0: u32 };
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> a: array<${useShufTa ? `vec4<${EA}>` : EA}>;
-@group(0) @binding(2) var<storage, read> b: array<${useVecB ? 'vec4<u32>' : (half ? 'u32' : 'f32')}>;
+@group(0) @binding(2) var<storage, read> b: array<${useVecB ? 'vec4<u32>' : (half ? 'u32' : EBelem)}>;
 @group(0) @binding(3) var<storage, read_write> c: array<${EC}>;
 @group(0) @binding(4) var<storage, read> bias: array<${vecEpilogue ? 'vec4<f32>' : 'f32'}>;
 ${gate ? `@group(0) @binding(5) var<storage, read> gsc: array<${EG}>;` : ''}
@@ -241,12 +243,12 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
         let row0 = n0 + r4 * 4u;
         let bAddr0 = baseB + bRow(row0) * p.sBn + k * p.sBk;
         if (row0 + 3u < p.n) {
-          v = vec4<f32>(b[bAddr0], b[bAddr0 + p.sBn], b[bAddr0 + 2u * p.sBn], b[bAddr0 + 3u * p.sBn]);
+          v = vec4<f32>(f32(b[bAddr0]), f32(b[bAddr0 + p.sBn]), f32(b[bAddr0 + 2u * p.sBn]), f32(b[bAddr0 + 3u * p.sBn]));
         } else {
-          if (row0 < p.n) { v.x = b[bAddr0]; }
-          if (row0 + 1u < p.n) { v.y = b[bAddr0 + p.sBn]; }
-          if (row0 + 2u < p.n) { v.z = b[bAddr0 + 2u * p.sBn]; }
-          if (row0 + 3u < p.n) { v.w = b[bAddr0 + 3u * p.sBn]; }
+          if (row0 < p.n) { v.x = f32(b[bAddr0]); }
+          if (row0 + 1u < p.n) { v.y = f32(b[bAddr0 + p.sBn]); }
+          if (row0 + 2u < p.n) { v.z = f32(b[bAddr0 + 2u * p.sBn]); }
+          if (row0 + 3u < p.n) { v.w = f32(b[bAddr0 + 3u * p.sBn]); }
         }
       }
       tb[kk * 33u + r4] = vec4<${EB}>(v);
@@ -502,6 +504,8 @@ function gemmSmallSource(half, b16 = false, gate = false, aF16 = false, cF16 = f
   const rows = [0, 1];
   const EA = aF16 ? 'f16' : 'f32';
   const EB = b16 ? 'f16' : 'f32';
+  // Elementwise B shares A's type, as in `gemmSubmatSource`; packed (`half`) B is read as words.
+  const EBelem = aF16 ? 'f16' : 'f32';
   const EC = cF16 ? 'f16' : 'f32';
   const EG = gF16 ? 'f16' : 'f32';
   const useF16 = b16 || aF16 || cF16 || gF16;
@@ -514,7 +518,7 @@ struct P { m: u32, n: u32, k: u32, b1: u32,
   gOff: u32, gStride: u32, gSigm: u32, pad0: u32 };
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> a: array<${EA}>;
-@group(0) @binding(2) var<storage, read> b: array<${half ? 'u32' : 'f32'}>;
+@group(0) @binding(2) var<storage, read> b: array<${half ? 'u32' : EBelem}>;
 @group(0) @binding(3) var<storage, read_write> c: array<${EC}>;
 @group(0) @binding(4) var<storage, read> bias: array<f32>;
 ${gate ? `@group(0) @binding(5) var<storage, read> gsc: array<${EG}>;` : ''}
@@ -646,12 +650,12 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
         let bOff = k0 * p.sBk;
         let bAddr0 = bBase0 + bOff;
         if (fullB) {
-          v = vec4<f32>(b[bAddr0], b[bAddr0 + p.sBn], b[bAddr0 + 2u * p.sBn], b[bAddr0 + 3u * p.sBn]);
+          v = vec4<f32>(f32(b[bAddr0]), f32(b[bAddr0 + p.sBn]), f32(b[bAddr0 + 2u * p.sBn]), f32(b[bAddr0 + 3u * p.sBn]));
         } else {
-          if (rowB0 < p.n) { v.x = b[bAddr0]; }
-          if (rowB0 + 1u < p.n) { v.y = b[bAddr0 + p.sBn]; }
-          if (rowB0 + 2u < p.n) { v.z = b[bAddr0 + 2u * p.sBn]; }
-          if (rowB0 + 3u < p.n) { v.w = b[bAddr0 + 3u * p.sBn]; }
+          if (rowB0 < p.n) { v.x = f32(b[bAddr0]); }
+          if (rowB0 + 1u < p.n) { v.y = f32(b[bAddr0 + p.sBn]); }
+          if (rowB0 + 2u < p.n) { v.z = f32(b[bAddr0 + 2u * p.sBn]); }
+          if (rowB0 + 3u < p.n) { v.w = f32(b[bAddr0 + 3u * p.sBn]); }
         }
       }
       tb[tbWrite] = vec4<${EB}>(v);
@@ -874,7 +878,7 @@ fn main(
         next_a = vec4<${stType}>(${stType}(a[aAddr]), ${stType}(a[aAddr + p.sAk]), ${stType}(a[aAddr + 2u * p.sAk]), ${stType}(a[aAddr + 3u * p.sAk]));
       } else {
         if (kA < p.k) { next_a.x = ${stType}(a[aRowBase + kA * p.sAk]); }
-        if (kA + 1u < p.k) { next_a.y = ${stType}(a[aRowBase + (k + 1u) * p.sAk]); }
+        if (kA + 1u < p.k) { next_a.y = ${stType}(a[aRowBase + (kA + 1u) * p.sAk]); }
         if (kA + 2u < p.k) { next_a.z = ${stType}(a[aRowBase + (kA + 2u) * p.sAk]); }
       }` : `if (fullK0 || kA + 1u < p.k) {
         let aAddr = aRowBase + kA * p.sAk;
@@ -2324,7 +2328,9 @@ function mapSource(bindings, body) {
   const decls = bindings
     .map((b, at) => (b === null ? '' : `@group(0) @binding(${at + 1}) var<storage, ${b.write ? 'read_write' : 'read'}> b${at}: array<${b.type ?? 'f32'}>;`))
     .join('\n');
-  return `
+  // An f16-typed binding needs the extension declared; `enable` must precede everything.
+  const f16 = bindings.some((b) => b !== null && /f16/.test(b.type ?? ''));
+  return `${f16 ? 'enable f16;\n' : ''}
 struct P { count: u32, u: array<vec4<u32>, 4>, f: array<vec4<f32>, 4> };
 @group(0) @binding(0) var<uniform> p: P;
 ${decls}
@@ -2596,11 +2602,33 @@ export class Rfd4pEngine {
     return buffer;
   }
 
+  /**
+   * One dispatch. An entry of `buffers` is a `GPUBuffer`, or a VIEW of one -
+   * `{ buffer, offsetBytes, sizeBytes }` - which is how a chunked kernel reaches a window
+   * of a whole-tensor buffer while still indexing from zero.
+   *
+   * 🔴 THE VIEW IS WHAT LETS A CHUNK KEEP THE UNCHUNKED KERNEL. The alternative is a row
+   * offset in the uniform and `+ rowOff` in the hot epilogue, specialised per variant; a
+   * binding offset moves the window instead and the shader is untouched, so the single-
+   * chunk and chunked arms run the SAME text. WebGPU wants the offset on
+   * `minStorageBufferOffsetAlignment` (256 bytes), and every pair-row offset here is a
+   * multiple of 384 f32s (1536 bytes) or 192 words (768 bytes), so it always is - checked
+   * rather than assumed, because the failure is a validation error naming a binding.
+   */
   async step(key, source, groups, buffers, words, label) {
     const pipeline = await this.pipeline(key, source);
     const entries = [{ binding: 0, resource: { buffer: this.uniform(words) } }];
     buffers.forEach((b, at) => {
-      if (b) entries.push({ binding: at + 1, resource: { buffer: b } });
+      if (!b) return;
+      if (b.buffer === undefined) {
+        entries.push({ binding: at + 1, resource: { buffer: b } });
+        return;
+      }
+      const align = this.device.limits.minStorageBufferOffsetAlignment ?? 256;
+      if (b.offsetBytes % align !== 0) {
+        throw new Error(`${key}: binding ${at + 1} offset ${b.offsetBytes} is not a multiple of ${align}`);
+      }
+      entries.push({ binding: at + 1, resource: { buffer: b.buffer, offset: b.offsetBytes, size: b.sizeBytes } });
     });
     const bindGroup = this.device.createBindGroup({ label: `rfd4p.${key}`, layout: pipeline.getBindGroupLayout(0), entries });
     const [x, y] = fold2(groups);
@@ -2637,11 +2665,22 @@ export class Rfd4pEngine {
     u[27] = spec.pad0 ?? 0;
     const submat = b16 && this.hasSubgroupMatrix;
     const tiles64 = Math.ceil(m / 64) * Math.ceil(n / 128) * B0 * B1;
-    const small = (submat ? !spec.noSmall : !spec.pair && !spec.noSmall) &&
+    // The stock small kernel has no fused input LayerNorm, so an `inNorm: 'ln'` GEMM stays on the tiled one.
+    const small = (submat ? !spec.noSmall : !spec.pair && !spec.noSmall && spec.inNorm !== 'ln') &&
       (submat ? (m <= 32 || tiles64 < (k <= 64 ? 100 : 80)) : (m <= 32 || n <= 64 || tiles64 < 32));
     const aF16 = this.hasF16 && spec.aF16 === true;
     const cF16 = this.hasF16 && spec.cF16 === true;
     const gF16 = this.hasF16 && hasGate && spec.gate?.f16 === true;
+    // 🔴 THESE THREE TYPE THE BUFFER, NOT THE STAGING TILE, so dropping one on a device without
+    // f16 is not a graceful degrade: the caller has already packed halves and the kernel would
+    // declare `array<f32>` and read them as floats - the elementwise-B fault that `EBelem`
+    // fixes above, one operand along.
+    // `b16` is different and needs no guard, because it chooses the TILE's precision and both
+    // choices compute the same thing. Every caller gates on `e.hasF16` already (trunk.js asks
+    // `wantF16: this.half && e.hasF16`); this is what says so if one stops.
+    if (!this.hasF16 && (spec.aF16 === true || spec.cF16 === true || spec.gate?.f16 === true)) {
+      throw new Error(`gemm ${m}x${n}x${k}: f16 operands asked of a device without shader-f16`);
+    }
     const wordB = half || (aF16 && B.k === 1 && B.n % 2 === 0 && B.off % 2 === 0 && B.s0 % 2 === 0 && B.s1 % 2 === 0);
     const vecBStock = wordB &&
       B.k === 1 && B.n % 8 === 0 && B.off % 8 === 0 && B.s0 % 8 === 0 && B.s1 % 8 === 0 &&
@@ -2674,6 +2713,12 @@ export class Rfd4pEngine {
       B.k === 1 && B.off % 4 === 0 && B.s0 % 4 === 0 && B.s1 % 4 === 0 && B.n % 4 === 0;
     if (useGemv) {
       const inNorm = spec.inNorm ?? '';
+      // 🔴 AND THIS RETURNS BEFORE THE `inLn` CHECK BELOW, so the gemv path needs its own: the
+      // two kernel families implement DISJOINT `inNorm` sets, and a norm the selected one does
+      // not know was dropped in silence. `gemvSource` does `rmsCond`, `lnCond` and `rmsPre`.
+      if (inNorm && !['rmsCond', 'lnCond', 'rmsPre'].includes(inNorm)) {
+        throw new Error(`gemm ${m}x${n}x${k}: inNorm '${inNorm}' is not implemented by the gemv kernel this shape selects`);
+      }
       const gemvGroups = Math.ceil(n / 16) * B0 * B1;
       const gemvKey = `gemv-m${m}-k${k}${inNorm ? `-${inNorm}` : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate ? (addOnly ? '-ga' : (gSigm ? '-gs' : '-gm')) : ''}`;
       const gemvSrc = gemvSource(m, k / 128, hasGate, addOnly, gSigm, hasAlpha, hasBias, actType, acc === 1, inNorm);
@@ -2682,6 +2727,15 @@ export class Rfd4pEngine {
         spec.label ?? `gemm ${m}x${n}x${k}${B0 * B1 > 1 ? `[${B0 * B1}]` : ''}`);
     }
     const inLn = (submat ? (vecIO && (vecEpilogue || Boolean(spec.pair))) : (fullK && vecEpilogue && !small)) && spec.inNorm === 'ln';
+    // 🔴 AND THE OTHER DIRECTION OF THE SAME HOLE: `gemmSource` and `gemmSubmatSource` implement
+    // `'ln'` AND NOTHING ELSE, so `rmsPre` - the only other value any caller asks for - would be
+    // dropped in silence by whichever of them a shape selects. It reaches the gemv kernel today
+    // only because `useGemv` wants `k % 128 == 0` and this checkpoint's conditioning width is
+    // 256; a width of 192 would decline the gemv, take this path, and quietly stop normalising.
+    if (spec.inNorm && spec.inNorm !== 'ln') {
+      throw new Error(`gemm ${m}x${n}x${k}: inNorm '${spec.inNorm}' is implemented only by the gemv kernel, which this shape does not select`);
+    }
+    if (spec.inNorm === 'ln' && !inLn) throw new Error(`gemm ${m}x${n}x${k}: inNorm 'ln' is not supported by the kernel this shape selects`);
     const vKey = !submat && !small && this.gemmVariant ? `-v${JSON.stringify(this.gemmVariant)}` : '';
     const key = `${small ? 'gemm-s' : 'gemm'}${submat ? `-sm${this.submat8 ? '8' : ''}${half ? '-h' : '-f'}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${vecIO ? '-v' : (vecB ? '-vb' : '')}${vecEpilogue ? '-ve' : ''}${inLn ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate && addOnly ? '-ga' : (hasGate && !gSigm ? '-gns' : '')}` : `${wordB ? '-h' : ''}${b16 ? '-b16' : ''}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${fullK ? '-fk' : ''}${vecAStock ? '-va' : ''}${vecBStock ? '-vb' : ''}${vecEpilogue ? '-ve' : ''}${inLn ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate && addOnly ? '-ga' : (hasGate && !gSigm ? '-gns' : '')}${vKey}`}${spec.pair ? `-p-${spec.pair.key}` : ''}${hasGate ? `-g${gF16 ? '16' : ''}` : ''}`;
     const src = submat
@@ -2925,7 +2979,24 @@ export class Rfd4pEngine {
    * tiles 0..7 write `a = a_p * sigm(a_g)` and `b = b_p * sigm(b_g)` (`[rows, 512]`) to `proj`;
    * tiles 8..10 write `sigm(g)` (`[rows, 384]`) to `gz`.
    */
-  triProjG({ x, w, wSum = null, proj, aT, bT, gz, rows, incoming = false, n = 0, nPad = n, aF16 = false, outF16 = false, label }) {
+  /**
+   * The fused pair projection: a, b and the output gate in one m x 1408 x 384 GEMM.
+   *
+   * 🔴 `rowOff` IS WHAT LETS A CHUNK WRITE aT/bT DIRECTLY, so the chunked arm needs neither
+   * a `proj` staging buffer nor a scatter pass over it. It rides on `C.off`, which the pair
+   * epilogue does not otherwise read (that path indexes `c[cBase * p.sC0 + mPad]` with no
+   * `offC` term), so one uniform carries it and the shader text is the same for both arms -
+   * at `rowOff = 0` the added term is `m + 0` and the single-chunk arm is unchanged.
+   *
+   * It has to be added BEFORE the row index is divided into the padded layout, not after:
+   * `mPad` is `(m / sCn) * sCm + m % sCn`, so a flat offset on the result would only be
+   * right when r0 happened to be a multiple of n.
+   *
+   * `batchStride` is the per-channel slice, which the chunked arm pads in BOTH dimensions
+   * (nPad x nPad) because its incoming contraction reads the operand transposed by stride
+   * and so reaches row nPad - 1.
+   */
+  triProjG({ x, w, wSum = null, proj, aT, bT, gz, rows, incoming = false, n = 0, nPad = n, rowOff = 0, batchStride = n * nPad, aF16 = false, outF16 = false, label }) {
     if (aT && bT) {
       const f16Out = outF16 && this.hasF16 && w.half === true;
       const submat = this.hasSubgroupMatrix && w.half === true;
@@ -2938,7 +3009,7 @@ export class Rfd4pEngine {
       const triEpi2 = !this.gemmVariant?.baseline && (this.gemmVariant?.triEpi2 ?? true);
       return this.gemm({
         m: rows, n: 1408, k: 384, a: x, b: w, c: aT, bias: wSum ?? undefined, inNorm: inLn ? 'ln' : '', noSmall: true, aF16, pad0: incoming ? n : 0,
-        A: { off: 0, m: 384, k: 1 }, B: { off: 0, n: 384, k: 1 }, C: { off: 0, s0: n * nPad, m: nPad, n },
+        A: { off: 0, m: 384, k: 1 }, B: { off: 0, n: 384, k: 1 }, C: { off: rowOff, s0: batchStride, m: nPad, n },
         pair: {
           key: `triprojg-ab${f16Out ? '-h' : ''}${inLn ? '-ln' : ''}`,
           colMajorStore: 'cond1024',
@@ -2980,7 +3051,7 @@ export class Rfd4pEngine {
   let cSub = li / 64u;
   let m = m0 + mLocal;
   let mValid = inBatch && (m < p.m);
-  let mPad = select(m, (m / p.sCn) * p.sCm + (m % p.sCn), p.sCm != p.sCn);
+  let mg = m + p.offC; let mPad = select(mg, (mg / p.sCn) * p.sCm + (mg % p.sCn), p.sCm != p.sCn);
   let r4 = mLocal / 4u;
   let comp = mLocal % 4u;
   if (mValid) {
@@ -3025,7 +3096,7 @@ export class Rfd4pEngine {
   let cSub = li / 64u;
   let m = m0 + mLocal;
   let mValid = inBatch && (m < p.m) && (n0 < 1024u);
-  let mPad = select(m, (m / p.sCn) * p.sCm + (m % p.sCn), p.sCm != p.sCn);
+  let mg = m + p.offC; let mPad = select(mg, (mg / p.sCn) * p.sCm + (mg % p.sCn), p.sCm != p.sCn);
   let r4 = mLocal / 4u;
   let comp = mLocal % 4u;
   if (mValid) {
@@ -3078,7 +3149,7 @@ export class Rfd4pEngine {
         ${inLn ? (this.submat8 ? `let mean = lnStat[rLocal * 2u];
         let inv = lnStat[rLocal * 2u + 1u];` : `let mean = f32(scratch[rLocal * 34u + 32u]);
         let inv = f32(scratch[rLocal * 34u + 33u]);`) : ''}
-        let mPad = select(m, (m / p.sCn) * p.sCm + (m % p.sCn), p.sCm != p.sCn);
+        let mg = m + p.offC; let mPad = select(mg, (mg / p.sCn) * p.sCm + (mg % p.sCn), p.sCm != p.sCn);
         let s8 = 8u * p.sC0;
         if (n0 < 512u) {
           let c0 = ((n0 / 2u) + cSub) * p.sC0 + mPad;
@@ -3125,34 +3196,42 @@ export class Rfd4pEngine {
         label: label ?? `triProjG ${rows}x1408x384`,
       });
     }
+    // 🔴 THE CHUNKED FORM NARROWS TOO, and both of its outputs are written ELEMENTWISE
+    // rather than packed. `proj` is the gemm's own C, so `cF16` decides its type; `gz` is
+    // this epilogue's, and the gate that later reads it indexes per element and casts
+    // (`f32(gsc[...])`), so an `array<f16>` is exactly what it wants - the fused arm's
+    // `vec2<u32>` store is the same bytes seen four halves at a time, not another layout.
+    const projF16 = outF16 && this.hasF16;
+    const pt = projF16 ? 'f16' : 'f32';
+    const cast = projF16 ? 'f16' : '';
     return this.gemm({
-      m: rows, n: 1408, k: 384, a: x, b: w, c: proj, noSmall: true,
+      m: rows, n: 1408, k: 384, a: x, b: w, c: proj, noSmall: true, aF16, cF16: projF16,
       A: { off: 0, m: 384, k: 1 }, B: { off: 0, n: 384, k: 1 }, C: { off: 0, m: 512, n: 1 },
       pair: {
-        key: 'triprojg',
+        key: `triprojg${projF16 ? '-h' : ''}`,
         buffers: [gz],
-        decls: '@group(0) @binding(5) var<storage, read_write> gz: array<f32>;',
+        decls: `@group(0) @binding(5) var<storage, read_write> gz: array<${pt}>;`,
         body: `fn pairOutCol(m: u32, n0: u32, col: u32, v0: f32, v1: f32) {
   if (n0 < 1024u) {
-    c[m * 512u + (n0 / 2u) + col] = v0 / (1.0 + exp(-v1));
+    c[m * 512u + (n0 / 2u) + col] = ${cast}(v0 / (1.0 + exp(-v1)));
   } else {
     let base0 = m * 384u + (n0 - 1024u) + col;
-    gz[base0] = 1.0 / (1.0 + exp(-v0));
-    gz[base0 + 64u] = 1.0 / (1.0 + exp(-v1));
+    gz[base0] = ${cast}(1.0 / (1.0 + exp(-v0)));
+    gz[base0 + 64u] = ${cast}(1.0 / (1.0 + exp(-v1)));
   }
 }
 fn pairOut(m: u32, n0: u32, tn0: u32, r0: vec4<f32>, r1: vec4<f32>) {
   if (n0 < 1024u) {
     let y = r0 / (vec4<f32>(1.0) + exp(-r1));
     let base = m * 512u + (n0 / 2u) + tn0;
-    c[base] = y.x; c[base + 1u] = y.y; c[base + 2u] = y.z; c[base + 3u] = y.w;
+    c[base] = ${cast}(y.x); c[base + 1u] = ${cast}(y.y); c[base + 2u] = ${cast}(y.z); c[base + 3u] = ${cast}(y.w);
   } else {
     let g0 = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-r0));
     let g1 = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-r1));
     let base0 = m * 384u + (n0 - 1024u) + tn0;
     let base1 = base0 + 64u;
-    gz[base0] = g0.x; gz[base0 + 1u] = g0.y; gz[base0 + 2u] = g0.z; gz[base0 + 3u] = g0.w;
-    gz[base1] = g1.x; gz[base1 + 1u] = g1.y; gz[base1 + 2u] = g1.z; gz[base1 + 3u] = g1.w;
+    gz[base0] = ${cast}(g0.x); gz[base0 + 1u] = ${cast}(g0.y); gz[base0 + 2u] = ${cast}(g0.z); gz[base0 + 3u] = ${cast}(g0.w);
+    gz[base1] = ${cast}(g1.x); gz[base1 + 1u] = ${cast}(g1.y); gz[base1 + 2u] = ${cast}(g1.z); gz[base1 + 3u] = ${cast}(g1.w);
   }
 }`,
       },
@@ -3250,7 +3329,18 @@ fn pairOut(m: u32, n0: u32, tn0: u32, r0: vec4<f32>, r1: vec4<f32>) {
   }
 
   /** Fused `[256, nn] -> [rows, 256]` coalesced transpose + LayerNorm(width=256) for triangle output. */
+  /**
+   * `y = LayerNorm_w(x^T)` over 256 channels, reading `x` channel-major.
+   *
+   * 🔴 `r0` MUST BE A MULTIPLE OF FOUR. `x` is read as `array<vec4<f32>>` along the ROW
+   * axis - `x[c * nnStride4 + (r0 + rLocal) / 4]` - so four consecutive pair rows share a
+   * word and a chunk starting off that boundary reads every row of every channel from the
+   * wrong place. It is not a tidiness alignment: misaligned it is relRMS ~1.0 on the pair
+   * track, measured. `chunkPlan` in trunk.js is what guarantees it, and says so; this
+   * throws rather than trusting the caller, because the symptom is a plausible structure.
+   */
   transposeLnOut({ x, y, rows, nn, w, inF16 = false, outF16 = false, r0 = 0, eps = 1e-5 }) {
+    if (r0 % 4 !== 0) throw new Error(`transposeLnOut: r0=${r0} is not a multiple of 4 - it reads x four pair rows a word`);
     const f16In = inF16 && this.hasF16;
     const f16Out = outF16 && this.hasF16;
     const groups = Math.ceil(rows / 16);

@@ -232,7 +232,7 @@ export class DesignPanel {
 
     // Nothing to generate: keep Generate off (a running job keeps its Stop button).
     if (!this.app.activeAbortController && this.app.els.predictBtn) {
-      this.app.els.predictBtn.disabled = spec.task.key === 'nothing' || spec.task.key === 'empty';
+      this.app.els.predictBtn.disabled = Boolean(this.app.noWebGpu) || spec.task.key === 'nothing' || spec.task.key === 'empty';
     }
   }
 

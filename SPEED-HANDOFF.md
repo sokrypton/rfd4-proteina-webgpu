@@ -164,6 +164,11 @@ before writing from scratch.
 
 ### P3 - App overhead outside the trunk (~10%)
 
+> **2026-10-25: every step's frame is shown, by the owner's decision.** Do not speed this up by skipping frames.
+> Decoding a frame every 2-3 steps saved 1.10x at n=100 (e4531d2) and was reverted in 2ae2968. Live frames
+> cost ~14% at n=100 (a 33 ms all-atom decode per step on an M2) and ~4% for Mol* and CIF. What is left is making
+> each frame cheaper, for example overlapping the decode with the next trunk pass.
+
 Per rendered frame: decoder pass, `processSampleToAtoms`, CIF serialization, `caSecondaryStructureCif`
 (py2Dmol `assignSecondary`), Mol* in-place update, live sequence strip (`web/app.js:988-1060`). Options: decode
 the live frame every 2-3 steps when steps are fast (the predicate is `wantLiveFrame`); move CIF building and
@@ -171,6 +176,12 @@ secondary structure into a Worker; skip frames while a Mol* update is still pend
 `liveRenderBusy`). Measure end to end with the studio, not the generator alone.
 
 ### P4 - The subgroup-matrix path itself (for when P0 lands)
+
+> **2026-10-25: measured, and at the ceiling.** A synthetic kernel that only loads f16 8x8 tiles from workgroup
+> memory and multiply-accumulates them peaks at 2.75 TFLOP/s for a 64x16 block per subgroup (our layout), 2.98 for
+> 64x32 and 2.92 for 32x64; 16x16 gives 2.06. `triProjG` runs at ~2.7 (55.6 ms for 14 calls at n=100), the other
+> pair GEMMs at 2.2-2.6. So re-blocking `gemmSubmatSource` to 64x32 could buy at most ~8% on `triProjG`, ~3% of a
+> pass. Pass totals on this path: 132 ms at n=100, 529 ms at n=207.
 
 At ~2.7 TFLOP/s `triProjG` is still well under the f16 ceiling. HANDOFF.md section 5 priority 5 and
 `../localfold` notes on 8x8x8 on M2/M5 apply. Lower priority until visitors can run it.
@@ -402,6 +413,31 @@ All gates run strictly sequentially with zero concurrent GPU processes:
    - Loading `aPref`/`bPref` immediately after `workgroupBarrier()` #1 instead of after the 16 FMAs overlaps global load destination registers with the `ta`/`tb` shared-memory reads.
 5. **`patience = 3` and fixed `nsteps = 45`**:
    - On `uncond_short` seed 44, a 3-step Cα plateau occurs at steps 41–44 before 4 residues flip at step 45 (`seqId` drops to `0.960`, `aaRmsdA = 0.281 Å`). `patience = 4` rides through that plateau and matches `patience = 5` on 12/12 runs.
+6. **f16 accumulators in stock `triProjG` (2026-10-25, `acc16`): 1.027x / 1.033x a pass at n=100 / 200, drift doubled**:
+   - Eight `vec4<f16>` accumulators in the K-loop, widened to f32 for the unchanged epilogue. Interleaved, one
+     process, stock flags: 286-290 -> 278-280 ms (n=100), 1097-1107 -> 1061-1070 ms (n=200), about 1.07x on the
+     kernel. Drift against f32 accumulators 1.2e-3 bb_ca, 3-5e-3 latents, about twice FP16's existing trunk drift.
+   - localfold's 1.43-1.55x with the same idea (`6e996fa8`) came from accumulators held in a WGSL ARRAY, which
+     spilled; halving them ended the spill. Ours are scalar `vec4` variables and do not spill, so there is little
+     to win. Together with section 5, this kernel is at the M2's f32 ceiling for its class (localfold's best fused
+     triangle projection on the same M2: 1.07-1.29 TFLOP/s; ours ~1.1).
+7. **Handing `onStep` off without waiting, so the next trunk pass overlaps frame building (2026-10-25): 1.000x**.
+   - Visible window, n=100, 60 steps, 3 interleaved rounds: 20.78 s both arms, all 59 frames in order. The GPU
+     was not waiting on the CPU's frame building.
+8. **The small-tile GEMM for row counts up to 128 (token track and decoder at n=100): 0.80x** (19.2 -> 24.1 s,
+   identical output). The 64x128 tile's reuse matters more than filling the 10 cores.
+
+Triangle multiplications (`tri-in` + `tri-out`) at long lengths, share of one trunk pass (M2, 2026-10-25):
+stock 8% / 12% / 17% at n=200 / 400 / 600, subgroup-matrix 7% / 12% / 15%. Their raw rate (stock 0.66-1.06
+TFLOP/s, matrix 1.96-2.49) is mostly tile padding: 64x128 tiles round an n x n contraction up to 448 x 512 at
+n=400 (1.43x) and 640 x 640 at n=600 (1.14x). Padding-corrected they sit at each path's ceiling. Smaller tiles pad
+less but run slower (32x64 measured 0.8x), so no gain. One real gap: chunked lengths read the incoming operand by
+stride (PR #3), and on M2 stock that costs 952 vs 732 ms at n=600, about 2% of a pass.
+
+Where a 60-step design's time goes at n=100 (M2, stock, visible window, every frame shown, Mol* live mode):
+trunk passes 17.1 s (82%), live decodes ~1.9 s (9%), Mol* drawing ~0.35 s, the rest (setup, final decode,
+session, per-step readback) ~1.1 s. The trunk's GEMMs and the decoder's run at 0.85-1.1 TFLOP/s against an
+f32 ceiling of ~1.1-1.3 on this device.
 
 
 ## 11. Open bug (2026-10-24): intermittent GPU reset on chiral-ligand inputs, slow first forwards

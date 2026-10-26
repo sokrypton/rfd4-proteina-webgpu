@@ -114,7 +114,7 @@ import { Rfd4pDecoderGpu } from './rfd4p/decoder.js';
 import { Rfd4pEncoderGpu } from './rfd4p/encoder.js';
 import { Rfd4pEngine, fold2 } from './rfd4p/engine.js';
 import { Rfd4pGeneratorGpu, generateRfd4p, yieldToBrowser } from './rfd4p/generate.js';
-import { Rfd4pTrunkGpu } from './rfd4p/trunk.js';
+import { DEFAULT_CHUNK_BYTES, Rfd4pTrunkGpu, chunkPlan } from './rfd4p/trunk.js';
 
 /**
  * Request a WebGPU device with generous storage buffer limits and optional `timestamp-query` + `shader-f16`.
@@ -251,4 +251,6 @@ export {
   generateRfd4p,
   yieldToBrowser,
   Rfd4pTrunkGpu,
+  DEFAULT_CHUNK_BYTES,
+  chunkPlan,
 };

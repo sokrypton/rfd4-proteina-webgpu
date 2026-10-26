@@ -448,6 +448,9 @@ const PRESET_TO_TASK = {
   custom_cath_monomer: 'unconditional',
 };
 
+const NO_WEBGPU_MESSAGE = 'This browser has no WebGPU, which designs need. Use Chrome or Edge (version 113 or later) '
+  + 'or Safari 26 or later. You can still open and edit structures here.';
+
 class Rfd4pStudioApp {
   constructor() {
     this.gpuDevice = null;
@@ -609,13 +612,22 @@ class Rfd4pStudioApp {
     this._syncThinkingRadios('none');
     this.els.predictBtn.disabled = false;
     this.designPanel.render();
-    const backendLabel = this.gpuDevice ? 'WebGPU FP16' : 'CPU Float32';
+    const params = new URLSearchParams(window.location.search);
+    // Without WebGPU a design runs on the CPU path on the main thread: hours for 60 steps, with the page frozen on
+    // its last status. Say so instead; `?cpu=1` keeps the CPU path for development.
+    this.noWebGpu = !this.gpuDevice && params.get('cpu') !== '1';
+    const backendLabel = this.gpuDevice ? 'WebGPU FP16' : this.noWebGpu ? 'No WebGPU' : 'CPU Float32';
     if (this.els.webgpuBadge) {
       this.els.webgpuBadge.textContent = backendLabel;
     }
+    this._initSpeedHint();
+    if (this.noWebGpu) {
+      this.els.predictBtn.disabled = true;
+      this.setStatus(NO_WEBGPU_MESSAGE, true);
+      return;
+    }
     this.setStatus('Ready to generate.', false, { visible: false });
 
-    const params = new URLSearchParams(window.location.search);
     if (params.get('autorun') === '1') {
       await this.runDesign();
     }
@@ -648,7 +660,8 @@ class Rfd4pStudioApp {
                 this.activeAbortController.abort();
               }
               this._setPartialDiffusion(event.data.task === 'partial_diffusion');
-              this.setStatus('Ready to generate.', false, { visible: false });
+              if (this.noWebGpu) this.setStatus(NO_WEBGPU_MESSAGE, true);
+              else this.setStatus('Ready to generate.', false, { visible: false });
             }
           }
         }
@@ -672,6 +685,36 @@ class Rfd4pStudioApp {
     } catch (err) {
       console.warn('Motif overlay failed:', err);
     }
+  }
+
+  /**
+   * Desktop Chrome exposes subgroup matrices (about 2x faster designs, `hasSubgroupMatrix` in the engine) only behind
+   * chrome://flags/#enable-unsafe-webgpu. Pages cannot open chrome:// URLs, so the hint offers to copy the address.
+   */
+  _initSpeedHint() {
+    const hint = document.getElementById('rfd4p-speed-hint');
+    if (!hint || !this.gpuDevice) return;
+    const KEY = 'rfd4p.speedHintDismissed';
+    let dismissed = false;
+    try { dismissed = localStorage.getItem(KEY) === '1'; } catch { /* storage blocked: show it */ }
+    const brands = navigator.userAgentData?.brands?.map((b) => b.brand) ?? [];
+    const desktopChrome = brands.includes('Google Chrome') && navigator.userAgentData?.mobile === false;
+    const hasMatrix = this.gpuDevice.features?.has?.('chromium-experimental-subgroup-matrix') === true;
+    if (dismissed || !desktopChrome || hasMatrix) return;
+    hint.hidden = false;
+    const copy = document.getElementById('rfd4p-speed-copy');
+    copy?.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText('chrome://flags/#enable-unsafe-webgpu');
+        copy.textContent = 'Copied';
+      } catch {
+        copy.textContent = 'Copy failed: select the address above';
+      }
+    });
+    document.getElementById('rfd4p-speed-dismiss')?.addEventListener('click', () => {
+      hint.hidden = true;
+      try { localStorage.setItem(KEY, '1'); } catch { /* not remembered; fine */ }
+    });
   }
 
   async _initWebGpu() {
@@ -987,6 +1030,10 @@ class Rfd4pStudioApp {
   }
 
   async runDesign(overrides = {}) {
+    if (this.noWebGpu) {
+      this.setStatus(NO_WEBGPU_MESSAGE, true);
+      return;
+    }
     if (this.activeAbortController) {
       this.activeAbortController.abort();
     }
@@ -1093,20 +1140,13 @@ class Rfd4pStudioApp {
         let referenceCaNm = null;
         let liveFramesRendered = 0;
         let liveCamRadius = 0;
-        let lastLiveRenderTime = 0;
-        let liveRenderBusy = false;
         let liveRenderPromise = null;
 
         // Live frames use the decoder's all-atom x1 (real backbone geometry, so Mol* can assign secondary
         // structure, and in-context targets keep their input atoms); CA-only frames are the fallback.
-        // Asked before the step's trunk pass, so predict whether a render will be due once it finishes.
-        let lastStepEnd = performance.now();
-        let lastStepMs = 0;
-        const LIVE_FRAME_INTERVAL_MS = 320;
-        // Not gated on liveRenderBusy: the previous frame's Mol* update almost always finishes during this trunk pass,
-        // and a skipped decode used to fall back to a CA-only frame (frozen sequence, sheets twisted by invented O).
-        const wantLiveFrame = (step, total) =>
-          step === 0 || (step < total - 1 && performance.now() + lastStepMs - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS);
+        // Every step is shown: each one is decoded (the last is replaced by the final structure), and a step waits
+        // for the previous frame's Mol* update rather than dropping its own frame.
+        const wantLiveFrame = (step, total) => step < total - 1;
         const motifOverlay = buildMotifOverlayAtoms(atoms);
         const unmodelled = unmodelledTokens(atoms);
         // Overlays for the frame being built; shown once its structure has been drawn.
@@ -1138,10 +1178,7 @@ class Rfd4pStudioApp {
           }
         };
 
-        const onStep = (info) => {
-          const stepEnd = performance.now();
-          lastStepMs = stepEnd - lastStepEnd;
-          lastStepEnd = stepEnd;
+        const onStep = async (info) => {
           let alignedCaNm = Float32Array.from(info.x1.bb_ca);
           if (fixedAnchors) {
             alignedCaNm = alignCaNmToAnchors(alignedCaNm, fixedAnchors.tokenIndices, fixedAnchors.fixedCoordsNm);
@@ -1161,18 +1198,16 @@ class Rfd4pStudioApp {
             caCoordsNm: alignedCaNm,
           });
 
-          const now = performance.now();
           const isStopping = info.step > 0 && (info.step === info.nsteps - 1 || Boolean(info.convergence?.stop));
           // On the GPU path only decoded frames are shown; the CA-only frame is for the CPU backend (no live decode).
           const frameReady = Boolean(info.decoded) || !useGpu;
-          if (frameReady && !liveRenderBusy && !isStopping && (info.step === 0 || now - lastLiveRenderTime >= LIVE_FRAME_INTERVAL_MS)) {
+          if (frameReady && !isStopping) {
             if (typeof window.atomworksStudio?.renderFrame === 'function') {
+              if (liveRenderPromise) await liveRenderPromise;
               liveOverlays = { motif: overlayCifOf(motifOverlay, 'motif'), sideChains: null };
               const liveCif = liveAllAtomCif(info) ?? buildLiveFrameCifFromCa(alignedCaNm, tokens, null, UNIFIED_ATOM37_TOKENS);
               const frameOverlays = liveOverlays;
               if (liveCif) {
-                liveRenderBusy = true;
-                lastLiveRenderTime = now;
                 // Early x1 estimates are a collapsed blob that later expands several-fold, so a camera
                 // fit once to step 1 ends up inside the protein; refit whenever the extent drifts.
                 const radius = caExtentRadiusNm(alignedCaNm);
@@ -1183,10 +1218,7 @@ class Rfd4pStudioApp {
                   window.atomworksStudio?.renderFrame(liveCif, `step_${info.step + 1}.cif`, keepCam),
                 )
                   .then(() => showDesignOverlays(frameOverlays))
-                  .catch(() => {})
-                  .finally(() => {
-                    liveRenderBusy = false;
-                  });
+                  .catch(() => {});
               }
             }
           }
@@ -1215,6 +1247,8 @@ class Rfd4pStudioApp {
         };
 
         let result;
+        // Mol* draws cheaply while frames stream in, so it competes less with WebGPU for the GPU.
+        window.atomworksStudio?.setLiveMode?.(true);
         try {
           result = useGpu
             ? await this.gpuModel.generate(batch, genOpts)
@@ -1223,6 +1257,7 @@ class Rfd4pStudioApp {
           if (liveRenderPromise) {
             await liveRenderPromise;
           }
+          window.atomworksStudio?.setLiveMode?.(false);
         }
 
         if (!fixedAnchors && referenceCaNm && result.structure?.atoms && !isAnchored(result.structure.atoms) &&
