@@ -427,6 +427,13 @@ All gates run strictly sequentially with zero concurrent GPU processes:
 8. **The small-tile GEMM for row counts up to 128 (token track and decoder at n=100): 0.80x** (19.2 -> 24.1 s,
    identical output). The 64x128 tile's reuse matters more than filling the 10 cores.
 
+Triangle multiplications (`tri-in` + `tri-out`) at long lengths, share of one trunk pass (M2, 2026-10-25):
+stock 8% / 12% / 17% at n=200 / 400 / 600, subgroup-matrix 7% / 12% / 15%. Their raw rate (stock 0.66-1.06
+TFLOP/s, matrix 1.96-2.49) is mostly tile padding: 64x128 tiles round an n x n contraction up to 448 x 512 at
+n=400 (1.43x) and 640 x 640 at n=600 (1.14x). Padding-corrected they sit at each path's ceiling. Smaller tiles pad
+less but run slower (32x64 measured 0.8x), so no gain. One real gap: chunked lengths read the incoming operand by
+stride (PR #3), and on M2 stock that costs 952 vs 732 ms at n=600, about 2% of a pass.
+
 Where a 60-step design's time goes at n=100 (M2, stock, visible window, every frame shown, Mol* live mode):
 trunk passes 17.1 s (82%), live decodes ~1.9 s (9%), Mol* drawing ~0.35 s, the rest (setup, final decode,
 session, per-step readback) ~1.1 s. The trunk's GEMMs and the decoder's run at 0.85-1.1 TFLOP/s against an
