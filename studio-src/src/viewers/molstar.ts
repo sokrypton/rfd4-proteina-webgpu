@@ -8,6 +8,7 @@ import { Bond, Structure } from "molstar/lib/mol-model/structure";
 import { PluginStateObject, PluginStateTransform } from "molstar/lib/mol-plugin-state/objects";
 import { StateObject } from "molstar/lib/mol-state";
 import { ParamDefinition } from "molstar/lib/mol-util/param-definition";
+import { FxaaParams } from "molstar/lib/mol-canvas3d/passes/fxaa";
 import { OrderedSet } from "molstar/lib/mol-data/int";
 import {
   StructureElement,
@@ -242,7 +243,8 @@ export class MolstarAdapter implements ViewerAdapter {
         postprocessing: {
           occlusion: { name: "off", params: {} },
           bloom: { name: "off", params: {} },
-          antialiasing: { name: "fxaa", params: canvas.props.postprocessing.antialiasing.name === "fxaa" ? canvas.props.postprocessing.antialiasing.params : {} },
+          // FXAA needs its full params: with `{}` its thresholds are undefined and every frame draws blank.
+          antialiasing: { name: "fxaa", params: ParamDefinition.getDefaultValues(FxaaParams) },
         } as never,
         multiSample: { mode: "off" },
       });
