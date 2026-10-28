@@ -1,8 +1,8 @@
 {
   "_comment": "The AtomWorks Studio release this site is built from. tools/build-studio.mjs downloads the bundle, checks it against sha256 and composes index.html from it. Nothing from Studio is vendored in this repository.",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "repository": "RosettaCommons/atomworks-studio",
   "bundleUrl": "https://github.com/RosettaCommons/atomworks-studio/releases/download/v${version}/atomworks-studio-web.tar.gz",
-  "sha256": "356c8f215ea5deef3a76d4226c5b4a450b6f048183194acc5b527495465b2e62",
+  "sha256": "3333155d6b8130297a4dbfbb9cd4eb00a71199578e34c517b8fb9e946cc14214",
   "title": "AtomWorks Studio \u00b7 RFD4-Proteina (WebGPU)"
 }
