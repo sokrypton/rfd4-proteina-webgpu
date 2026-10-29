@@ -467,3 +467,100 @@ step 5, and find which dispatch inflates 2-4x. A 2-4x inflation of one 2-layer c
 the likely watchdog trip. Also check whether the slowness tracks the early-t xt scale (data-dependent cost, e.g.
 f16 overflow/denormal handling) by replaying step 0's inputs at step 5. Reproduce in the CDP probe with
 `tools/gpu/check-webapp.js`'s preceding preset runs before the example.
+
+## 12. 2026-10-29 Check-up on the M5 (Chrome 156.0.8078.73, 10-core, 24 GB)
+
+Verification pass at `cbe84cb`, not an optimization round. No product code changed.
+
+### 12.1 P0 is worth far less on M5 than on M2
+
+Stock Chrome 156.0.8078.73 still exposes no `chromium-experimental-subgroup-matrix`
+(`subgroup-size-control` is now stock; the matrix feature is not). P0 remains blocked.
+
+But its value has collapsed. `bench-trunk.js`, one trunk forward, best of 3 processes x 3 reps:
+
+| n | stock | subgroup-matrix | ratio |
+|---:|---:|---:|---:|
+| 100 | 113 ms | 93 ms | 1.22x |
+| 200 | 425 | 355 | 1.20x |
+| 400 | 1743 | 1453 | 1.20x |
+| 600 | 3952 | 3192 | 1.24x |
+
+On M2 the same ratio is 2.2-2.3x. Across generations the two paths moved very differently:
+
+| n | M2 stock | M5 stock | gain | M2 matrix | M5 matrix | gain |
+|---:|---:|---:|---:|---:|---:|---:|
+| 400 | 4520 ms | 1743 | 2.59x | 2080 | 1453 | 1.43x |
+| 600 | 10388 | 3952 | 2.63x | 4668 | 3192 | 1.46x |
+
+The stock path gained 2.6x generation over generation; the matrix path only 1.43x. So on current
+Apple silicon the visitor path is already close to the matrix path, and P0 should be re-ranked
+below P1/P2 for M5-class devices. The corollary is that the under-tuned kernel on M5 is now
+`gemmSubmatSource` (P4), not `gemmSource` - it is the one that failed to keep up.
+
+### 12.2 The chunk bound (section 6.6 of M2-TO-M5) buys nothing here
+
+n=400 (1 chunk) -> n=600 (2 chunks) is 2.25x the pairs for 2.27x the time, so the 2-chunk plan
+costs about 1%. Raising `DEFAULT_CHUNK_BYTES` on 24 GB-class devices is not worth doing.
+
+Command buffers are also no longer a concern at these lengths: n=600 is 3952 ms over 7 command
+buffers, ~565 ms each, well inside the ~1 s watchdog line that section 6.4 flagged for the M2.
+
+### 12.3 The numbers in `trunk.js`'s own doc comment reproduce
+
+That comment records M5 f16 one-chunk passes of 115.8 / 444.5 / 1815.8 ms at n = 100 / 200 / 400.
+Measured now: 113 / 425 / 1743. Nothing has regressed since PR #3.
+
+### 12.4 `check-webapp.js` had been failing since 2026-10-24, for its own reasons
+
+Two stale assertions, both artefacts of dropping the vendored Studio (7522570), neither a product bug:
+
+1. It counted live frames through `window.__rfd4pRenderLiveFrame`, a global that commit deleted along
+   with the vendored bundle. The guard `if (typeof origLiveRender === 'function')` meant the counter
+   was silently never installed, and the gate then failed on `got 0` - blaming the design for
+   rendering nothing. Studio draws live frames through `window.atomworksStudio.renderFrame` now. The
+   counter follows it, and a missing hook throws instead of being skipped.
+2. It required the renderer `<select>` to hold exactly one option, `molstar`. A released Studio also
+   offers Patinae (WebGPU) as an opt-in choice, so the list is `['', 'molstar', 'patinae']`. The gate
+   now asserts what actually matters - that the page *defaults* to Mol*, on WebGL2, so the viewer does
+   not take the GPU from the design - and reports the option list rather than freezing it.
+
+Live frames and the Mol* default were both verified working; only the gate was wrong.
+
+> **Open question for the owner.** A visitor can switch the viewer to Patinae (WebGPU) from that
+> dropdown. The vendored Studio offered no such option. On that setting the viewer contends with
+> RFD4-Proteina for the GPU, which is the opposite of the choice recorded in section 10 (P3) and may
+> bear on the intermittent hang in section 11. Whether to strip the option when composing
+> `index.html` is a product decision, so it is left as it ships.
+
+### 12.5 Gates
+
+Stock flags, this M5, after the two test repairs:
+
+| gate | result |
+|---|---|
+| `npm test` | 35/35 |
+| `check-webapp.js` | `ok: true` - 9 Studio examples, 10 presets, inverse folding, 51 live frames, trajectory 10 models, Mol* default with 2028 atoms |
+| `check-recovery.js` | `allOk: true` - mid-run loss reported, next Generate on a new device, idle loss recovers on a third |
+
+Design wall times from those runs (10-step `motif_unidx_1prw`, 8-step recovery case): 2.74 s and
+1.17-1.34 s on WebGPU FP16.
+
+The oracle parity gates (`check-rfd4p`, `check-generate`, `tools/oracle/*`) **cannot run on this
+machine**: it has neither `oracle-dumps/` nor the f32 `weights/model.safetensors`. They remain the
+M2's to run, as M2-TO-M5 section 2 notes.
+
+### 12.6 `check-recovery.js` was broken by the M5's speed, in the same way
+
+The gate destroyed the device after a fixed `sleep(1500)` while a design ran. On this M5 an 8-step
+design finishes in **1.17 s**, so the destroy landed *after* the design completed. Nothing was ever
+interrupted: `midRun` passed where the gate requires it to fail, the loss surfaced on the *following*
+run instead, and the gate bailed out with `allOk: false, note: "no device after the mid-run recovery"`
+having never tested recovery at all.
+
+It now runs a 40-step design and waits until the status line reports step >= 4 before destroying the
+device, which holds on any hardware.
+
+**Both gate failures this round were tests calibrated to slower hardware, not product bugs.** That is
+worth generalising: section 1 rule 1 says to run every gate on stock flags; it should also say that a
+gate must not encode a wall-clock assumption about how long a design takes.

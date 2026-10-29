@@ -175,14 +175,19 @@ export async function main() {
   }
 
   // Select `motif_unidx_1prw`, run 10 steps + 'none' recycles for fast E2E verification
+  // Studio draws live frames through `window.atomworksStudio.renderFrame` (it was the `__rfd4pRenderLiveFrame`
+  // global until the vendored Studio was dropped for the released bundle). Fail loudly if the hook is missing,
+  // rather than skipping the counter and blaming the design for rendering nothing.
   let liveFramesCalled = 0;
-  const origLiveRender = studioWin.__rfd4pRenderLiveFrame;
-  if (typeof origLiveRender === 'function') {
-    studioWin.__rfd4pRenderLiveFrame = async (...args) => {
-      liveFramesCalled += 1;
-      return origLiveRender(...args);
-    };
+  const studioApi = studioWin.atomworksStudio;
+  const origLiveRender = studioApi?.renderFrame;
+  if (typeof origLiveRender !== 'function') {
+    throw new Error('window.atomworksStudio.renderFrame is missing; the live-frame counter cannot be installed');
   }
+  studioApi.renderFrame = async (...args) => {
+    liveFramesCalled += 1;
+    return origLiveRender.apply(studioApi, args);
+  };
   await app._loadPreset('motif_unidx_1prw');
   await app.runDesign({ nsteps: 10, recycleSchedule: 'none' });
   if (liveFramesCalled < 2) {
@@ -282,13 +287,19 @@ export async function main() {
   const viewerOptions = viewerModeSelect ? [...viewerModeSelect.options].map((o) => o.value) : [];
   const molstarBackend = viewerEl?.dataset?.backend;
   const molstarRenderedAtoms = Number(viewerEl?.dataset?.renderedAtoms ?? 0);
-  if (molstarBackend !== 'molstar' || molstarRenderedAtoms <= 0 || viewerOptions.join(',') !== 'molstar') {
+  // What matters here is that the page *defaults* to Mol*: it draws on WebGL2, so it does not take the GPU away
+  // from the design. A released Studio also lists Patinae (WebGPU) as an opt-in choice, which the vendored Studio
+  // did not, so the option list is reported rather than frozen. Picking Patinae makes the viewer contend with
+  // RFD4-Proteina for the GPU; whether to offer it at all is a product decision, not something to assert here.
+  if (molstarBackend !== 'molstar' || molstarRenderedAtoms <= 0 || !viewerOptions.includes('molstar')) {
     throw new Error(
       `Mol* backend check failed: backend=${molstarBackend}, renderedAtoms=${molstarRenderedAtoms}, options=${viewerOptions}`,
     );
   }
 
   return {
+    viewerOptions,
+    liveFramesCalled,
     ok:
       presetResults.length === 10 &&
       coreTensorCount === 910 &&

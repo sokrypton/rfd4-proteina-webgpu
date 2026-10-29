@@ -18,17 +18,30 @@ export async function main() {
   }
   const app = win.rfd4pApp;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const run = async () => {
-    await app.runDesign({ nsteps: 8, recycleSchedule: 'none' });
+  const run = async (nsteps = 8) => {
+    await app.runDesign({ nsteps, recycleSchedule: 'none' });
     return { status: app.els.statusMessage.textContent.slice(0, 160), ok: Boolean(app.lastResult?.cif) && !app.els.statusMessage.classList.contains('error') };
+  };
+  // Destroy the device only once a design is genuinely mid-flight. This used to be a fixed 1.5 s sleep, which
+  // raced the design itself: an 8-step design takes ~1.2 s on an M5, so the destroy landed after it had already
+  // finished, nothing was interrupted, and every later assertion reported the wrong thing.
+  const waitForStep = async (minStep) => {
+    const t = performance.now();
+    for (;;) {
+      const m = /step (\d+)\/(\d+)/.exec(app.els.statusMessage.textContent);
+      if (m && Number(m[1]) >= minStep) return;
+      if (performance.now() - t > 30000) throw new Error('design never reached a mid-run step');
+      await sleep(20);
+    }
   };
   const out = {};
   out.first = await run();
   const dev1 = app.gpuDevice;
   // 1. Lose the device mid-generation.
   app.lastResult = null;
-  const pending = run();
-  await sleep(1500);
+  // Long enough that there is a comfortable window to interrupt it on any hardware.
+  const pending = run(40);
+  await waitForStep(4);
   dev1.destroy();
   out.midRun = await pending;
   out.lostInfo = app.gpuDeviceLost;
