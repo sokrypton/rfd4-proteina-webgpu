@@ -51,6 +51,12 @@ function downloadBundle() {
   return out;
 }
 
+// An override means the committed site is an unreleased Studio build; rebuilding from the release would quietly drop
+// whatever it carries, so that needs a deliberate choice (remove `override`, or pass the override's bundle).
+if (PIN.override && !localBundle) {
+  throw new Error(`studio.json has an override (${PIN.override.repository} ${PIN.override.commit}): build that commit and pass `
+    + `--from <its dist>, or remove "override" once a release contains it. See studio.json "_override".`);
+}
 const bundle = localBundle ? resolve(localBundle) : downloadBundle();
 const studioPage = join(bundle, 'index.html');
 if (!existsSync(studioPage)) throw new Error(`${bundle} is not a Studio bundle (no index.html)`);
@@ -107,5 +113,5 @@ if (/(?:src|href)="\/[^"]/.test(page)) {
 }
 
 writeFileSync(join(ROOT, 'index.html'), page);
-console.log(`studio: ${PIN.version}${localBundle ? ` (local: ${localBundle})` : ''}, ${emitted.length} files`);
+console.log(`studio: ${PIN.override ? `${PIN.override.repository}@${PIN.override.commit}` : PIN.version}${localBundle ? ` (local: ${localBundle})` : ''}, ${emitted.length} files`);
 run('node', [join(ROOT, 'tools/stamp-modules.mjs')]);

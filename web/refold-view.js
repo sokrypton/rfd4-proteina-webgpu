@@ -86,15 +86,14 @@ export function pdbToCif(pdb, { chains = null, backboneOnly = false, dataBlockNa
 }
 
 /**
- * The refold's designed chains as a backbone-only CIF for a viewer overlay. Studio draws overlays as ball-and-stick,
- * so a thin backbone reads as a trace over the design's cartoon; templated chains are left out, since they sit on the
- * design's own by construction.
+ * The refold's designed chains as a CIF for a cartoon overlay over the design (Studio's `setOverlay` with
+ * `representation: 'cartoon'`). Templated chains are left out, since they sit on the design's own by construction.
  *
  * @param {string} pdb the refold, already in the design's frame and chain letters
  * @param {string[]} chains
  */
 export function refoldOverlayCif(pdb, chains) {
-  return pdbToCif(pdb, { chains, backboneOnly: true });
+  return pdbToCif(pdb, { chains });
 }
 
 /** One line for a refold result: RMSD to the design, then the model's own confidence. */

@@ -24,7 +24,7 @@ test('designedChains: nothing changed means every polymer chain is designed (fit
   assert.deepEqual(designedChains(input, records([['A', 1, 'ALA'], ['A', 2, 'GLY']])), ['A']);
 });
 
-test('refoldOverlayCif keeps only the designed chains\' backbone', () => {
+test('refoldOverlayCif keeps only the designed chains', () => {
   const atom = (serial, name, res, chain, resId, x) => `ATOM  ${String(serial).padStart(5)} ${name.padEnd(4)} ${res} ${chain}${String(resId).padStart(4)}    ${x.toFixed(3).padStart(8)}${'0.000'.padStart(8)}${'0.000'.padStart(8)}  1.00 90.00           ${name[0]}`;
   const pdb = [
     atom(1, 'N', 'ALA', 'A', 1, 1), atom(2, 'CA', 'ALA', 'A', 1, 2),
@@ -33,9 +33,8 @@ test('refoldOverlayCif keeps only the designed chains\' backbone', () => {
   ].join('\n');
   const cif = refoldOverlayCif(pdb, ['B']);
   const rows = cif.split('\n').filter((l) => l.startsWith('ATOM'));
-  assert.equal(rows.length, 4);
+  assert.equal(rows.length, 5);
   assert.ok(rows.every((l) => / LEU B /.test(l)));
-  assert.ok(!rows.some((l) => / CB /.test(l)));
   assert.equal(refoldOverlayCif(pdb, ['Z']), null);
 });
 

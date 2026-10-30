@@ -290,10 +290,11 @@ async function showDesignOverlays(overlays) {
     label: 'Motif (reference)', alpha: 0.35, color: 0xe2e8f0, sizeAspectRatio: 0.6,
   });
   await window.atomworksStudio?.setOverlay('sideChains', overlays?.sideChains ?? null, { label: 'Motif side chains' });
-  // A refold's designed chains, as a thin magenta backbone trace over the design (web/refold-view.js); magenta is in
-  // no chain colour, so it reads against any binder.
+  // A refold's designed chains as a magenta cartoon over the design (web/refold-view.js); magenta is in no chain
+  // colour, so it reads against any binder. `representation` needs Studio with RosettaCommons/atomworks-studio#29
+  // (studio.json `override`); a Studio without it draws ball-and-stick instead.
   await window.atomworksStudio?.setOverlay('refold', overlays?.refold?.cif ?? null, {
-    label: overlays?.refold?.label ?? 'Refold', color: 0xe040fb, alpha: 0.9, sizeAspectRatio: 0.35,
+    label: overlays?.refold?.label ?? 'Refold', color: 0xe040fb, alpha: 0.75, representation: 'cartoon',
   });
 }
 
