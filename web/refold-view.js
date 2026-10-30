@@ -58,6 +58,34 @@ export function designedChains(inputAtoms, resultAtoms) {
 const BACKBONE = new Set(['N', 'CA', 'C', 'O']);
 
 /**
+ * A PDB's atoms as CIF, optionally only some chains and only the backbone. The refold's B-factor column (the model's
+ * pLDDT) is kept.
+ *
+ * @param {string} pdb
+ * @param {{chains?: string[] | null, backboneOnly?: boolean, dataBlockName?: string}} [options]
+ * @returns {string|null} null when nothing is kept
+ */
+export function pdbToCif(pdb, { chains = null, backboneOnly = false, dataBlockName = 'refold' } = {}) {
+  const keep = chains ? new Set(chains) : null;
+  const atoms = [];
+  for (const line of pdb.split('\n')) {
+    const isHetero = line.startsWith('HETATM');
+    if (!line.startsWith('ATOM') && !isHetero) continue;
+    const atomName = line.slice(12, 16).trim();
+    const chainId = line[21];
+    if ((keep && !keep.has(chainId)) || (backboneOnly && (isHetero || !BACKBONE.has(atomName)))) continue;
+    const bFactor = Number.parseFloat(line.slice(60, 66));
+    atoms.push({
+      atomName, chainId, isHetero, resName: line.slice(17, 20).trim(), resId: Number.parseInt(line.slice(22, 26), 10),
+      element: line.slice(76, 78).trim() || atomName[0],
+      x: Number.parseFloat(line.slice(30, 38)), y: Number.parseFloat(line.slice(38, 46)), z: Number.parseFloat(line.slice(46, 54)),
+      ...(Number.isFinite(bFactor) ? { bFactor } : {}),
+    });
+  }
+  return atoms.length ? toCifString(atoms, { dataBlockName }) : null;
+}
+
+/**
  * The refold's designed chains as a backbone-only CIF for a viewer overlay. Studio draws overlays as ball-and-stick,
  * so a thin backbone reads as a trace over the design's cartoon; templated chains are left out, since they sit on the
  * design's own by construction.
@@ -66,20 +94,7 @@ const BACKBONE = new Set(['N', 'CA', 'C', 'O']);
  * @param {string[]} chains
  */
 export function refoldOverlayCif(pdb, chains) {
-  const keep = new Set(chains);
-  const atoms = [];
-  for (const line of pdb.split('\n')) {
-    if (!line.startsWith('ATOM')) continue;
-    const atomName = line.slice(12, 16).trim();
-    const chainId = line[21];
-    if (!keep.has(chainId) || !BACKBONE.has(atomName)) continue;
-    atoms.push({
-      atomName, chainId, resName: line.slice(17, 20).trim(), resId: Number.parseInt(line.slice(22, 26), 10),
-      element: line.slice(76, 78).trim() || atomName[0],
-      x: Number.parseFloat(line.slice(30, 38)), y: Number.parseFloat(line.slice(38, 46)), z: Number.parseFloat(line.slice(46, 54)),
-    });
-  }
-  return atoms.length ? toCifString(atoms, { dataBlockName: 'refold' }) : null;
+  return pdbToCif(pdb, { chains, backboneOnly: true });
 }
 
 /** One line for a refold result: RMSD to the design, then the model's own confidence. */

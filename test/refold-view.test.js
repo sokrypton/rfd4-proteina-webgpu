@@ -43,3 +43,17 @@ test('describeRefold reads RMSD and confidence', () => {
   const line = describeRefold('openbind0', { rmsd: 0.331, confidence: { meanPlddt: 87.04, ptm: 0.851, iptm: 0.703 } }, ['B']);
   assert.equal(line, 'OpenBind-0 refold: 0.33 Å RMSD (chain B) · pLDDT 87 · pTM 0.85 · ipTM 0.70');
 });
+
+test('pdbToCif keeps every chain, ligands and pLDDT when asked for the whole refold', async () => {
+  const { pdbToCif } = await import('../web/refold-view.js');
+  const pdb = [
+    'ATOM      1  CA  ALA A   1       1.000   0.000   0.000  1.00 91.50           C',
+    'ATOM      2  CB  ALA A   1       2.000   0.000   0.000  1.00 91.50           C',
+    'ATOM      3  CA  LEU B   1       3.000   0.000   0.000  1.00 64.25           C',
+    'HETATM    4  C1  SAM C   1       4.000   0.000   0.000  1.00 80.00           C',
+  ].join('\n');
+  const rows = pdbToCif(pdb).split('\n').filter((l) => /^(ATOM|HETATM) /.test(l));
+  assert.equal(rows.length, 4);
+  assert.ok(rows[0].includes(' 91.5 '));
+  assert.ok(rows[3].startsWith('HETATM'));
+});

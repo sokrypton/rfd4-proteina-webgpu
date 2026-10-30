@@ -36,7 +36,7 @@ import {
   installStudioApiInterceptor,
 } from './studio-api.js';
 import { DesignPanel } from './design-panel.js';
-import { REFOLD_MODELS, describeRefold, designedChains, refoldOverlayCif } from './refold-view.js';
+import { REFOLD_MODELS, describeRefold, designedChains, pdbToCif, refoldOverlayCif } from './refold-view.js';
 
 installStudioApiInterceptor();
 
@@ -989,7 +989,7 @@ class Rfd4pStudioApp {
   }
 
   async _downloadAllDesigns() {
-    const designs = [...this.generatedViews.values()].filter((v) => !v.isInput && v.cif);
+    const designs = [...this.generatedViews.values()].filter((v) => !v.isInput && !v.isRefold && v.cif);
     if (designs.length === 0) {
       if (this.lastResult?.cif) {
         this._downloadText(this.lastResult.cif, 'design-1.cif', 'chemical/x-mmcif');
@@ -1015,6 +1015,7 @@ class Rfd4pStudioApp {
 
   _renderDesignResultsRow(choices, selectedSessionId) {
     if (!this.els.designResultsRow || !this.els.designViewRadios) return;
+    this.viewChoices = choices;
     this.els.designViewRadios.innerHTML = '';
     for (const choice of choices) {
       const label = document.createElement('label');
@@ -1029,7 +1030,7 @@ class Rfd4pStudioApp {
       label.append(input, span);
       this.els.designViewRadios.appendChild(label);
     }
-    const designCount = choices.filter((c) => c.label !== 'Input').length;
+    const designCount = choices.filter((c) => c.label !== 'Input' && !this.generatedViews.get(c.sessionId)?.isRefold).length;
     if (this.els.downloadsBox) {
       this.els.downloadsBox.hidden = designCount <= 1;
     }
@@ -1040,7 +1041,7 @@ class Rfd4pStudioApp {
   /** The Refold row follows the selected view: shown for a design, with that design's last refold result. */
   _syncRefoldUi() {
     const view = this.generatedViews.get(this.studioSessionId);
-    const isDesign = Boolean(view && !view.isInput && view.pdb && !this.noWebGpu);
+    const isDesign = Boolean(view && !view.isInput && !view.isRefold && view.pdb && !this.noWebGpu);
     if (this.els.refoldBox) this.els.refoldBox.hidden = !isDesign;
     if (this.els.refoldBtn) this.els.refoldBtn.disabled = Boolean(this.refoldAbort);
     if (this.els.refoldResult && this.refoldSid !== this.studioSessionId) {
@@ -1076,11 +1077,36 @@ class Rfd4pStudioApp {
     return null;
   }
 
+  /**
+   * The whole refold as its own view beside its design (cartoon, ligands, pLDDT in B), in the design's frame, so
+   * switching views flips between the two. A later refold of the same design replaces it.
+   */
+  _addRefoldView(designSid, view, refoldPdb, model) {
+    const cif = pdbToCif(refoldPdb);
+    const choices = this.viewChoices ?? [];
+    const designChoice = choices.find((c) => c.sessionId === designSid);
+    if (!cif || !designChoice) return;
+    const label = designChoice.label.replace(/^Design/, 'Refold');
+    const { sessionId } = getSharedStudioStore().createSession(cif, `${view.filenameStem ?? 'design'}-refold.cif`);
+    this.generatedViews.set(sessionId, {
+      label: `${REFOLD_MODELS[model] ?? model} refold of ${designChoice.label}`,
+      cif, pdb: refoldPdb, isInput: false, isRefold: true, hasTrajectory: false, overlays: null,
+      filenameStem: `${view.filenameStem ?? 'design'}-refold-${model}`,
+    });
+    const previous = view.refoldSessionId;
+    view.refoldSessionId = sessionId;
+    if (previous) this.generatedViews.delete(previous);
+    const without = choices.filter((c) => c.sessionId !== previous);
+    const at = without.findIndex((c) => c.sessionId === designSid) + 1;
+    const choice = { label, title: `${REFOLD_MODELS[model] ?? model} refold of ${designChoice.label}`, sessionId };
+    this._renderDesignResultsRow([...without.slice(0, at), choice, ...without.slice(at)], this.studioSessionId);
+  }
+
   /** Refold the selected design with the chosen model, then report and overlay the result on it. */
   async _refoldSelected() {
     const sid = this.studioSessionId;
     const view = this.generatedViews.get(sid);
-    if (!view || view.isInput || !view.pdb || this.refoldAbort) return;
+    if (!view || view.isInput || view.isRefold || !view.pdb || this.refoldAbort) return;
     const model = await this._agreeRefoldTerms(this.els.refoldModel?.value ?? 'openbind0');
     if (!model) return;
     const name = REFOLD_MODELS[model] ?? model;
@@ -1109,6 +1135,7 @@ class Rfd4pStudioApp {
       const cif = refoldOverlayCif(result.refold, view.designedChains);
       view.overlays = { ...view.overlays, refold: cif ? { cif, label: `${name} refold` } : null };
       if (this.studioSessionId === sid) await showDesignOverlays(view.overlays);
+      this._addRefoldView(sid, view, result.refold, model);
     } catch (err) {
       view.refoldText = abort.signal.aborted ? 'Refold stopped.' : `Refold failed: ${err?.message ?? err}`;
       view.refoldError = !abort.signal.aborted;
