@@ -7,8 +7,8 @@ import { toCifString } from '../shared/rfd4p/output.js';
 
 /** Models offered for a refold, in menu order. AlphaFold 3's parameters carry Google DeepMind's terms. */
 export const REFOLD_MODELS = {
-  openbind0: 'OpenBind-0',
   af3: 'AlphaFold 3',
+  openbind0: 'OpenBind-0',
 };
 
 /** Models whose parameters need the reader's agreement first, with where the terms are. */

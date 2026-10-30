@@ -1120,7 +1120,7 @@ class Rfd4pStudioApp {
     const sid = this.studioSessionId;
     const view = this.generatedViews.get(sid);
     if (!view || view.isInput || view.isRefold || !view.pdb || this.refoldAbort) return;
-    const model = await this._agreeRefoldTerms(this.els.refoldModel?.value ?? 'openbind0');
+    const model = await this._agreeRefoldTerms(this.els.refoldModel?.value ?? 'af3');
     if (!model) return;
     const name = REFOLD_MODELS[model] ?? model;
     const abort = new AbortController();
