@@ -86,14 +86,15 @@ export function pdbToCif(pdb, { chains = null, backboneOnly = false, heteroOnly 
 }
 
 /**
- * The refold's designed chains as a CIF for a cartoon overlay over the design (Studio's `setOverlay` with
- * `representation: 'cartoon'`). Templated chains are left out, since they sit on the design's own by construction.
+ * The refold's polymer chains as a CIF for a cartoon overlay over the design (Studio's `setOverlay` with
+ * `representation: 'cartoon'`): every chain, the target as well as the binder, so where the refold put each one is
+ * on screen. A templated target sits on the design's own, and a refold that moved it shows that too. Ligands are a
+ * separate overlay (`refoldLigandCif`), since a cartoon draws polymers only.
  *
  * @param {string} pdb the refold, already in the design's frame and chain letters
- * @param {string[]} chains
  */
-export function refoldOverlayCif(pdb, chains) {
-  return pdbToCif(pdb, { chains });
+export function refoldOverlayCif(pdb) {
+  return pdbToCif(pdb);
 }
 
 /**

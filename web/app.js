@@ -1147,7 +1147,7 @@ class Rfd4pStudioApp {
       });
       view.refoldText = describeRefold(model, result, view.designedChains, view.partialTemplates ?? []);
       view.refoldError = false;
-      const cif = refoldOverlayCif(result.refold, view.designedChains);
+      const cif = refoldOverlayCif(result.refold);
       const ligandCif = refoldLigandCif(result.refold);
       view.overlays = { ...view.overlays, refold: cif ? { cif, ligandCif, label: `${name} refold` } : null };
       if (this.studioSessionId === sid) await showDesignOverlays(view.overlays);
