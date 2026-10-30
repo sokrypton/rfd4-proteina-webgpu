@@ -1,0 +1,56 @@
+name: CI
+
+# The GPU gates (tools/gpu/*) need a real WebGPU adapter and are run locally; see SPEED-HANDOFF.md section 7.
+# Everything here runs without a GPU, so it can gate every push. Two gates rotted unnoticed for five days
+# because nothing ran automatically, which is what this exists to stop.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # package.json requires >= 22; check the floor as well as current, since the test script branches on
+        # whether this node has Float16Array.
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ matrix.node }}
+      # No dependencies and no lockfile: the repo ships plain ES modules, so there is nothing to install.
+      - run: npm test
+
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+
+      - name: Every shipped module parses
+        run: git ls-files 'web/*.js' 'shared/**/*.js' 'webgpu/**/*.js' 'cpu/**/*.js' 'tools/**/*.mjs' 'tools/gpu/*.js' | xargs -n1 node --check
+
+      - name: Page integrity (assets resolve, Studio bridge is real)
+        run: node tools/check-page-integrity.mjs
+
+      # GitHub Pages serves max-age=600, so an unstamped module edit can be run against a cached older copy of a
+      # module it imports. The stamps must therefore be committed, not generated at deploy time.
+      - name: Module cache-busting stamps are current
+        run: |
+          npm run stamp
+          git diff --exit-code -- index.html \
+            || { echo '::error::index.html is not stamped for the current modules. Run `npm run stamp` and commit.'; exit 1; }
