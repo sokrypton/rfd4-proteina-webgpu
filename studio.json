@@ -3,10 +3,10 @@
   "_override": "While `override` is set, assets/ and index.html are built from that unreleased Studio commit, not the release below: `npm run build:studio` refuses to run, and the site is rebuilt with `npm run build:studio -- --from <bundle built from override.commit>` (packages/web: pnpm install && pnpm build, then --from packages/web/dist). Remove `override` once a release contains the change, then build normally.",
   "override": {
     "repository": "sokrypton/atomworks-studio",
-    "branch": "overlay-representation",
-    "commit": "cf8aa98",
+    "branch": "live-frame-cartoon",
+    "commit": "c1e30a8",
     "pullRequest": "https://github.com/RosettaCommons/atomworks-studio/pull/29",
-    "why": "setOverlay({ representation: 'cartoon' }), used for the refold overlay"
+    "why": "setOverlay({ representation: 'cartoon' }) for the refold overlay (cf8aa98, RosettaCommons/atomworks-studio#29), and live frames drawn as cartoon plus ligands (c1e30a8)"
   },
   "version": "0.0.6",
   "repository": "RosettaCommons/atomworks-studio",
