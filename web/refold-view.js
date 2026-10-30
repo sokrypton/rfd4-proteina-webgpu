@@ -165,8 +165,46 @@ export function refoldMotifSideChainAtoms(pdb, slots) {
   return atoms;
 }
 
+/**
+ * Designed chains worth a partial template: those whose residues the run mostly held to the input's coordinates
+ * (an antibody's framework around redesigned CDR loops, a protein with a few loops redesigned). The template covers
+ * the held residues only, so the redesigned ones and the docking are still the refold's to find. A chain with only a
+ * small motif held is left free, since templating a motif would hand a motif-scaffolding refold its answer.
+ *
+ * A residue is held when the run conditioned it on the input's geometry: absolute coordinates (`crd`, a motif or a
+ * target) or internal coordinates (an antibody framework, whose shape is fixed and whose placement is not). Both
+ * set `crdSrcComponent`.
+ *
+ * @param {Array<{chainId: string, resId: number, isHetero?: boolean, crd?: number[], crdSrcComponent?: string}>}
+ *   designAtoms the design's atoms
+ * @param {string[]} chains the designed chains
+ * @param {number} [minFraction] the share of a chain that must be held
+ * @returns {{chain: string, residues: number[], of: number}[]} held residues as places along the chain
+ */
+export function partialTemplates(designAtoms, chains, minFraction = 0.5) {
+  const wanted = new Set(chains);
+  const residues = new Map();
+  for (const a of designAtoms) {
+    if (a.isHetero || !wanted.has(a.chainId)) continue;
+    if (!residues.has(a.chainId)) residues.set(a.chainId, new Map());
+    const chain = residues.get(a.chainId);
+    if (!chain.has(a.resId)) chain.set(a.resId, { index: chain.size, held: false });
+    if ((a.crd && Number.isFinite(a.crd[0])) || (a.crdSrcComponent && a.crdSrcComponent !== '.')) {
+      chain.get(a.resId).held = true;
+    }
+  }
+  const out = [];
+  for (const [chain, byResidue] of residues) {
+    const held = [...byResidue.values()].filter((r) => r.held).map((r) => r.index);
+    if (held.length >= minFraction * byResidue.size && held.length < byResidue.size) {
+      out.push({ chain, residues: held, of: byResidue.size });
+    }
+  }
+  return out;
+}
+
 /** One line for a refold result: RMSD to the design, then the model's own confidence. */
-export function describeRefold(model, result, chains) {
+export function describeRefold(model, result, chains, partial = []) {
   const name = REFOLD_MODELS[model] ?? model;
   const c = result.confidence ?? {};
   const parts = [];
@@ -176,5 +214,6 @@ export function describeRefold(model, result, chains) {
   if (Number.isFinite(c.meanPlddt)) parts.push(`pLDDT ${c.meanPlddt.toFixed(0)}`);
   if (Number.isFinite(c.ptm)) parts.push(`pTM ${c.ptm.toFixed(2)}`);
   if (Number.isFinite(c.iptm)) parts.push(`ipTM ${c.iptm.toFixed(2)}`);
+  for (const p of partial) parts.push(`chain ${p.chain} templated on ${p.residues.length}/${p.of} kept residues`);
   return `${name} refold: ${parts.join(' · ') || 'done'}`;
 }

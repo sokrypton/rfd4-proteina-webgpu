@@ -1,7 +1,7 @@
 {
   "_comment": "The LocalFold commit whose refold code this site carries. tools/sync-localfold.mjs copies the import closure of `entries` at exactly this commit into vendor/localfold-<commit>/ and writes web/localfold.js to re-export it. Nothing under vendor/ is edited by hand.",
   "repository": "sokrypton/localfold",
-  "commit": "8798eccd",
+  "commit": "33e234d3",
   "entries": [
     "web/validate-design.js"
   ]

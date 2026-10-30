@@ -37,7 +37,8 @@ import {
 } from './studio-api.js';
 import { DesignPanel } from './design-panel.js';
 import {
-  REFOLD_MODELS, describeRefold, designedChains, motifSlots, pdbToCif, refoldLigandCif, refoldMotifSideChainAtoms,
+  REFOLD_MODELS, describeRefold, designedChains, motifSlots, partialTemplates, pdbToCif, refoldLigandCif,
+  refoldMotifSideChainAtoms,
   refoldOverlayCif,
 } from './refold-view.js';
 
@@ -1141,9 +1142,10 @@ class Rfd4pStudioApp {
       const { refoldDesign } = await import('./localfold.js');
       const result = await refoldDesign({
         pdb: view.pdb, chain: view.designedChains, model, device: this.gpuDevice, seed: 0, signal: abort.signal,
+        partial: view.partialTemplates ?? [],
         status: (text) => show(text.replace(/^refolding with \S+/, `Refolding with ${name}`)),
       });
-      view.refoldText = describeRefold(model, result, view.designedChains);
+      view.refoldText = describeRefold(model, result, view.designedChains, view.partialTemplates ?? []);
       view.refoldError = false;
       const cif = refoldOverlayCif(result.refold, view.designedChains);
       const ligandCif = refoldLigandCif(result.refold);
@@ -1428,6 +1430,7 @@ class Rfd4pStudioApp {
         const { sessionId: designSessionId } = store.createSession(result.cif, designName, {
           trajectoryCif,
         });
+        const designed = designedChains(atoms, result.structure?.atoms ?? []);
         this.generatedViews.set(designSessionId, {
           label: `Design ${sampleIdx + 1} · seed ${sampleSeed}`,
           cif: result.cif,
@@ -1436,7 +1439,9 @@ class Rfd4pStudioApp {
           hasTrajectory: Boolean(trajectoryCif),
           filenameStem: `design-${sampleIdx + 1}-seed${sampleSeed}`,
           overlays,
-          designedChains: designedChains(atoms, result.structure?.atoms ?? []),
+          designedChains: designed,
+          // Designed chains mostly held to the input (an antibody framework): templated on those residues in a refold.
+          partialTemplates: partialTemplates(result.structure?.atoms ?? [], designed),
           // Where the motif residues are, so a refold's view can show its side chains there too.
           motifSlots: motifSlots(result.structure?.atoms ?? [], motifSideChainAtoms(result.structure?.atoms ?? [], unmodelled)),
           refoldText: null,

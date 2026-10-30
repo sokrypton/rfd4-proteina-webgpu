@@ -86,3 +86,19 @@ test('motif side chains: positions from the design pick the same residues in a r
   assert.ok(atoms.every((a) => a.isHetero));
 });
 
+test('partialTemplates: a mostly held chain is templated on its held residues, a small motif is not', async () => {
+  const { partialTemplates } = await import('../web/refold-view.js');
+  const atom = (chainId, resId, held) => ({ chainId, resId, ...(held ? { crd: [1, 2, 3] } : {}) });
+  // H: 8 residues, 6 held (framework), 2 redesigned (a loop). A: 8 residues, 2 held (a motif).
+  const design = [
+    ...[1, 2, 3, 4, 5, 6, 7, 8].map((r) => atom('H', r, ![4, 5].includes(r))),
+    ...[1, 2, 3, 4, 5, 6, 7, 8].map((r) => atom('A', r, [2, 7].includes(r))),
+  ];
+  assert.deepEqual(partialTemplates(design, ['H', 'A']), [{ chain: 'H', residues: [0, 1, 2, 5, 6, 7], of: 8 }]);
+  // internal-coordinate conditioning (an antibody framework) counts as held too
+  const framework = [1, 2, 3, 4].map((r) => ({ chainId: 'H', resId: r, ...(r !== 3 ? { crdSrcComponent: 'InternalCoordinate_1' } : {}) }));
+  assert.deepEqual(partialTemplates(framework, ['H']), [{ chain: 'H', residues: [0, 1, 3], of: 4 }]);
+  // a fully held chain is not partial (it would not have been designed)
+  assert.deepEqual(partialTemplates(design.map((a) => ({ ...a, crd: [0, 0, 0] })), ['H']), []);
+});
+
