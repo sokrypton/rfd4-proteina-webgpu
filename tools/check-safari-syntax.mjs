@@ -17,7 +17,7 @@ if (!existsSync(JSC)) {
 }
 const files = [
   ...readdirSync("assets").filter((f) => f.endsWith(".js")).map((f) => join("assets", f)),
-  ...execFileSync("git", ["ls-files", "web/*.js", "shared/*.js", "webgpu/*.js", "cpu/*.js"], { encoding: "utf8" })
+  ...execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "web/*.js", "shared/*.js", "webgpu/*.js", "cpu/*.js", "vendor/*.js"], { encoding: "utf8" })
     .split("\n").filter(Boolean),
 ];
 const script = join(mkdtempSync(join(tmpdir(), "safari-syntax-")), "check.js");

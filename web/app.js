@@ -36,6 +36,7 @@ import {
   installStudioApiInterceptor,
 } from './studio-api.js';
 import { DesignPanel } from './design-panel.js';
+import { REFOLD_MODELS, describeRefold, designedChains, refoldOverlayCif } from './refold-view.js';
 
 installStudioApiInterceptor();
 
@@ -289,6 +290,11 @@ async function showDesignOverlays(overlays) {
     label: 'Motif (reference)', alpha: 0.35, color: 0xe2e8f0, sizeAspectRatio: 0.6,
   });
   await window.atomworksStudio?.setOverlay('sideChains', overlays?.sideChains ?? null, { label: 'Motif side chains' });
+  // A refold's designed chains, as a thin magenta backbone trace over the design (web/refold-view.js); magenta is in
+  // no chain colour, so it reads against any binder.
+  await window.atomworksStudio?.setOverlay('refold', overlays?.refold?.cif ?? null, {
+    label: overlays?.refold?.label ?? 'Refold', color: 0xe040fb, alpha: 0.9, sizeAspectRatio: 0.35,
+  });
 }
 
 /** `_entity` loop for `atoms`: the given entity ids are `non-polymer` (drawn as sticks), the rest as before. */
@@ -503,6 +509,11 @@ class Rfd4pStudioApp {
       downloadsBox: document.getElementById('downloads'),
       downloadCifBtn: document.getElementById('download-cif-btn'),
       downloadAllBtn: document.getElementById('download-all-btn'),
+      refoldBox: document.getElementById('rfd4p-refold'),
+      refoldModel: document.getElementById('rfd4p-refold-model'),
+      refoldBtn: document.getElementById('rfd4p-refold-btn'),
+      refoldResult: document.getElementById('rfd4p-refold-result'),
+      refoldTerms: document.getElementById('rfd4p-refold-terms'),
       webgpuBadge: document.getElementById('webgpu-badge'),
     };
   }
@@ -643,6 +654,7 @@ class Rfd4pStudioApp {
         const sid = event.data.session_id;
         if (sid) {
           this.studioSessionId = sid;
+          this._syncRefoldUi();
           const isExplicitChange = event.data.type === 'changed' || event.data.type === 'example';
           if (isExplicitChange || !this.generatedViews.has(sid) || this.generatedViews.get(sid)?.isInput) {
             const previousInput = this.inputSessionId;
@@ -950,6 +962,10 @@ class Rfd4pStudioApp {
       };
     }
 
+    if (this.els.refoldBtn) {
+      this.els.refoldBtn.onclick = () => { void this._refoldSelected(); };
+    }
+
     if (this.els.downloadAllBtn) {
       this.els.downloadAllBtn.onclick = async () => {
         await this._downloadAllDesigns();
@@ -962,6 +978,7 @@ class Rfd4pStudioApp {
         if (input && input.name === 'design-view-radio' && input.checked) {
           const sid = input.value;
           this.studioSessionId = sid;
+          this._syncRefoldUi();
           const viewInfo = this.generatedViews.get(sid);
           this._navigateStudioToSession(sid, {
             withTrajectory: Boolean(viewInfo?.hasTrajectory),
@@ -1017,6 +1034,92 @@ class Rfd4pStudioApp {
       this.els.downloadsBox.hidden = designCount <= 1;
     }
     this.els.designResultsRow.hidden = false;
+    this._syncRefoldUi();
+  }
+
+  /** The Refold row follows the selected view: shown for a design, with that design's last refold result. */
+  _syncRefoldUi() {
+    const view = this.generatedViews.get(this.studioSessionId);
+    const isDesign = Boolean(view && !view.isInput && view.pdb && !this.noWebGpu);
+    if (this.els.refoldBox) this.els.refoldBox.hidden = !isDesign;
+    if (this.els.refoldBtn) this.els.refoldBtn.disabled = Boolean(this.refoldAbort);
+    if (this.els.refoldResult && this.refoldSid !== this.studioSessionId) {
+      const text = this.refoldAbort ? 'Another design is refolding.' : view?.refoldText;
+      this.els.refoldResult.textContent = text ?? '';
+      this.els.refoldResult.classList.toggle('error', !this.refoldAbort && Boolean(view?.refoldError));
+      this.els.refoldResult.hidden = !text;
+    }
+  }
+
+  /**
+   * AlphaFold 3's parameters are Google DeepMind's, for non-commercial use under a prohibited-use policy: ask once per
+   * browser, and offer OpenBind-0 (same architecture, Apache 2.0) as the way past rather than only through.
+   * @returns {Promise<string|null>} the model to refold with, or null to cancel
+   */
+  async _agreeRefoldTerms(model) {
+    const KEY = 'rfd4p.refoldTerms.af3';
+    if (model !== 'af3') return model;
+    try { if (localStorage.getItem(KEY) === 'accepted') return model; } catch { /* storage blocked: ask */ }
+    const dialog = this.els.refoldTerms;
+    if (!dialog?.showModal) return null;
+    dialog.returnValue = '';
+    dialog.showModal();
+    await new Promise((resolve) => dialog.addEventListener('close', resolve, { once: true }));
+    if (dialog.returnValue === 'accept') {
+      try { localStorage.setItem(KEY, 'accepted'); } catch { /* asked again next time */ }
+      return 'af3';
+    }
+    if (dialog.returnValue === 'switch') {
+      if (this.els.refoldModel) this.els.refoldModel.value = 'openbind0';
+      return 'openbind0';
+    }
+    return null;
+  }
+
+  /** Refold the selected design with the chosen model, then report and overlay the result on it. */
+  async _refoldSelected() {
+    const sid = this.studioSessionId;
+    const view = this.generatedViews.get(sid);
+    if (!view || view.isInput || !view.pdb || this.refoldAbort) return;
+    const model = await this._agreeRefoldTerms(this.els.refoldModel?.value ?? 'openbind0');
+    if (!model) return;
+    const name = REFOLD_MODELS[model] ?? model;
+    const abort = new AbortController();
+    this.refoldAbort = abort;
+    this.refoldSid = sid;
+    const show = (text, isError = false) => {
+      if (this.studioSessionId !== sid || !this.els.refoldResult) return;
+      this.els.refoldResult.textContent = text;
+      this.els.refoldResult.classList.toggle('error', isError);
+      this.els.refoldResult.hidden = false;
+    };
+    this._syncRefoldUi();
+    show(`Refolding with ${name}...`);
+    try {
+      if (!this.gpuDevice) await this._initWebGpu();
+      if (!this.gpuDevice) throw new Error('WebGPU is not available');
+      // ~6 MB of LocalFold code (tools/sync-localfold.mjs), loaded on the first refold only.
+      const { refoldDesign } = await import('./localfold.js');
+      const result = await refoldDesign({
+        pdb: view.pdb, chain: view.designedChains, model, device: this.gpuDevice, seed: 0, signal: abort.signal,
+        status: (text) => show(text.replace(/^refolding with \S+/, `Refolding with ${name}`)),
+      });
+      view.refoldText = describeRefold(model, result, view.designedChains);
+      view.refoldError = false;
+      const cif = refoldOverlayCif(result.refold, view.designedChains);
+      view.overlays = { ...view.overlays, refold: cif ? { cif, label: `${name} refold` } : null };
+      if (this.studioSessionId === sid) await showDesignOverlays(view.overlays);
+    } catch (err) {
+      view.refoldText = abort.signal.aborted ? 'Refold stopped.' : `Refold failed: ${err?.message ?? err}`;
+      view.refoldError = !abort.signal.aborted;
+      if (!abort.signal.aborted) console.error('Refold failed:', err);
+    } finally {
+      if (this.refoldAbort === abort) {
+        this.refoldAbort = null;
+        this.refoldSid = null;
+      }
+      this._syncRefoldUi();
+    }
   }
 
   _downloadText(text, filename, mime) {
@@ -1034,6 +1137,8 @@ class Rfd4pStudioApp {
       this.setStatus(NO_WEBGPU_MESSAGE, true);
       return;
     }
+    // A refold shares the GPU and shows designs this run is about to replace.
+    this.refoldAbort?.abort();
     if (this.activeAbortController) {
       this.activeAbortController.abort();
     }
@@ -1290,6 +1395,8 @@ class Rfd4pStudioApp {
           hasTrajectory: Boolean(trajectoryCif),
           filenameStem: `design-${sampleIdx + 1}-seed${sampleSeed}`,
           overlays,
+          designedChains: designedChains(atoms, result.structure?.atoms ?? []),
+          refoldText: null,
         });
         viewChoices.push({ label: `Design ${sampleIdx + 1}`, title: `seed ${sampleSeed}`, sessionId: designSessionId });
       }
@@ -1299,8 +1406,8 @@ class Rfd4pStudioApp {
 
       const firstDesignChoice = viewChoices.find((c) => c.label === 'Design 1');
       if (firstDesignChoice) {
-        this._renderDesignResultsRow(viewChoices, firstDesignChoice.sessionId);
         this.studioSessionId = firstDesignChoice.sessionId;
+        this._renderDesignResultsRow(viewChoices, firstDesignChoice.sessionId);
         const viewInfo = this.generatedViews.get(firstDesignChoice.sessionId);
         await this._navigateStudioToSession(firstDesignChoice.sessionId, {
           withTrajectory: Boolean(viewInfo?.hasTrajectory),

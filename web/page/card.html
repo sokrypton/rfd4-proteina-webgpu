@@ -120,6 +120,36 @@
                     <legend>View</legend>
                     <div id="design-view-radios" class="rfd4p-view-radios" role="radiogroup" aria-label="View"></div>
                 </fieldset>
+                <div id="rfd4p-refold" class="rfd4p-refold" hidden>
+                    <div class="rfd4p-refold-row">
+                        <label class="rfd4p-refold-label" for="rfd4p-refold-model">Refold with</label>
+                        <select id="rfd4p-refold-model" class="rfd4p-refold-model">
+                            <option value="openbind0">OpenBind-0</option>
+                            <option value="af3">AlphaFold 3</option>
+                        </select>
+                        <button id="rfd4p-refold-btn" class="secondary compact" type="button"
+                                title="Fold this design's sequence again with a structure prediction model and overlay the result">Refold</button>
+                    </div>
+                    <p id="rfd4p-refold-result" class="rfd4p-refold-result" aria-live="polite" hidden></p>
+                </div>
+                <dialog id="rfd4p-refold-terms" class="rfd4p-refold-terms" aria-labelledby="rfd4p-refold-terms-title">
+                    <form method="dialog">
+                        <h2 id="rfd4p-refold-terms-title">AlphaFold 3 model parameters</h2>
+                        <p>These are Google DeepMind's parameters. They are not available for commercial use and carry a
+                            prohibited-use policy.</p>
+                        <p><strong>OpenBind-0</strong> runs the same architecture under Apache 2.0. It is a different model.</p>
+                        <p class="rfd4p-refold-terms-links">
+                            <a href="https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md" target="_blank" rel="noopener noreferrer">AlphaFold 3 weights terms</a>
+                            &middot;
+                            <a href="https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_PROHIBITED_USE_POLICY.md" target="_blank" rel="noopener noreferrer">prohibited use policy</a>
+                        </p>
+                        <div class="button-row">
+                            <button value="switch" class="primary compact">Use OpenBind-0</button>
+                            <button value="accept" class="secondary compact">I agree, use AlphaFold 3</button>
+                            <button value="cancel" class="secondary compact">Cancel</button>
+                        </div>
+                    </form>
+                </dialog>
                 <div class="button-row" id="downloads" hidden>
                     <button id="download-cif-btn" class="secondary compact" type="button" hidden>Download CIF</button>
                     <button id="download-all-btn" class="secondary compact" type="button">Download all (.zip)</button>

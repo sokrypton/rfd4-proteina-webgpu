@@ -961,3 +961,66 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
 
 /* Studio's own example cards: this site drives the task choice from the RFD4-Proteina card instead. */
 #example-cards { display: none; }
+
+/* Refold a finished design (web/refold-view.js). */
+.rfd4p-refold {
+  display: grid;
+  gap: 4px;
+}
+
+.rfd4p-refold-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rfd4p-refold-label {
+  font-size: 11.5px;
+  color: var(--text-muted, #b1b3b9);
+  white-space: nowrap;
+}
+
+.rfd4p-refold-model {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rfd4p-refold-result {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.rfd4p-refold-result.error {
+  color: var(--danger, #d55e5e);
+}
+
+.rfd4p-refold-terms {
+  max-width: min(440px, calc(100vw - 32px));
+  border: 1px solid var(--border, #383a3f);
+  border-radius: 8px;
+  background: var(--surface-panel, #222326);
+  color: inherit;
+  padding: 16px;
+}
+
+.rfd4p-refold-terms::backdrop {
+  background: rgb(0 0 0 / 0.5);
+}
+
+.rfd4p-refold-terms h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.rfd4p-refold-terms p {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.rfd4p-refold-terms .button-row {
+  flex-wrap: wrap;
+  margin-top: 12px;
+}

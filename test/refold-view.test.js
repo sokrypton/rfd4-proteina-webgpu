@@ -1,0 +1,45 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { describeRefold, designedChains, refoldOverlayCif } from '../web/refold-view.js';
+
+const columns = (rows) => ({
+  chain_id: rows.map((r) => r[0]), res_id: rows.map((r) => r[1]), res_name: rows.map((r) => r[2]),
+  hetero: rows.map((r) => Boolean(r[3])),
+});
+const records = (rows) => rows.map(([chainId, resId, resName, isHetero]) => ({ chainId, resId, resName, isHetero }));
+
+test('designedChains: a kept target is templated, a new or changed chain is designed', () => {
+  const input = columns([['A', 1, 'ALA'], ['A', 2, 'GLY'], ['C', 1, 'SAM', true]]);
+  const result = records([['A', 1, 'ALA'], ['A', 1, 'ALA'], ['A', 2, 'GLY'], ['B', 1, 'LEU'], ['B', 2, 'LYS'],
+    ['C', 1, 'SAM', true]]);
+  assert.deepEqual(designedChains(input, result), ['B']);
+
+  const redesigned = records([['A', 1, 'SER'], ['A', 2, 'GLY'], ['B', 1, 'LEU']]);
+  assert.deepEqual(designedChains(input, redesigned), ['A', 'B']);
+});
+
+test('designedChains: nothing changed means every polymer chain is designed (fitted on itself)', () => {
+  const input = columns([['A', 1, 'ALA'], ['A', 2, 'GLY']]);
+  assert.deepEqual(designedChains(input, records([['A', 1, 'ALA'], ['A', 2, 'GLY']])), ['A']);
+});
+
+test('refoldOverlayCif keeps only the designed chains\' backbone', () => {
+  const atom = (serial, name, res, chain, resId, x) => `ATOM  ${String(serial).padStart(5)} ${name.padEnd(4)} ${res} ${chain}${String(resId).padStart(4)}    ${x.toFixed(3).padStart(8)}${'0.000'.padStart(8)}${'0.000'.padStart(8)}  1.00 90.00           ${name[0]}`;
+  const pdb = [
+    atom(1, 'N', 'ALA', 'A', 1, 1), atom(2, 'CA', 'ALA', 'A', 1, 2),
+    atom(3, 'N', 'LEU', 'B', 1, 3), atom(4, 'CA', 'LEU', 'B', 1, 4), atom(5, 'CB', 'LEU', 'B', 1, 5),
+    atom(6, 'C', 'LEU', 'B', 1, 6), atom(7, 'O', 'LEU', 'B', 1, 7),
+  ].join('\n');
+  const cif = refoldOverlayCif(pdb, ['B']);
+  const rows = cif.split('\n').filter((l) => l.startsWith('ATOM'));
+  assert.equal(rows.length, 4);
+  assert.ok(rows.every((l) => / LEU B /.test(l)));
+  assert.ok(!rows.some((l) => / CB /.test(l)));
+  assert.equal(refoldOverlayCif(pdb, ['Z']), null);
+});
+
+test('describeRefold reads RMSD and confidence', () => {
+  const line = describeRefold('openbind0', { rmsd: 0.331, confidence: { meanPlddt: 87.04, ptm: 0.851, iptm: 0.703 } }, ['B']);
+  assert.equal(line, 'OpenBind-0 refold: 0.33 Å RMSD (chain B) · pLDDT 87 · pTM 0.85 · ipTM 0.70');
+});

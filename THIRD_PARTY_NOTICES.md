@@ -75,3 +75,13 @@ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 `weights/int8/` holds a block-64 INT8 quantization (by `tools/export_rfd4p_model.py`) of the
 [nvidia/RFD4-Proteina](https://huggingface.co/nvidia/RFD4-Proteina) checkpoint, which its model card releases under the
 BSD-3-Clause license. See the model card for the authors' terms and citation.
+
+## LocalFold
+
+`vendor/localfold-<commit>/` is copied unmodified from [LocalFold](https://github.com/sokrypton/localfold) at the commit
+pinned in `localfold.json`, by `tools/sync-localfold.mjs`; its `LICENSE` (Beer-Ware, Sergey Ovchinnikov) is copied
+with it. The refold models' parameters are not redistributed here: the page downloads them from Hugging Face
+(`sokrypton/localfold`) when a refold is asked for. OpenBind-0 is Apache 2.0. AlphaFold 3's parameters are Google
+DeepMind's, under their [weights terms of use](https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md)
+and [prohibited use policy](https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_PROHIBITED_USE_POLICY.md);
+the page asks the reader to accept them before using AlphaFold 3.
