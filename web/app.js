@@ -36,6 +36,7 @@ import {
   installStudioApiInterceptor,
 } from './studio-api.js';
 import { DesignPanel } from './design-panel.js';
+import { resultsFiles } from './results-zip.js';
 import {
   REFOLD_MODELS, describeRefold, designedChains, motifSlots, partialTemplates, pdbToCif, refoldLigandCif,
   refoldMotifSideChainAtoms,
@@ -977,7 +978,7 @@ class Rfd4pStudioApp {
 
     if (this.els.downloadAllBtn) {
       this.els.downloadAllBtn.onclick = async () => {
-        await this._downloadAllDesigns();
+        await this._saveResults();
       };
     }
 
@@ -997,29 +998,43 @@ class Rfd4pStudioApp {
     }
   }
 
-  async _downloadAllDesigns() {
-    const designs = [...this.generatedViews.values()].filter((v) => !v.isInput && !v.isRefold && v.cif);
-    if (designs.length === 0) {
-      if (this.lastResult?.cif) {
-        this._downloadText(this.lastResult.cif, 'design-1.cif', 'chemical/x-mmcif');
-      }
-      return;
-    }
-    if (designs.length === 1 || typeof window.JSZip !== 'function') {
-      this._downloadText(designs[0].cif, `${designs[0].filenameStem || 'design-1'}.cif`, 'chemical/x-mmcif');
+  /**
+   * "Save results (.zip)": the annotated input the run designed from, every design (final structure and trajectory),
+   * every refold made of them, and a summary (web/results-zip.js).
+   */
+  async _saveResults() {
+    const views = [...this.generatedViews.entries()];
+    const input = views.find(([, v]) => v.isInput)?.[1];
+    const store = getSharedStudioStore();
+    const designs = views.filter(([, v]) => !v.isInput && !v.isRefold && v.cif)
+      .map(([sid, v]) => ({
+        index: v.designIndex ?? 1, label: v.label, seed: v.seed, stepsRun: v.stepsRun, nsteps: v.nsteps,
+        cif: v.cif, pdb: v.pdb, trajectoryCif: store.getSession(sid)?.trajectoryCif ?? null,
+        designedChains: v.designedChains, refolds: v.refolds ?? [],
+      }))
+      .sort((a, b) => a.index - b.index);
+    if (!designs.length) return;
+    const files = resultsFiles({
+      input: input ? { cif: input.cif, name: input.name, revision: input.revision } : null,
+      designs, page: window.location.href.split('?')[0],
+    });
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
+    if (typeof window.JSZip !== 'function') {
+      // No zip library (offline, or its CDN blocked): the summary at least, rather than nothing.
+      const summary = files.find((f) => f.name === 'summary.json');
+      this._downloadText(summary.text, `rfd4p-results-${stamp}.json`, 'application/json');
       return;
     }
     const zip = new window.JSZip();
-    designs.forEach((d, idx) => {
-      zip.file(`design-${idx + 1}.cif`, d.cif);
-    });
-    const blob = await zip.generateAsync({ type: 'blob' });
+    const folder = zip.folder(`rfd4p-results-${stamp}`);
+    for (const f of files) folder.file(f.name, f.text);
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'designs.zip';
+    a.download = `rfd4p-results-${stamp}.zip`;
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
   _renderDesignResultsRow(choices, selectedSessionId) {
@@ -1041,7 +1056,7 @@ class Rfd4pStudioApp {
     }
     const designCount = choices.filter((c) => c.label !== 'Input' && !this.generatedViews.get(c.sessionId)?.isRefold).length;
     if (this.els.downloadsBox) {
-      this.els.downloadsBox.hidden = designCount <= 1;
+      this.els.downloadsBox.hidden = designCount < 1;
     }
     this.els.designResultsRow.hidden = false;
     this._syncRefoldUi();
@@ -1146,6 +1161,10 @@ class Rfd4pStudioApp {
         status: (text) => show(text.replace(/^refolding with \S+/, `Refolding with ${name}`)),
       });
       view.refoldText = describeRefold(model, result, view.designedChains, view.partialTemplates ?? []);
+      (view.refolds ??= []).push({
+        model, pdb: result.refold, cif: pdbToCif(result.refold), rmsd: result.rmsd, confidence: result.confidence,
+        templated: result.templated, partial: result.partial, text: view.refoldText,
+      });
       view.refoldError = false;
       const cif = refoldOverlayCif(result.refold);
       const ligandCif = refoldLigandCif(result.refold);
@@ -1267,6 +1286,8 @@ class Rfd4pStudioApp {
           isInput: true,
           hasTrajectory: false,
           filenameStem: 'input',
+          name: inputDoc.name ?? null,
+          revision: inputRevision,
         });
         viewChoices.push({ label: 'Input', sessionId: this.inputSessionId });
       }
@@ -1445,6 +1466,12 @@ class Rfd4pStudioApp {
           // Where the motif residues are, so a refold's view can show its side chains there too.
           motifSlots: motifSlots(result.structure?.atoms ?? [], motifSideChainAtoms(result.structure?.atoms ?? [], unmodelled)),
           refoldText: null,
+          // For "Save results": which design, how it ran, and every refold made of it.
+          designIndex: sampleIdx + 1,
+          seed: sampleSeed,
+          stepsRun: result.stepsRun ?? null,
+          nsteps: result.nsteps ?? nsteps,
+          refolds: [],
         });
         viewChoices.push({ label: `Design ${sampleIdx + 1}`, title: `seed ${sampleSeed}`, sessionId: designSessionId });
       }
