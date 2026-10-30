@@ -107,6 +107,64 @@ export function refoldLigandCif(pdb) {
   return pdbToCif(pdb, { heteroOnly: true, dataBlockName: 'refold_ligands' });
 }
 
+/**
+ * Where the design's motif residues sit, as positions along their chain's polymer residues. A refold numbers its
+ * residues its own way, but keeps each chain's residues in the design's order, which is how its chains are matched
+ * to the design's (LocalFold's `refoldOverlay`), so a position finds the same residue in both.
+ *
+ * @param {Array<{chainId: string, resId: number, isHetero?: boolean}>} designAtoms
+ * @param {Array<{chainId: string, resId: number}>} motifAtoms atoms of the motif residues (any of their atoms)
+ * @returns {{chain: string, index: number}[]}
+ */
+export function motifSlots(designAtoms, motifAtoms) {
+  const order = new Map();
+  for (const a of designAtoms) {
+    if (a.isHetero) continue;
+    if (!order.has(a.chainId)) order.set(a.chainId, new Map());
+    const residues = order.get(a.chainId);
+    if (!residues.has(a.resId)) residues.set(a.resId, residues.size);
+  }
+  const slots = new Map();
+  for (const a of motifAtoms) {
+    const index = order.get(a.chainId)?.get(a.resId);
+    if (index != null) slots.set(`${a.chainId}:${index}`, { chain: a.chainId, index });
+  }
+  return [...slots.values()];
+}
+
+const MAIN_CHAIN = new Set(['N', 'CA', 'C', 'O', 'OXT']);
+
+/**
+ * The refold's side chains (Cβ onward) at the motif positions from `motifSlots`, as records for a sticks overlay:
+ * how the refold puts the motif back, to compare with the reference motif drawn beside it.
+ *
+ * @param {string} pdb the refold, in the design's frame and chain letters
+ * @param {{chain: string, index: number}[]} slots
+ */
+export function refoldMotifSideChainAtoms(pdb, slots) {
+  if (!slots.length) return [];
+  const wanted = new Set(slots.map((s) => `${s.chain}:${s.index}`));
+  const order = new Map();
+  const atoms = [];
+  for (const line of pdb.split('\n')) {
+    if (!line.startsWith('ATOM')) continue;
+    const chainId = line[21];
+    const residueKey = line.slice(22, 27);
+    if (!order.has(chainId)) order.set(chainId, new Map());
+    const residues = order.get(chainId);
+    if (!residues.has(residueKey)) residues.set(residueKey, residues.size);
+    const atomName = line.slice(12, 16).trim();
+    const element = line.slice(76, 78).trim() || atomName[0];
+    if (!wanted.has(`${chainId}:${residues.get(residueKey)}`) || MAIN_CHAIN.has(atomName) || element === 'H') continue;
+    atoms.push({
+      atomName, chainId, element, resName: line.slice(17, 20).trim(), resId: Number.parseInt(line.slice(22, 26), 10),
+      x: Number.parseFloat(line.slice(30, 38)), y: Number.parseFloat(line.slice(38, 46)), z: Number.parseFloat(line.slice(46, 54)),
+      isHetero: true, groupPdb: 'HETATM',
+    });
+  }
+  return atoms;
+}
+
 /** One line for a refold result: RMSD to the design, then the model's own confidence. */
 export function describeRefold(model, result, chains) {
   const name = REFOLD_MODELS[model] ?? model;

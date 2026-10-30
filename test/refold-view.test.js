@@ -69,3 +69,20 @@ test('refoldLigandCif keeps only the refold\'s ligands', async () => {
   assert.ok(rows.every((l) => l.startsWith('HETATM') && / SAM B /.test(l)));
   assert.equal(refoldLigandCif(pdb.split('\n')[0]), null);
 });
+
+test('motif side chains: positions from the design pick the same residues in a renumbered refold', async () => {
+  const { motifSlots, refoldMotifSideChainAtoms } = await import('../web/refold-view.js');
+  const design = records([['A', 10, 'ALA'], ['A', 11, 'HIS'], ['A', 12, 'GLY'], ['B', 1, 'SAM', true]]);
+  const slots = motifSlots(design, [{ chainId: 'A', resId: 11 }]);
+  assert.deepEqual(slots, [{ chain: 'A', index: 1 }]);
+  const line = (serial, name, res, resId, el) => `ATOM  ${String(serial).padStart(5)} ${name.padEnd(4)} ${res} A${String(resId).padStart(4)}    ${'1.000'.padStart(8)}${'2.000'.padStart(8)}${'3.000'.padStart(8)}  1.00 90.00          ${el.padStart(2)}`;
+  const refold = [
+    line(1, 'CA', 'ALA', 1, 'C'), line(2, 'CB', 'ALA', 1, 'C'),
+    line(3, 'N', 'HIS', 2, 'N'), line(4, 'CA', 'HIS', 2, 'C'), line(5, 'CB', 'HIS', 2, 'C'), line(6, 'ND1', 'HIS', 2, 'N'),
+    line(7, 'CA', 'GLY', 3, 'C'),
+  ].join('\n');
+  const atoms = refoldMotifSideChainAtoms(refold, slots);
+  assert.deepEqual(atoms.map((a) => `${a.resName}${a.resId}:${a.atomName}`), ['HIS2:CB', 'HIS2:ND1']);
+  assert.ok(atoms.every((a) => a.isHetero));
+});
+

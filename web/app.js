@@ -36,7 +36,10 @@ import {
   installStudioApiInterceptor,
 } from './studio-api.js';
 import { DesignPanel } from './design-panel.js';
-import { REFOLD_MODELS, describeRefold, designedChains, pdbToCif, refoldLigandCif, refoldOverlayCif } from './refold-view.js';
+import {
+  REFOLD_MODELS, describeRefold, designedChains, motifSlots, pdbToCif, refoldLigandCif, refoldMotifSideChainAtoms,
+  refoldOverlayCif,
+} from './refold-view.js';
 
 installStudioApiInterceptor();
 
@@ -1095,7 +1098,12 @@ class Rfd4pStudioApp {
     const { sessionId } = getSharedStudioStore().createSession(cif, `${view.filenameStem ?? 'design'}-refold.cif`);
     this.generatedViews.set(sessionId, {
       label: `${REFOLD_MODELS[model] ?? model} refold of ${designChoice.label}`,
-      cif, pdb: refoldPdb, isInput: false, isRefold: true, hasTrajectory: false, overlays: null,
+      cif, pdb: refoldPdb, isInput: false, isRefold: true, hasTrajectory: false,
+      // As on the design: the reference motif, and the refold's own side chains at the motif residues.
+      overlays: {
+        motif: view.overlays?.motif ?? null,
+        sideChains: overlayCifOf(refoldMotifSideChainAtoms(refoldPdb, view.motifSlots ?? []), 'refold_motif_side_chains'),
+      },
       filenameStem: `${view.filenameStem ?? 'design'}-refold-${model}`,
     });
     const previous = view.refoldSessionId;
@@ -1429,6 +1437,8 @@ class Rfd4pStudioApp {
           filenameStem: `design-${sampleIdx + 1}-seed${sampleSeed}`,
           overlays,
           designedChains: designedChains(atoms, result.structure?.atoms ?? []),
+          // Where the motif residues are, so a refold's view can show its side chains there too.
+          motifSlots: motifSlots(result.structure?.atoms ?? [], motifSideChainAtoms(result.structure?.atoms ?? [], unmodelled)),
           refoldText: null,
         });
         viewChoices.push({ label: `Design ${sampleIdx + 1}`, title: `seed ${sampleSeed}`, sessionId: designSessionId });
