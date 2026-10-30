@@ -1,6 +1,7 @@
 /**
  * What "Save results (.zip)" holds: the annotated input a run designed from, each design (final structure and its
- * diffusion trajectory), every refold made of it, and a summary of all of them. Pure, so it is unit-tested without a
+ * diffusion trajectory), every refold made of it, and a summary of all of them, as mmCIF only (a PDB would repeat
+ * the same coordinates and lose the input's conditions). Pure, so it is unit-tested without a
  * browser; web/app.js gathers the data and zips the files with JSZip.
  */
 import { REFOLD_MODELS, REFOLD_TERMS } from './refold-view.js';
@@ -54,7 +55,7 @@ const csvCell = (v) => {
  * @param {object} run
  * @param {{cif: string|null, name?: string, revision?: number}} run.input the annotated input, as designed from
  * @param {Array<{index: number, label: string, seed: number, stepsRun?: number, nsteps?: number, cif: string,
- *   pdb: string|null, trajectoryCif?: string|null, designedChains?: string[],
+ *   pdb: string|null (read for the summary's sequences), trajectoryCif?: string|null, designedChains?: string[],
  *   refolds?: Array<{model: string, pdb: string, cif: string|null, rmsd?: number, confidence?: object,
  *   templated?: string[], partial?: object[], text?: string}>}>} run.designs
  * @param {string} [run.generatedAt] ISO time
@@ -75,7 +76,6 @@ export function resultsFiles({ input, designs, generatedAt = new Date().toISOStr
   for (const d of designs) {
     const stem = `design-${d.index}`;
     files.push({ name: `${stem}.cif`, text: d.cif });
-    if (d.pdb) files.push({ name: `${stem}.pdb`, text: d.pdb });
     if (d.trajectoryCif) files.push({ name: `${stem}-trajectory.cif`, text: d.trajectoryCif });
     const refolds = [];
     for (const [k, r] of (d.refolds ?? []).entries()) {
@@ -83,15 +83,14 @@ export function resultsFiles({ input, designs, generatedAt = new Date().toISOStr
       const sameModelBefore = (d.refolds ?? []).slice(0, k).filter((x) => x.model === r.model).length;
       const rstem = `${stem}-refold-${r.model}${sameModelBefore ? `-${sameModelBefore + 1}` : ''}`;
       if (r.cif) files.push({ name: `${rstem}.cif`, text: r.cif });
-      if (r.pdb) files.push({ name: `${rstem}.pdb`, text: r.pdb });
       if (REFOLD_TERMS[r.model]) usesAf3 = true;
-      refolds.push({ files: [`${rstem}.cif`, `${rstem}.pdb`].filter((n) => files.some((f) => f.name === n)), ...refoldSummary(r) });
+      refolds.push({ files: r.cif ? [`${rstem}.cif`] : [], ...refoldSummary(r) });
     }
     const sequences = pdbSequences(d.pdb);
     summary.designs.push({
       index: d.index, label: d.label, seed: d.seed ?? null, steps_run: d.stepsRun ?? null, steps: d.nsteps ?? null,
       designed_chains: d.designedChains ?? [], sequences,
-      files: [`${stem}.cif`, d.pdb ? `${stem}.pdb` : null, d.trajectoryCif ? `${stem}-trajectory.cif` : null].filter(Boolean),
+      files: [`${stem}.cif`, d.trajectoryCif ? `${stem}-trajectory.cif` : null].filter(Boolean),
       refolds,
     });
     const base = {
@@ -125,10 +124,10 @@ function readme({ hasInput, usesAf3, page, generatedAt }) {
     '',
     ...(hasInput ? ['input.cif                     the annotated input the run designed from (conditions included);',
       '                              open it in the page to design again'] : []),
-    'design-N.cif / .pdb           design N, the final structure',
+    'design-N.cif                  design N, the final structure',
     'design-N-trajectory.cif       design N, every diffusion step (multi-model)',
     'design-N-refold-<model>.cif   a refold of design N\'s sequence, in the design\'s frame;',
-    '  / .pdb                      the B-factor column is the model\'s pLDDT',
+    '                              the B-factor column is the model\'s pLDDT',
     'summary.json / summary.csv    per design: seed, steps, designed chains, sequences; per refold: model,',
     '                              RMSD of the designed chain, pLDDT, pTM, ipTM, templated chains',
     '',

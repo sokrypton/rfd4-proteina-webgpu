@@ -10,7 +10,7 @@ test('pdbSequences reads one letter per residue, per chain', () => {
   assert.deepEqual(pdbSequences(pdb), { A: 'MK', B: 'G' });
 });
 
-test('resultsFiles packages input, designs, trajectories, every refold and a summary', () => {
+test('resultsFiles packages input, designs, trajectories, every refold and a summary, as mmCIF only', () => {
   const refold = (model, rmsd) => ({ model, pdb, cif: 'data_r', rmsd, confidence: { meanPlddt: 80.123, ptm: 0.8, iptm: 0.61 },
     templated: ['A'], partial: [{ chain: 'H', residues: 109 }], text: 'line' });
   const files = resultsFiles({
@@ -25,10 +25,8 @@ test('resultsFiles packages input, designs, trajectories, every refold and a sum
   const names = files.map((f) => f.name);
   assert.deepEqual(names, [
     'input.cif',
-    'design-1.cif', 'design-1.pdb', 'design-1-trajectory.cif',
-    'design-1-refold-af3.cif', 'design-1-refold-af3.pdb',
-    'design-1-refold-openbind0.cif', 'design-1-refold-openbind0.pdb',
-    'design-1-refold-af3-2.cif', 'design-1-refold-af3-2.pdb',
+    'design-1.cif', 'design-1-trajectory.cif',
+    'design-1-refold-af3.cif', 'design-1-refold-openbind0.cif', 'design-1-refold-af3-2.cif',
     'design-2.cif',
     'summary.json', 'summary.csv', 'README.txt',
   ]);
@@ -41,6 +39,7 @@ test('resultsFiles packages input, designs, trajectories, every refold and a sum
   assert.equal(csv.length, 1 + 3 + 1);
   assert.ok(csv[1].startsWith('1,7,50,B,A:MK B:G,af3,0.5,80.12,0.8,0.61,A,H:109'));
   assert.match(files.find((f) => f.name === 'README.txt').text, /WEIGHTS_TERMS_OF_USE/);
+  assert.ok(!names.some((n) => n.endsWith('.pdb')));
 });
 
 test('without AlphaFold 3 refolds the README carries no AlphaFold 3 terms', () => {
