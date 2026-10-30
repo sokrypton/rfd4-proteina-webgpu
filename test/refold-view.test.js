@@ -56,3 +56,16 @@ test('pdbToCif keeps every chain, ligands and pLDDT when asked for the whole ref
   assert.ok(rows[0].includes(' 91.5 '));
   assert.ok(rows[3].startsWith('HETATM'));
 });
+
+test('refoldLigandCif keeps only the refold\'s ligands', async () => {
+  const { refoldLigandCif } = await import('../web/refold-view.js');
+  const pdb = [
+    'ATOM      1  CA  ALA A   1       1.000   0.000   0.000  1.00 91.50           C',
+    'HETATM    2  C1  SAM B   1       4.000   0.000   0.000  1.00 80.00           C',
+    'HETATM    3  N1  SAM B   1       5.000   0.000   0.000  1.00 80.00           N',
+  ].join('\n');
+  const rows = refoldLigandCif(pdb).split('\n').filter((l) => /^(ATOM|HETATM) /.test(l));
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((l) => l.startsWith('HETATM') && / SAM B /.test(l)));
+  assert.equal(refoldLigandCif(pdb.split('\n')[0]), null);
+});

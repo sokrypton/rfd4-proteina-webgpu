@@ -36,7 +36,7 @@ import {
   installStudioApiInterceptor,
 } from './studio-api.js';
 import { DesignPanel } from './design-panel.js';
-import { REFOLD_MODELS, describeRefold, designedChains, pdbToCif, refoldOverlayCif } from './refold-view.js';
+import { REFOLD_MODELS, describeRefold, designedChains, pdbToCif, refoldLigandCif, refoldOverlayCif } from './refold-view.js';
 
 installStudioApiInterceptor();
 
@@ -295,6 +295,10 @@ async function showDesignOverlays(overlays) {
   // (studio.json `override`); a Studio without it draws ball-and-stick instead.
   await window.atomworksStudio?.setOverlay('refold', overlays?.refold?.cif ?? null, {
     label: overlays?.refold?.label ?? 'Refold', color: 0xe040fb, alpha: 0.75, representation: 'cartoon',
+  });
+  // Its ligands, where the refold put them, in the same magenta: a cartoon draws polymers only.
+  await window.atomworksStudio?.setOverlay('refoldLigands', overlays?.refold?.ligandCif ?? null, {
+    label: `${overlays?.refold?.label ?? 'Refold'} ligands`, color: 0xe040fb, sizeAspectRatio: 0.6,
   });
 }
 
@@ -1134,7 +1138,8 @@ class Rfd4pStudioApp {
       view.refoldText = describeRefold(model, result, view.designedChains);
       view.refoldError = false;
       const cif = refoldOverlayCif(result.refold, view.designedChains);
-      view.overlays = { ...view.overlays, refold: cif ? { cif, label: `${name} refold` } : null };
+      const ligandCif = refoldLigandCif(result.refold);
+      view.overlays = { ...view.overlays, refold: cif ? { cif, ligandCif, label: `${name} refold` } : null };
       if (this.studioSessionId === sid) await showDesignOverlays(view.overlays);
       this._addRefoldView(sid, view, result.refold, model);
     } catch (err) {

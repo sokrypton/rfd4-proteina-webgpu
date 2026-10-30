@@ -62,10 +62,10 @@ const BACKBONE = new Set(['N', 'CA', 'C', 'O']);
  * pLDDT) is kept.
  *
  * @param {string} pdb
- * @param {{chains?: string[] | null, backboneOnly?: boolean, dataBlockName?: string}} [options]
+ * @param {{chains?: string[] | null, backboneOnly?: boolean, heteroOnly?: boolean, dataBlockName?: string}} [options]
  * @returns {string|null} null when nothing is kept
  */
-export function pdbToCif(pdb, { chains = null, backboneOnly = false, dataBlockName = 'refold' } = {}) {
+export function pdbToCif(pdb, { chains = null, backboneOnly = false, heteroOnly = false, dataBlockName = 'refold' } = {}) {
   const keep = chains ? new Set(chains) : null;
   const atoms = [];
   for (const line of pdb.split('\n')) {
@@ -73,7 +73,7 @@ export function pdbToCif(pdb, { chains = null, backboneOnly = false, dataBlockNa
     if (!line.startsWith('ATOM') && !isHetero) continue;
     const atomName = line.slice(12, 16).trim();
     const chainId = line[21];
-    if ((keep && !keep.has(chainId)) || (backboneOnly && (isHetero || !BACKBONE.has(atomName)))) continue;
+    if ((keep && !keep.has(chainId)) || (backboneOnly && (isHetero || !BACKBONE.has(atomName))) || (heteroOnly && !isHetero)) continue;
     const bFactor = Number.parseFloat(line.slice(60, 66));
     atoms.push({
       atomName, chainId, isHetero, resName: line.slice(17, 20).trim(), resId: Number.parseInt(line.slice(22, 26), 10),
@@ -94,6 +94,17 @@ export function pdbToCif(pdb, { chains = null, backboneOnly = false, dataBlockNa
  */
 export function refoldOverlayCif(pdb, chains) {
   return pdbToCif(pdb, { chains });
+}
+
+/**
+ * The refold's ligands as a CIF for a ball-and-stick overlay beside its cartoon (a cartoon draws polymers only). They
+ * are placed by the refold, not templated, so where they land is part of what the refold says.
+ *
+ * @param {string} pdb the refold, already in the design's frame
+ * @returns {string|null} null when the refold has no ligand
+ */
+export function refoldLigandCif(pdb) {
+  return pdbToCif(pdb, { heteroOnly: true, dataBlockName: 'refold_ligands' });
 }
 
 /** One line for a refold result: RMSD to the design, then the model's own confidence. */
