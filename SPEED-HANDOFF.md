@@ -564,3 +564,89 @@ device, which holds on any hardware.
 **Both gate failures this round were tests calibrated to slower hardware, not product bugs.** That is
 worth generalising: section 1 rule 1 says to run every gate on stock flags; it should also say that a
 gate must not encode a wall-clock assumption about how long a design takes.
+
+## 13. 2026-10-30: the viewer backend, CI, and section 11 on the M5
+
+### 13.1 Patinae costs a design 1.66x, and why
+
+A visitor could switch the viewer from Mol* (WebGL2) to Patinae (WebGPU) from the page's own dropdown.
+Patinae is not broken - it renders, designs complete on it, it reports its capabilities to the UI, it
+switches back cleanly, and it raises no errors. It is simply expensive, because two methods Studio's
+viewer contract marks **optional** are absent from its adapter (`packages/web/src/viewers/patinae.ts`
+in atomworks-studio-dev), and an absent optional method degrades silently:
+
+| contract member | Mol* | Patinae |
+|---|---|---|
+| `loadCif(cif, name, options?)` | yes | **no `options` parameter** |
+| `updateLiveCif` | yes | **missing** |
+| `setLiveMode` | yes | **missing** |
+
+`ViewerHost.renderLiveCif` takes the in-place path only `if (this.adapter?.updateLiveCif)`, so on Patinae
+every live frame falls through to a full `loadCif`, which - in the contract's own words - "clears the whole
+scene, which flashes between frames and throws away the camera". `keepCamera` is passed as the third
+argument and Patinae's signature does not accept it, so the camera resets on each of ~50 frames of a
+design. `setLiveMode` is optional-chained into a no-op, so no quality-for-framerate trade is made.
+
+Measured with `tools/gpu/bench-renderer.js` (interleaved A/B in one process, `motif_unidx_1prw`, 20 steps):
+
+| | best | median |
+|---|---:|---:|
+| Mol* | 3274 ms | 3281 ms |
+| Patinae | 5420 ms | 5435 ms |
+| | **1.66x** | **1.66x** |
+
+`tools/gpu/diag-patinae-cost.js` splits that cost by stubbing frame drawing: drawing live frames costs
+697 ms on Mol* against **1853 ms** on Patinae, and merely having Patinae resident costs a further 768 ms.
+
+**Patinae is no longer offered on this page.** `tools/build-studio.mjs` removes its `<option>` and its
+renderer-prompt button when composing `index.html`, and throws if either disappears upstream. The
+lazily-loaded Patinae chunks (4.1 MB) are still copied, so `?viewer=patinae` still reaches it deliberately
+and nothing 404s. Restore the option once the adapter implements those two methods and takes
+`ViewerLoadOptions`; `tools/gpu/check-patinae.js` gates that path and currently reports `skipped`.
+
+### 13.2 Section 11 reproduces on the M5, but does not trip the watchdog
+
+`tools/gpu/diag-chiral-hang.js`, `sm_sam` (SAM, chiral, n=195), 12 steps, 3 runs. The "slow first forwards"
+pattern is real and reproduces here: step 1 ran **4.36x** the median of the remaining steps in one run
+(1452 ms against a 333 ms median) and 2.02x in another, with step 0 near normal (1.08-1.19x).
+
+No device was lost in any run. On the M2 a step is ~850 ms, so the same multiple lands a single command
+buffer well past the macOS watchdog's patience; on the M5 a step is ~333 ms and the inflated step is still
+only ~200 ms per command buffer. **The inflation is the bug; the hang is the inflation meeting a slower
+GPU.** So section 11 is not fixed, and it is not reproducible here - it needs the M2, or a profile of which
+dispatch inflates. It is still the only known defect that reaches visitors.
+
+### 13.3 The v0.0.6 release was rebuilt and re-uploaded, breaking the pin
+
+`npm run build:studio` began failing: the tarball at the `v0.0.6` tag no longer matched `studio.json`'s
+sha256. It was not tampering. The release assets were re-uploaded on 2026-10-29T21:10:59Z, and the only
+difference in the whole web bundle is one line of `sw.js`:
+
+```
+-const CACHE = "annotation-studio-shell-development-1793123848370";
++const CACHE = "annotation-studio-shell-development-1793307587756";
+```
+
+a build timestamp. Verified by extracting the immutable PyPI 0.0.6 wheel (sha256 `de1cfd3e...`) and diffing
+it against the re-uploaded tarball: every other file is byte-identical, and rebuilding from the new tarball
+left `assets/` untouched. The pin is updated to `262521d6...`.
+
+Two things worth fixing upstream, neither in this repo:
+
+1. **The release build is not reproducible.** A timestamp baked into `sw.js` means re-running the release
+   workflow produces a different artifact, so any downstream checksum pin breaks for no reason.
+2. **A published tag's assets were replaced.** GitHub allows it; PyPI does not, which is why PyPI still
+   serves the original. For a moment `v0.0.6` named two different artifact sets depending on where you
+   fetched it. The checksum guard in `build-studio.mjs` is what caught this, and it earned its keep.
+
+Note that `sw.js` is a service worker that caches root-absolute paths (`"/"`, `"/manifest.webmanifest"`)
+and intercepts every same-origin GET. This page never ships it - `build-studio.mjs` copies `assets/**` and
+`sw.js` sits at the bundle root - which is just as well, since this site is served under
+`/rfd4-proteina-webgpu/` and those paths are not its own.
+
+### 13.4 CI
+
+The repo had no workflow at all; the `pages-build-deployment` runs are GitHub's automatic Pages deploy.
+`.github/workflows/ci.yaml` now runs, on every push and PR, what needs no GPU: `npm test` on node 22 and 24,
+a parse of every shipped module, `tools/check-page-integrity.mjs`, and a stamp-drift check. The GPU gates in
+section 7 remain local.

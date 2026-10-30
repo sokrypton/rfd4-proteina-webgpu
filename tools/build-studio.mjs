@@ -84,6 +84,22 @@ page = page.replace(entryScript[0], `\n${head}${entryScript[0]}`);
 const body = page.match(/<body[^>]*>/);
 if (!body) throw new Error('Studio index.html has no <body>');
 page = page.replace(body[0], `${body[0]}\n${card}`);
+// Patinae (Studio's WebGPU renderer) is not offered on this page. It works, but its adapter implements neither
+// `updateLiveCif` nor `setLiveMode`, both optional in Studio's viewer contract, so every live frame of a design
+// goes through the full `loadCif` rebuild and its `loadCif` has no options parameter, dropping `keepCamera`.
+// Measured here (tools/gpu/bench-renderer.js): a design costs 1.66x as much with Patinae as with Mol*, and the
+// camera resets on each of ~50 frames. Mol* draws on WebGL2 and so does not compete with the model for the GPU.
+// Remove this once Patinae implements those two methods; `?viewer=patinae` still reaches it deliberately.
+const patinaeOption = page.match(/\s*<option value="patinae">[^<]*<\/option>/);
+if (!patinaeOption) throw new Error('Studio index.html has no Patinae option to remove; re-check this transform');
+page = page.replace(patinaeOption[0], '');
+const patinaePrompt = page.match(/\s*<button class="renderer-prompt-choice"[^>]*data-renderer="patinae"[^>]*>[\s\S]*?<\/button>/);
+if (!patinaePrompt) throw new Error('Studio index.html has no Patinae prompt button to remove; re-check this transform');
+page = page.replace(patinaePrompt[0], '');
+if (/value="patinae"|data-renderer="patinae"/.test(page)) {
+  throw new Error('Patinae is still selectable in the composed page');
+}
+
 // Studio's bundle is built to be served from the site root; this one lives under a project path on Pages.
 page = page.replaceAll('="/assets/', '="./assets/').replaceAll('="/guide/', '="./guide/');
 if (/(?:src|href)="\/[^"]/.test(page)) {

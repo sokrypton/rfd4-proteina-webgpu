@@ -3,6 +3,6 @@
   "version": "0.0.6",
   "repository": "RosettaCommons/atomworks-studio",
   "bundleUrl": "https://github.com/RosettaCommons/atomworks-studio/releases/download/v${version}/atomworks-studio-web.tar.gz",
-  "sha256": "3333155d6b8130297a4dbfbb9cd4eb00a71199578e34c517b8fb9e946cc14214",
+  "sha256": "262521d6e34a44f33db62de8d96ede4206dd99ab6b8282c0e8b3830c463da909",
   "title": "AtomWorks Studio \u00b7 RFD4-Proteina (WebGPU)"
 }
