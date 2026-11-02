@@ -923,6 +923,14 @@ export class DesignPanel {
   /** One edit through Studio's mutate path; resolves true on success. A failure stays shown until the next success. */
   async _mutate(path, body) {
     if (typeof window.atomworksStudio?.applyEdit !== 'function' || this.busy) return false;
+    // A document cannot be emptied ("cannot delete every atom"): removing the last of it means starting over.
+    const total = this._inputDoc()?.atoms?.nAtoms ?? 0;
+    if (path === '/delete' && total && new Set(body.atom_indices).size >= total) {
+      this.lastError = null;
+      this.showStart = true;
+      this.render();
+      return false;
+    }
     this.busy = true;
     this.els.design?.classList.add('rfd4p-busy');
     try {
