@@ -396,6 +396,13 @@ export class StudioDoc {
     }
     this.undoStack = [];
     this.trajectoryCif = opts.trajectoryCif ?? null;
+    // A plain structure opens with everything fixed (coordinates and sequence): a user starts from what they loaded
+    // and marks what to design, rather than starting from "redesign all of it".
+    if (opts.preset === 'rcsb' && opts.loadStandardAnnotations !== false && this.atoms.nAtoms) {
+      const all = Array.from({ length: this.atoms.nAtoms }, (_, k) => k);
+      this.setCondition('coordinate', all, { snapshot: false });
+      this.setCondition('sequence', all, { snapshot: false });
+    }
   }
 
   _parseInitialRestraints(block) {

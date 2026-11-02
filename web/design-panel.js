@@ -177,12 +177,7 @@ export class DesignPanel {
       const old = spec?.chains.filter((c) => c.role === 'fixed').flatMap((c) => c.atomIndices) ?? [];
       if (old.length && !await this._mutate('/delete', { atom_indices: old })) throw new Error(this.lastError ?? 'could not remove the old target');
     }
-    // Kept as they are, set on the structure before it is merged, so adding it is one Undo step.
-    const all = Array.from({ length: doc.atoms.nAtoms }, (_, k) => k);
-    doc.setConditions([
-      { condition: 'coordinate', atom_indices: all, enabled: true },
-      { condition: 'sequence', atom_indices: all, enabled: true },
-    ]);
+    // Opened as a plain structure, it is already fixed throughout, so adding it is one Undo step.
     const added = await this._combine(doc);
     const newChains = [...new Set(added.map((i) => String(this._inputDoc().atoms.chain_id[i])))];
     const original = chains.length === 1 ? ` chain ${chains[0].toUpperCase()}` : '';
@@ -312,6 +307,15 @@ export class DesignPanel {
       if (ev.detail?.type !== 'selection') return;
       this.selectionCount = ev.detail?.count ?? 0;
       queueMicrotask(() => this._renderPop());
+    });
+    // Starting from the input diversifies what is designed; with nothing designed yet, that is all the protein.
+    document.getElementById('partial-diffusion')?.addEventListener('change', (ev) => {
+      if (!ev.target.checked) return;
+      const doc = this._inputDoc();
+      const spec = doc?.atoms ? designSpec(doc.atoms) : null;
+      if (spec && !spec.designedMax) {
+        void this._batch(spec.chains.filter((c) => c.residues > 0).flatMap((c) => this._roleEdits(c, 'free')));
+      }
     });
     for (const id of ['partial-diffusion', 'partial-diffusion-percent', 'partial-diffusion-percent-num']) {
       document.getElementById(id)?.addEventListener('input', () => this.render());
@@ -633,7 +637,10 @@ export class DesignPanel {
           return;
         }
         this._closePop();
-        await this._runFlow('scaffold', this._spec(), { atoms: only.atoms });
+        // The residues kept take this popup's Structure and Position: side chains only, anywhere (an enzyme's site).
+        await this._runFlow('scaffold', this._spec(), {
+          atoms: only.atoms, sidechainsOnly: structure.value === 'sidechain', unindexed: position.value === 'anywhere',
+        });
         return;
       }
       const hotspots = residuesIn(hot.value, p.atomIndices);
@@ -896,9 +903,17 @@ export class DesignPanel {
       ];
       rows.push(el('div', { class: 'rfd4p-pop-row' },
         btn(hot ? 'Remove hotspot' : 'Hotspot', act(() => this._batch([{ condition: 'hotspot', atom_indices: polymerAtoms, enabled: !hot }])), hot ? 'secondary compact' : 'primary compact'),
-        btn('Keep fixed', act(() => this._batch(edits(true, true)))),
-        btn('Keep sequence', act(() => this._batch(edits(false, true)))),
-        btn('Redesign', act(() => this._batch(edits(false, false))))));
+        btn('Design', act(() => this._batch(edits(false, false)))),
+        btn('Design sequence', act(() => {
+          // Structure fixed, sequence designed: the backbone stays, side chains are rebuilt.
+          const bb = this._backboneOf(polymerAtoms);
+          return this._batch([
+            { condition: 'coordinate', atom_indices: polymerAtoms, enabled: false },
+            ...(bb.length ? [{ condition: 'coordinate', atom_indices: bb, enabled: true }] : []),
+            { condition: 'sequence', atom_indices: polymerAtoms, enabled: false },
+          ]);
+        })),
+        btn('Fix', act(() => this._batch(edits(true, true))))));
       const n = nRes || 1;
       const min = el('input', { type: 'number', min: 1, max: 500, value: Math.max(1, Math.round(n * 0.75)), 'aria-label': 'New residues minimum' });
       const max = el('input', { type: 'number', min: 1, max: 500, value: Math.max(1, Math.round(n * 1.25)), 'aria-label': 'New residues maximum' });

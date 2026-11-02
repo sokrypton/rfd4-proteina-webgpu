@@ -224,7 +224,7 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
   else if (task.key === 'redesign_all') {
     warnings.push('Nothing in this structure is kept, so all of it will be redesigned. Use a piece\'s Edit menu to keep what should stay.');
   } else if (task.key === 'nothing') {
-    warnings.push('Everything is fixed, so there is nothing to design. Free a chain or add new residues.');
+    warnings.push('Everything is fixed. Click a row to design part of it, or add a chain with + seq.');
   }
 
   return {
@@ -343,7 +343,8 @@ function inferTask({ polymers, ligands, anyCondition, designedMax, predicted, pa
     return T('partial', 'Diversify (partial diffusion)', `Starts ${partialPercent}% of the way from this structure.`);
   }
   if (!polymers.length && !ligands.length) return T('empty', 'Nothing loaded', '');
-  if (designedMax === 0 && predicted === 0) return T('nothing', 'Nothing to design', '');
+  // Kept coordinates with nothing designed: only residues missing from the structure (if any) are built.
+  if (designedMax === 0 && (predicted === 0 || polymers.some((c) => c.fixed > 0))) return T('nothing', 'Nothing to design', '');
   if (designedMax === 0) {
     return T('fold', 'Fold from sequence', 'Sequences kept; the model predicts the structure.');
   }
@@ -361,7 +362,8 @@ function inferTask({ polymers, ligands, anyCondition, designedMax, predicted, pa
   }
   if (unindexed && hasLigand) return T('enzyme', 'Enzyme design', 'Catalytic residues placed around the ligand.');
   if (fixedChains.length && designedChains.length) {
-    const framework = designedChains.some((c) => c.seqFixed > 0);
+    // A framework is most of a chain kept by sequence; a few kept residues in a designed chain are a motif.
+    const framework = designedChains.some((c) => c.seqFixed > c.designed + c.segments.reduce((t, g) => t + g.min, 0));
     return framework
       ? T('antibody', 'Antibody / VHH design', 'Framework sequence kept; loops designed against the target.')
       : T('binder', 'Binder design', 'New protein designed to bind the fixed target.');
