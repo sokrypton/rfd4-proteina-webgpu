@@ -791,8 +791,15 @@ export class DesignPanel {
         }
       }
       const whole = lo === p.start && hi === p.end;
-      if (!whole || want.structure !== now.structure || want.sequence !== now.sequence || want.position !== now.position) {
+      const changed = want.structure !== now.structure || want.sequence !== now.sequence || want.position !== now.position;
+      if (changed) {
+        // New settings go to the residues in the range only; the rest of the piece stays as it is.
         await this._applyPiece(p, atoms, want);
+      } else if (!whole && !(now.structure === 'designed' && now.sequence === 'designed')) {
+        // Only the range changed: the piece is now those residues, and the ones cut off are designed (same length).
+        const inRange = new Set(atoms);
+        const rest = p.atomIndices.filter((i) => !inRange.has(i));
+        if (rest.length) await this._applyPiece(p, rest, { structure: 'designed', sequence: 'designed', position: 'fixed' });
       }
     };
 
