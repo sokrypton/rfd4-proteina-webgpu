@@ -10,7 +10,7 @@
     <!-- This site serves the Studio bundle itself; its offline cache would pin stale assets on Pages. -->
     <meta name="atomworks-studio-service-worker" content="off" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="./web/styles.css?v=592fad82f7" />
+    <link rel="stylesheet" href="./web/styles.css?v=3b00056e50" />
     <!-- app.js first: its import of studio-api.js installs the /api/* fetch interceptor the Studio bundle boots against. -->
     <!-- module-versions:start (tools/stamp-modules.mjs) -->
     <script type="importmap">
@@ -39,7 +39,7 @@
           "./shared/rfd4p/safetensors.js": "./shared/rfd4p/safetensors.js?v=816ee6d627",
           "./shared/rfd4p/vendor/fzstd.js": "./shared/rfd4p/vendor/fzstd.js?v=e6cdba40d4",
           "./web/app.js": "./web/app.js?v=0bc608b987",
-          "./web/design-panel.js": "./web/design-panel.js?v=0e8474de8b",
+          "./web/design-panel.js": "./web/design-panel.js?v=0a111f67ac",
           "./web/design-spec.js": "./web/design-spec.js?v=f824f40b5a",
           "./web/ligand-ccd.js": "./web/ligand-ccd.js?v=b937ddbebf",
           "./web/localfold.js": "./web/localfold.js?v=8b16694f7b",
@@ -101,7 +101,7 @@
                 <div class="rfd4p-task-head">
                     <strong id="rfd4p-task-label"></strong>
                     <span class="rfd4p-task-buttons">
-                        <button id="rfd4p-new" type="button" class="secondary compact" title="Start over with an example, a PDB ID or your own file">New…</button>
+                        <button id="rfd4p-new" type="button" class="secondary compact" title="Start over with an example, a PDB ID or your own file">Clear</button>
                         <button id="rfd4p-undo" type="button" class="secondary compact" title="Undo the last change" disabled>Undo</button>
                     </span>
                 </div>
