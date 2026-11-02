@@ -5,7 +5,8 @@ first (module layout, ES-module rule, WebGPU invariants), then this file. [`HAND
 previous M2/M5 tuning round: its section 9 explains how the current kernels got here and section 7 lists what
 already lost. Do not repeat anything in section 7 without a new reason.
 
-Live site: <https://sokrypton.github.io/rfd4-proteina-webgpu/> (GitHub Pages from `main`, root). The owner has
+Live site: <https://web.rfd4-proteina.org/> (GitHub Pages from `main`, root, served on the custom
+domain in `CNAME`; the old `sokrypton.github.io/rfd4-proteina-webgpu/` URL redirects). The owner has
 said to commit to `main` and push after each verified change; the site redeploys in ~1 min.
 
 ---
@@ -118,7 +119,8 @@ does not expose `chromium-experimental-subgroup-matrix`.
   basic subgroups ran origin trial `WebGPUSubgroupsFeatures` in Chrome 128-131 and shipped in 134; Chrome 135's
   notes mention an "Extended subgroups experiment". Check chromestatus.com and blink-dev. A web search on
   2026-10-23 found nothing specific.
-- If a trial exists, registering a token for `sokrypton.github.io` needs the **owner** (it's an account action
+- If a trial exists, registering a token for `web.rfd4-proteina.org` — the origin the site is now served on, not
+  `sokrypton.github.io` — needs the **owner** (it's an account action
   on an external service; ask, do not do it). Then add the `<meta http-equiv="origin-trial">` tag to
   `index.html` and verify in stock Chrome that `adapter.features` gains the feature. No code change should be
   needed after that: `requestWebGpuDevice` (`webgpu/index.js:122`) already requests

@@ -5,7 +5,7 @@ design) that runs entirely on your GPU through WebGPU. There is no server: input
 designs are written out in the page. The editor is [AtomWorks Studio](https://github.com/RosettaCommons/atomworks-studio)
 with the Mol* viewer.
 
-**Live:** https://sokrypton.github.io/rfd4-proteina-webgpu/ (Chrome or Edge with WebGPU; the first design downloads
+**Live:** https://web.rfd4-proteina.org/ (Chrome or Edge with WebGPU; the first design downloads
 ~330 MB of INT8 weights, cached for later visits; the 138 MB encoder is fetched only for partial
 diffusion and inverse folding, so the full set is 469 MB).
 
