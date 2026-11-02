@@ -19,6 +19,9 @@ export const REFOLD_TERMS = {
   },
 };
 
+/** The RMSD at or below which a de novo design is usually called self-consistent. */
+export const SELF_CONSISTENT_RMSD_A = 2;
+
 /** Residue sequences per chain, in file order: `Map<chainId, string[]>` of residue names. */
 function chainSequences(records) {
   const chains = new Map();
@@ -209,8 +212,17 @@ export function describeRefold(model, result, chains, partial = []) {
   const name = REFOLD_MODELS[model] ?? model;
   const c = result.confidence ?? {};
   const parts = [];
-  if (Number.isFinite(result.rmsd)) {
-    parts.push(`${result.rmsd.toFixed(2)} Å RMSD${chains.length === 1 ? ` (chain ${chains[0]})` : ''}`);
+  if (result.comparable === false) {
+    // `selfConsistency` returns NaN rather than a large number when the two folds describe different numbers of
+    // residues, because an RMSD between them compares residue 1 of one thing to residue 1 of another. Say that,
+    // rather than dropping the RMSD and leaving a line that looks like a result.
+    parts.push('RMSD not comparable — the design and the refold have different lengths');
+  } else if (Number.isFinite(result.rmsd)) {
+    // The number and its verdict together: 2 Å is the threshold the field holds a self-consistent de novo design
+    // to, and a bare "9.04 Å" beside a confident pLDDT reads as success to anyone who has not met that literature.
+    const verdict = result.rmsd <= SELF_CONSISTENT_RMSD_A ? '' : ` — above the ${SELF_CONSISTENT_RMSD_A} Å a`
+      + ' self-consistent design is usually held to';
+    parts.push(`${result.rmsd.toFixed(2)} Å RMSD${chains.length === 1 ? ` (chain ${chains[0]})` : ''}${verdict}`);
   }
   if (Number.isFinite(c.meanPlddt)) parts.push(`pLDDT ${c.meanPlddt.toFixed(0)}`);
   if (Number.isFinite(c.ptm)) parts.push(`pTM ${c.ptm.toFixed(2)}`);

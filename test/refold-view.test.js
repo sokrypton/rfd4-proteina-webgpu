@@ -42,6 +42,25 @@ test('describeRefold reads RMSD and confidence', () => {
   assert.equal(line, 'OpenBind-0 refold: 0.33 Å RMSD (chain B) · pLDDT 87 · pTM 0.85 · ipTM 0.70');
 });
 
+test('describeRefold says so when the RMSD misses the self-consistency threshold', () => {
+  // A confident fold that sits far from the design is the case most likely to be misread: high pLDDT beside a
+  // bare number reads as success. 9.04 A at pLDDT 85 was measured on `uncond_short` and is a failed design.
+  const line = describeRefold('openbind0', { rmsd: 9.035, confidence: { meanPlddt: 85.2, ptm: 0.851 } }, ['A']);
+  assert.equal(line, 'OpenBind-0 refold: 9.04 Å RMSD (chain A) — above the 2 Å a self-consistent design is'
+    + ' usually held to · pLDDT 85 · pTM 0.85');
+
+  const onThreshold = describeRefold('openbind0', { rmsd: 2, confidence: {} }, ['A']);
+  assert.equal(onThreshold, 'OpenBind-0 refold: 2.00 Å RMSD (chain A)', 'exactly 2 A still counts as consistent');
+});
+
+test('describeRefold explains an RMSD it cannot compute, rather than dropping it', () => {
+  // selfConsistency returns NaN with comparable:false on a length mismatch; without this the line would read
+  // as a clean result that simply has no RMSD in it.
+  const line = describeRefold('af3', { rmsd: Number.NaN, comparable: false, confidence: { meanPlddt: 70 } }, ['A']);
+  assert.equal(line, 'AlphaFold 3 refold: RMSD not comparable — the design and the refold have different'
+    + ' lengths · pLDDT 70');
+});
+
 test('pdbToCif keeps every chain, ligands and pLDDT when asked for the whole refold', async () => {
   const { pdbToCif } = await import('../web/refold-view.js');
   const pdb = [
