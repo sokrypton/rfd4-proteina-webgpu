@@ -1080,7 +1080,7 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   bottom: -2px;
   width: 2px;
   margin-left: -1px;
-  background: var(--condition-hotspot, #f59e0b);
+  background: var(--rfd4p-hotspot);
 }
 
 #rfd4p-studio-card .rfd4p-piece {
@@ -1133,7 +1133,7 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
 
 .rfd4p-chip:not(:has(.rfd4p-chip-x)) { padding-right: 7px; }
 
-.rfd4p-chip-hotspots { border-color: var(--condition-hotspot, #f59e0b); }
+.rfd4p-chip-hotspots { border-color: var(--rfd4p-hotspot); }
 
 .rfd4p-chip-x {
   padding: 0 3px;
@@ -1211,3 +1211,21 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
 
 .rfd4p-add-status:empty { display: none; }
 .rfd4p-add-status { margin: 0; font-size: 11px; }
+
+/* The sequence bar in the simple view speaks the panel's language: kept residues plain (the panel already says the
+   chain is kept, and a box on every residue hid everything else), residues the model designs in the accent colour,
+   hotspots filled amber, as in the viewer. The advanced editor keeps Studio's own per-condition marks. */
+:root { --rfd4p-hotspot: #f59e0b; }
+
+body:not(.rfd4p-advanced) .sequence-token.condition-coordinate:not(.selected) { border-color: transparent; }
+
+body:not(.rfd4p-advanced) button.sequence-token:not(.condition-coordinate):not(.condition-sequence):not(.selected):not(.sequence-segment) {
+  color: var(--accent, #82aaff);
+}
+
+body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
+  color: #1a1206;
+  background: var(--rfd4p-hotspot);
+  border-color: var(--rfd4p-hotspot);
+  font-weight: 700;
+}
