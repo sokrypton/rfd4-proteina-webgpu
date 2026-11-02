@@ -8,6 +8,8 @@
  */
 import { designSpec, formatResidueList, KEEP_MODES, parseResidueList } from './design-spec.js';
 import { createStudioDocWithCcd, getSharedStudioStore } from './studio-api.js';
+import { isCcdCode, ligandCifFromCcd } from './ligand-ccd.js';
+import { fetchCcdComponents } from '../shared/rfd4p/pipeline/ccd.js';
 
 const ADVANCED_KEY = 'rfd4p-advanced-editor';
 
@@ -185,17 +187,7 @@ export class DesignPanel {
       const old = spec?.chains.filter((c) => c.role === 'fixed').flatMap((c) => c.atomIndices) ?? [];
       if (old.length && !await this._mutate('/delete', { atom_indices: old })) throw new Error(this.lastError ?? 'could not remove the old target');
     }
-    const store = getSharedStudioStore();
-    const before = this._inputDoc()?.atoms?.nAtoms ?? 0;
-    const tmp = `rfd4p_add_${Date.now().toString(36)}`;
-    store.sessions.set(tmp, doc);
-    try {
-      if (!await this._mutate('/combine', { session_ids: [tmp] })) throw new Error(this.lastError ?? 'could not add the chains');
-    } finally {
-      store.sessions.delete(tmp);
-    }
-    const after = this._inputDoc()?.atoms?.nAtoms ?? before;
-    const added = Array.from({ length: after - before }, (_, k) => before + k);
+    const added = await this._combine(doc);
     await this._batch([
       { condition: 'coordinate', atom_indices: added, enabled: true },
       { condition: 'sequence', atom_indices: added, enabled: true },
@@ -204,6 +196,77 @@ export class DesignPanel {
     status.textContent = `Added ${name} as chain${newChains.length === 1 ? '' : 's'} ${newChains.join(', ')}, kept in place.`
       + ' To aim a binder at part of it: Edit ▸ Mark hotspots.';
     this.render();
+  }
+
+  /** Merge a document into the job (one undo step); resolves to the added atoms' indices. */
+  async _combine(doc) {
+    const store = getSharedStudioStore();
+    const before = this._inputDoc()?.atoms?.nAtoms ?? 0;
+    const tmp = `rfd4p_add_${Date.now().toString(36)}`;
+    store.sessions.set(tmp, doc);
+    try {
+      if (!await this._mutate('/combine', { session_ids: [tmp] })) throw new Error(this.lastError ?? 'could not add it');
+    } finally {
+      store.sessions.delete(tmp);
+    }
+    const after = this._inputDoc()?.atoms?.nAtoms ?? before;
+    return Array.from({ length: after - before }, (_, k) => before + k);
+  }
+
+  /** Centre of `indices` (all atoms when null) with coordinates, or the origin. */
+  _centroid(indices = null) {
+    const a = this._inputDoc()?.atoms;
+    const sum = [0, 0, 0];
+    let n = 0;
+    for (const i of indices ?? Array.from({ length: a?.nAtoms ?? 0 }, (_, k) => k)) {
+      const c = a.coord[i];
+      if (!c || !Number.isFinite(c[0]) || !Number.isFinite(c[1]) || !Number.isFinite(c[2])) continue;
+      sum[0] += c[0]; sum[1] += c[1]; sum[2] += c[2];
+      n += 1;
+    }
+    return n ? sum.map((v) => v / n) : [0, 0, 0];
+  }
+
+  /**
+   * A ligand by its dictionary code, its pose free (the model places it). With `replace` (a ligand's atoms), it
+   * takes that ligand's place: same chain letter, started from the same spot.
+   */
+  async _addLigand(rawCode, { replace = null, chainId = 'L' } = {}) {
+    const code = String(rawCode ?? '').trim().toUpperCase();
+    if (!isCcdCode(code)) throw new Error('type the ligand\'s code in the PDB: 1–5 letters or digits, e.g. HEM');
+    const { blocks } = await fetchCcdComponents([code]);
+    const block = blocks.get(code);
+    if (!block) throw new Error(`the PDB has no ligand called ${code}`);
+    const center = this._centroid(replace);
+    const { cif } = ligandCifFromCcd(block, { chainId, center });
+    const doc = await createStudioDocWithCcd(cif, code);
+    if (replace && !await this._mutate('/delete', { atom_indices: replace })) throw new Error(this.lastError ?? 'could not remove the old ligand');
+    await this._combine(doc);
+    return code;
+  }
+
+  /** A one-line "ligand code" form: [input] [button] and a status line. */
+  _ligandCodeForm({ label, button, onSubmit, onCancel }) {
+    const input = el('input', {
+      type: 'text', class: 'rfd4p-add-id', spellcheck: 'false', autocomplete: 'off', maxlength: 5,
+      placeholder: 'Code, e.g. HEM', 'aria-label': 'Ligand code',
+    });
+    const status = el('p', { class: 'rfd4p-add-status muted', 'aria-live': 'polite' });
+    const form = el('form', { class: 'rfd4p-add-structure rfd4p-ligand-form' },
+      el('strong', { text: label }),
+      el('span', { class: 'muted', text: 'Its code in the PDB (HEM, ATP, NAD, ZN…). The model places it; fix its pose afterwards if you want it kept where it is.' }),
+      el('div', { class: 'rfd4p-add-row' }, input, el('button', { type: 'submit', class: 'primary compact', text: button }),
+        el('button', { type: 'button', class: 'secondary compact', text: 'Cancel', onclick: onCancel })),
+      status);
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      status.textContent = `Looking up ${input.value.trim().toUpperCase()}…`;
+      void onSubmit(input.value).then(() => { status.textContent = ''; }, (err) => {
+        status.textContent = `Could not add it: ${String(err?.message ?? err).replace(/^Error:\s*/, '')}`;
+      });
+    });
+    queueMicrotask(() => input.focus());
+    return form;
   }
 
   // ---- wiring -------------------------------------------------------------------------------------------------
@@ -233,6 +296,20 @@ export class DesignPanel {
           chain_type: 'polypeptide(L)',
         });
       } else if (v === 'structure') this._openAddStructure();
+      else if (v === 'ligand') {
+        this.addLigandForm?.remove();
+        this.addLigandForm = this._ligandCodeForm({
+          label: 'Add a ligand',
+          button: 'Add',
+          onSubmit: async (code) => {
+            await this._addLigand(code);
+            this.addLigandForm?.remove();
+            this.addLigandForm = null;
+          },
+          onCancel: () => { this.addLigandForm?.remove(); this.addLigandForm = null; },
+        });
+        els.addMenu.parentElement.after(this.addLigandForm);
+      }
     });
     els.undo?.addEventListener('click', () => document.getElementById('undo')?.click());
     els.advanced?.addEventListener('change', () => this._applyAdvanced(els.advanced.checked, true));
@@ -569,11 +646,26 @@ export class DesignPanel {
     const options = [];
     if (l.pose !== 'fixed') options.push(['fix', 'Fix its pose (keep it where it is)']);
     if (l.pose !== 'predicted') options.push(['free', 'Free its pose (the model places it)']);
+    options.push(['swap', 'Swap for another ligand…']);
     options.push(['delete', 'Delete this ligand']);
+    const key = `${c.id}:${l.name}`;
     line.append(this._menu(`Edit ligand ${l.name}`, options, (v) => {
+      if (v === 'swap') { this.swapLigand = key; this.render(); return null; }
       if (v === 'delete') return this._mutate('/delete', { atom_indices: atoms });
       return this._batch([{ condition: 'coordinate', atom_indices: atoms, enabled: v === 'fix' }]);
     }));
+    if (this.swapLigand === key) {
+      piece.append(this._ligandCodeForm({
+        label: `Swap ${l.name} for`,
+        button: 'Swap',
+        onSubmit: async (code) => {
+          await this._addLigand(code, { replace: atoms, chainId: c.id });
+          this.swapLigand = null;
+          this.render();
+        },
+        onCancel: () => { this.swapLigand = null; this.render(); },
+      }));
+    }
     return piece;
   }
 
