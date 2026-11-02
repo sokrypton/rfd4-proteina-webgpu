@@ -460,9 +460,10 @@ export class DesignPanel {
     return p.start === p.end ? `${c.id}${p.start}` : `${c.id}${p.start}–${p.end}`;
   }
 
-  /** A piece's name: its residues (where a set-up took them from, if renumbered), or "new". */
+  /** A piece's name, on the left of its row: its residues (where a set-up took them from, if renumbered), or for
+   * new residues their length. */
   _pieceText(c, p) {
-    if (p.kind === 'new') return 'new';
+    if (p.kind === 'new') return p.min === p.max ? `${p.min}` : `${p.min}–${p.max}`;
     // A count only where numbering skips (it would repeat the range otherwise).
     const n = p.count !== p.end - p.start + 1 ? ` (${p.count})` : '';
     return p.source ?? `${this._range(c, p)}${n}`;
@@ -479,7 +480,7 @@ export class DesignPanel {
 
   /** What a piece row says after its residues: what is kept, in a few words. */
   _status(p) {
-    if (p.kind === 'new') return p.min === p.max ? `${p.min}` : `${p.min}–${p.max}`;
+    if (p.kind === 'new') return 'new';
     const { structure, sequence, position } = this._properties(p);
     // The popup's words: both fixed reads "fixed", both designed "designed", otherwise which one is fixed.
     const what = structure === 'designed' && sequence === 'designed' ? 'designed'
