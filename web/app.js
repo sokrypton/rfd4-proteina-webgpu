@@ -1069,11 +1069,65 @@ class Rfd4pStudioApp {
     if (this.els.refoldBox) this.els.refoldBox.hidden = !isDesign;
     if (this.els.refoldBtn) this.els.refoldBtn.disabled = Boolean(this.refoldAbort);
     if (this.els.refoldResult && this.refoldSid !== this.studioSessionId) {
-      const text = this.refoldAbort ? 'Another design is refolding.' : view?.refoldText;
+      // A refold's own result wins; otherwise say if the parameters are still coming down, because that wait is
+      // minutes long on a slow link and used to show nothing at all.
+      const text = this.refoldAbort ? 'Another design is refolding.' : (view?.refoldText ?? this._prefetchNote());
       this.els.refoldResult.textContent = text ?? '';
       this.els.refoldResult.classList.toggle('error', !this.refoldAbort && Boolean(view?.refoldError));
       this.els.refoldResult.hidden = !text;
     }
+  }
+
+  /** Whether AlphaFold 3's weights terms have already been agreed to in this browser. */
+  _af3TermsAccepted() {
+    try { return localStorage.getItem('rfd4p.refoldTerms.af3') === 'accepted'; } catch { return false; }
+  }
+
+  /**
+   * Pull the selected folding model's parameters ahead of the click, and say so.
+   *
+   * Two problems, one fix. The parameters are a few hundred MB and `refoldDesign` only starts fetching them when
+   * Refold is pressed, so the whole transfer lands on someone sitting still — and it passes a no-op progress
+   * callback to `loadAf3Weights`, so nothing is reported while it happens. `loadAf3Weights` memoises per family
+   * and honours the progress callback of whoever calls it FIRST, so calling it here both starts the download
+   * early and makes it the thing that reports. The later `refoldDesign` awaits the same promise.
+   *
+   * 🔴 ALPHAFOLD 3 IS NOT PREFETCHED UNTIL ITS TERMS ARE ACCEPTED. Its parameters carry Google DeepMind's
+   * terms of use and prohibited-use policy, and `_agreeRefoldTerms` is where someone agrees to them. Fetching
+   * them in the background first would take that decision away. OpenBind-0 is Apache 2.0 and has no such gate.
+   */
+  _prefetchFoldWeights() {
+    const model = this.els.refoldModel?.value ?? 'openbind0';
+    if (this.noWebGpu || !model || this.refoldAbort) return;
+    if (model === 'af3' && !this._af3TermsAccepted()) return;
+    if (this.weightPrefetch?.model === model) return;
+    const name = REFOLD_MODELS[model] ?? model;
+    const state = { model, name, loadedBytes: 0, totalBytes: 0, done: false };
+    this.weightPrefetch = state;
+    void (async () => {
+      try {
+        const { loadAf3Weights, FOLDERS } = await import('./localfold.js');
+        await loadAf3Weights((progress) => {
+          state.loadedBytes = progress.loadedBytes ?? 0;
+          state.totalBytes = progress.totalBytes ?? 0;
+          this._syncRefoldUi();
+        }, FOLDERS[model] ?? model);
+      } catch {
+        // A failed prefetch costs nothing: the refold itself will try again and report properly.
+      } finally {
+        state.done = true;
+        this._syncRefoldUi();
+      }
+    })();
+  }
+
+  /** What the Refold row says while parameters are still coming down, or nothing once they are here. */
+  _prefetchNote() {
+    const state = this.weightPrefetch;
+    if (!state || state.done || !state.totalBytes) return null;
+    const mb = (bytes) => (bytes / 1e6).toFixed(0);
+    return `Downloading ${state.name} parameters — ${mb(state.loadedBytes)} of ${mb(state.totalBytes)} MB.`
+      + ' First time only; it is kept for next time.';
   }
 
   /**
@@ -1154,7 +1208,21 @@ class Rfd4pStudioApp {
       if (!this.gpuDevice) await this._initWebGpu();
       if (!this.gpuDevice) throw new Error('WebGPU is not available');
       // ~6 MB of LocalFold code (tools/sync-localfold.mjs), loaded on the first refold only.
-      const { refoldDesign } = await import('./localfold.js');
+      const { refoldDesign, loadAf3Weights, FOLDERS } = await import('./localfold.js');
+      // 🔴 ASK FOR THE PARAMETERS HERE, NOT INSIDE THE REFOLD, SO THE WAIT IS VISIBLE. `refoldDesign` calls
+      // `loadAf3Weights` with a no-op progress callback, so a few hundred MB used to come down behind a status
+      // line that said "Refolding with ..." and never moved — minutes of apparent hang on a slow link. The
+      // loader memoises per family and honours the FIRST caller's callback, so asking here is what makes the
+      // transfer report; the call inside `refoldDesign` then awaits this same promise. A prefetch already in
+      // flight (`_prefetchFoldWeights`) lands here too, and this just follows its progress.
+      await loadAf3Weights((progress) => {
+        const loaded = progress.loadedBytes ?? 0;
+        const total = progress.totalBytes ?? 0;
+        if (!total) return;
+        show(`${name}: downloading parameters — ${(loaded / 1e6).toFixed(0)} of ${(total / 1e6).toFixed(0)} MB.`
+          + ' First time only; it is kept for next time.');
+      }, FOLDERS[model] ?? model);
+      show(`Refolding with ${name}...`);
       const result = await refoldDesign({
         pdb: view.pdb, chain: view.designedChains, model, device: this.gpuDevice, seed: 0, signal: abort.signal,
         partial: view.partialTemplates ?? [],
@@ -1490,6 +1558,9 @@ class Rfd4pStudioApp {
       }
 
       this.setProgress(1, 'idle');
+      // There is now something to refold, and the Refold button has just appeared. Start pulling the folding
+      // model's parameters while the user reads their design, rather than when they click.
+      this._prefetchFoldWeights();
       const stopNote = earlyStops.length ? ` Converged early at step ${earlyStops.join(', ')}.` : '';
       const seeds = numSamples > 1 ? `seeds ${baseSeed}–${baseSeed + numSamples - 1}` : `seed ${baseSeed}`;
       this.setStatus(`Generated from input revision ${inputRevision} with ${seeds} (${elapsedS} s on ${backendLabel}).${stopNote}`);
