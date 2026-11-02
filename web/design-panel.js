@@ -460,16 +460,9 @@ export class DesignPanel {
     return p.start === p.end ? `${c.id}${p.start}` : `${c.id}${p.start}–${p.end}`;
   }
 
-  /** A piece's name: its residues (where a set-up took them from, if renumbered), or "new" and where it goes. */
+  /** A piece's name: its residues (where a set-up took them from, if renumbered), or "new". */
   _pieceText(c, p) {
-    if (p.kind === 'new') {
-      // Where it goes, by the piece before it as that piece's row names it ("after A38", not the renumbered "A1").
-      const k = c.pieces.indexOf(p);
-      const prev = c.pieces.slice(0, k).reverse().find((q) => q.kind !== 'new');
-      const where = c.pieces.length === 1 ? '' : k === 0 ? 'N-term' : k === c.pieces.length - 1 ? 'C-term'
-        : prev ? `after ${prev.source ?? `${c.id}${prev.end}`}` : '';
-      return `new${where ? ` · ${where}` : ''}`;
-    }
+    if (p.kind === 'new') return 'new';
     // A count only where numbering skips (it would repeat the range otherwise).
     const n = p.count !== p.end - p.start + 1 ? ` (${p.count})` : '';
     return p.source ?? `${this._range(c, p)}${n}`;
@@ -486,11 +479,16 @@ export class DesignPanel {
 
   /** What a piece row says after its residues: what is kept, in a few words. */
   _status(p) {
-    if (p.kind === 'new') return `${p.min === p.max ? p.min : `${p.min}–${p.max}`} long`;
-    const kept = { all: 'kept', backbone: 'backbone kept', sequence: 'sequence kept', sidechain: 'side chains kept',
-      shape: 'kept as a rigid unit' }[p.keep] ?? 'redesigned';
-    return [kept, p.anywhere ? 'anywhere' : '', p.hotspots.length ? `${p.hotspots.length} hotspot${p.hotspots.length === 1 ? '' : 's'}` : '']
-      .filter(Boolean).join(' · ');
+    if (p.kind === 'new') return p.min === p.max ? `${p.min}` : `${p.min}–${p.max}`;
+    const { structure, sequence, position } = this._properties(p);
+    // The popup's words: both fixed reads "fixed", both designed "designed", otherwise which one is fixed.
+    const what = structure === 'designed' && sequence === 'designed' ? 'designed'
+      : structure === 'fixed' && sequence === 'fixed' ? 'fixed'
+        : structure === 'rigid' ? 'fixed, can move'
+          : structure === 'sidechain' ? 'side chains fixed'
+            : structure === 'fixed' ? 'structure fixed' : 'sequence fixed';
+    return [what, position === 'anywhere' ? 'anywhere' : '',
+      p.hotspots.length ? `${p.hotspots.length} hotspot${p.hotspots.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
   }
 
   /** A row that opens its popup: name, status, ⋯. */
@@ -502,7 +500,7 @@ export class DesignPanel {
     },
     el('span', { class: 'rfd4p-piece-label', text: name }),
     el('span', { class: 'rfd4p-piece-status', text: status }),
-    readonly ? null : el('span', { class: 'rfd4p-row-more', 'aria-hidden': 'true', text: '⋯' }));
+    );
     return el('div', { class: 'rfd4p-piece' }, line);
   }
 
@@ -513,8 +511,7 @@ export class DesignPanel {
   }
 
   _ligandRow(c, l, readonly) {
-    const status = l.pose === 'fixed' ? 'pose kept' : l.pose === 'predicted' ? 'placed by the model'
-      : `${l.fixedAtoms} of ${l.atoms} atoms kept`;
+    const status = l.pose === 'fixed' ? 'fixed' : l.pose === 'predicted' ? 'free' : `${l.fixedAtoms} of ${l.atoms} atoms fixed`;
     return this._row(l.name, status, 'rfd4p-piece-ligand', readonly, (anchor) => this._openPop(anchor, () => this._ligandPop(c, l)));
   }
 
@@ -580,109 +577,147 @@ export class DesignPanel {
       el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: apply }));
   }
 
-  /** Existing residues: which of them, what to keep of them, and what else is true of them. */
+  /** Existing residues: which of them, then three properties (structure, sequence, position), each fixed or designed. */
   _piecePop(c, p) {
     const a = this._inputDoc()?.atoms;
     const num = (value, label) => el('input', { type: 'number', min: p.start, max: p.end, value, 'aria-label': label });
     const from = num(p.start, 'First residue');
     const to = num(p.end, 'Last residue');
-    const current = p.kind === 'kept' ? p.keep : 'designed';
-    const choices = [
-      ['all', 'Everything', 'Structure and sequence stay as they are'],
-      ['backbone', 'Backbone (new sequence)', 'Same shape; the model writes a new sequence'],
-      ['sequence', 'Sequence (new shape)', 'Same amino acids; the model builds the shape'],
-      ['sidechain', 'Side chains', 'Side-chain atoms held (e.g. catalytic groups); backbone free'],
-      ['shape', 'Rigid unit', 'Held rigid but free to move as a whole (a framework)'],
-      ['designed', 'Nothing (redesign)', 'The model makes both structure and sequence'],
-      ['replace', 'Replace with new residues', 'Removed; new residues of the length below take their place'],
-    ];
-    const group = `rfd4p-keep-${Date.now()}`;
-    const radios = choices.map(([value, text, hint]) => {
-      const input = el('input', { type: 'radio', name: group, value, checked: value === current });
-      return el('label', { class: 'rfd4p-pop-choice', title: hint }, input, el('span', { text }));
-    });
-    const lenMin = el('input', { type: 'number', min: 1, max: 1000, value: Math.max(1, Math.round(p.count * 0.75)), 'aria-label': 'Fewest new residues' });
-    const lenMax = el('input', { type: 'number', min: 1, max: 1000, value: Math.max(1, Math.round(p.count * 1.25)), 'aria-label': 'Most new residues' });
-    radios[radios.length - 1].append(el('span', { class: 'rfd4p-pop-inline' }, lenMin, el('span', { text: '–' }), lenMax));
-    const keepOnly = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
-      placeholder: `e.g. ${c.id}${p.start}, ${c.id}${Math.min(p.end, p.start + 10)}`, 'aria-label': 'Keep only these residues' });
+    const now = this._properties(p);
+    const select = (label, options, value, title) => {
+      const s = el('select', { 'aria-label': label, title });
+      for (const [v, text] of options) s.append(el('option', { value: v, text, selected: v === value }));
+      return s;
+    };
+    const structure = select('Structure', [['fixed', 'fixed'], ['rigid', 'fixed, can move'], ['sidechain', 'side chains only'], ['designed', 'designed']],
+      now.structure, 'Fixed: kept where it is. Can move: kept rigid, free to move as a whole (a framework). Designed: the model builds it.');
+    const sequence = select('Sequence', [['fixed', 'fixed'], ['designed', 'designed']], now.sequence,
+      'Fixed: these amino acids. Designed: the model writes them.');
+    const position = select('Position in chain', [['fixed', 'fixed'], ['anywhere', 'anywhere']], now.position,
+      'Anywhere: the model chooses where in the chain these residues go.');
+    // Side chains only means those side chains, so their amino acids; a fully designed piece has no position to keep.
+    const sync = () => {
+      if (structure.value === 'sidechain') sequence.value = 'fixed';
+      sequence.disabled = structure.value === 'sidechain';
+      const free = structure.value === 'designed' && sequence.value === 'designed';
+      if (free) position.value = 'fixed';
+      position.disabled = free;
+    };
+    structure.addEventListener('change', sync);
+    sequence.addEventListener('change', sync);
+    sync();
 
     const hot = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
-      value: formatResidueList(c.id, p.hotspots), placeholder: `none, or e.g. ${c.id}${p.start}, ${c.id}${Math.min(p.end, p.start + 4)}`,
-      'aria-label': 'Hotspots' });
-    const anywhere = el('input', { type: 'checkbox', checked: Boolean(p.anywhere) });
+      value: formatResidueList(c.id, p.hotspots), placeholder: 'none', 'aria-label': 'Hotspots',
+      title: 'Residues a binder should touch, e.g. A56, A60-62' });
+    const keepOnly = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
+      placeholder: 'all', 'aria-label': 'Keep only these residues',
+      title: 'Type some residues (e.g. A38, A99) to keep only those; the rest of the chain becomes new residues (a motif)' });
     const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
+    const residuesIn = (text, inChain) => {
+      const { residues, bad } = parseResidueList(text, c.id);
+      const want = new Set(residues.filter((r) => r.chain === c.id).map((r) => r.resId));
+      const atoms = a ? inChain.filter((i) => want.has(Number(a.res_id[i]))) : [];
+      const found = new Set(atoms.map((i) => Number(a.res_id[i])));
+      return { want, atoms, bad, missing: [...want].filter((id) => !found.has(id)) };
+    };
 
     const apply = async () => {
-      const lo = Math.max(p.start, Math.min(p.end, Math.round(Number(from.value)) || p.start));
-      const hi = Math.max(lo, Math.min(p.end, Math.round(Number(to.value)) || p.end));
-      const atoms = a ? p.atomIndices.filter((i) => Number(a.res_id[i]) >= lo && Number(a.res_id[i]) <= hi) : p.atomIndices;
-      const part = { ...p, keep: p.kind === 'kept' ? p.keep : null, atomIndices: atoms, count: hi - lo + 1 };
-      const { residues, bad } = parseResidueList(hot.value, c.id);
-      const wanted = new Set(residues.filter((r) => r.chain === c.id).map((r) => r.resId));
-      const outside = [...wanted].filter((id) => id < p.start || id > p.end);
-      if (bad.length || outside.length) {
-        note.textContent = bad.length ? `Hotspots not understood: ${bad.join(' ')}` : `Hotspots outside ${this._range(c, p)}: ${formatResidueList(c.id, outside)}`;
-        return;
-      }
-      const mode = radios.map((r) => r.querySelector('input')).find((r) => r.checked)?.value ?? current;
-      // "Keep only": those residues kept, the rest of the chain rebuilt as new residues (the motif set-up).
       if (keepOnly.value.trim()) {
-        const only = parseResidueList(keepOnly.value, c.id);
-        const want = new Set(only.residues.filter((r) => r.chain === c.id).map((r) => r.resId));
-        const onlyAtoms = a ? c.polymerAtomIndices.filter((i) => want.has(Number(a.res_id[i]))) : [];
-        const found = new Set(onlyAtoms.map((i) => Number(a.res_id[i])));
-        const missing = [...want].filter((id) => !found.has(id));
-        if (only.bad.length || missing.length || !onlyAtoms.length) {
-          note.textContent = only.bad.length ? `Not understood: ${only.bad.join(' ')}` : `Not in chain ${c.id}: ${formatResidueList(c.id, missing)}`;
+        const only = residuesIn(keepOnly.value, c.polymerAtomIndices);
+        if (only.bad.length || only.missing.length || !only.atoms.length) {
+          note.textContent = only.bad.length ? `Not understood: ${only.bad.join(' ')}` : `Not in chain ${c.id}: ${formatResidueList(c.id, only.missing)}`;
           return;
         }
         this._closePop();
-        await this._runFlow('scaffold', this._spec(), { atoms: onlyAtoms });
+        await this._runFlow('scaffold', this._spec(), { atoms: only.atoms });
+        return;
+      }
+      const hotspots = residuesIn(hot.value, p.atomIndices);
+      if (hotspots.bad.length || hotspots.missing.length) {
+        note.textContent = hotspots.bad.length ? `Hotspots not understood: ${hotspots.bad.join(' ')}`
+          : `Hotspots outside ${this._range(c, p)}: ${formatResidueList(c.id, hotspots.missing)}`;
         return;
       }
       this._closePop();
-      // Hotspots and "anywhere" first: they refer to residues a replacement would remove.
-      const hotAtoms = a ? p.atomIndices.filter((i) => wanted.has(Number(a.res_id[i]))) : [];
-      const sameHot = formatResidueList(c.id, [...wanted]) === formatResidueList(c.id, p.hotspots);
-      if (!sameHot) {
+      if (formatResidueList(c.id, [...hotspots.want]) !== formatResidueList(c.id, p.hotspots)) {
         const edits = [{ condition: 'hotspot', atom_indices: p.atomIndices, enabled: false }];
-        if (hotAtoms.length) edits.push({ condition: 'hotspot', atom_indices: hotAtoms, enabled: true });
+        if (hotspots.atoms.length) edits.push({ condition: 'hotspot', atom_indices: hotspots.atoms, enabled: true });
         if (!await this._batch(edits)) return;
       }
-      if (anywhere.checked !== Boolean(p.anywhere) && !await this._batch([{ condition: 'index', atom_indices: atoms, enabled: anywhere.checked }])) return;
+      const lo = Math.max(p.start, Math.min(p.end, Math.round(Number(from.value)) || p.start));
+      const hi = Math.max(lo, Math.min(p.end, Math.round(Number(to.value)) || p.end));
+      const atoms = a ? p.atomIndices.filter((i) => Number(a.res_id[i]) >= lo && Number(a.res_id[i]) <= hi) : p.atomIndices;
+      const want = { structure: structure.value, sequence: sequence.value, position: position.value };
       const whole = lo === p.start && hi === p.end;
-      if (mode === 'replace') {
-        const min = Math.max(1, Math.round(Number(lenMin.value)) || 1);
-        await this._mutate('/segments/replace', { atom_indices: atoms, minimum: min, maximum: Math.max(min, Math.round(Number(lenMax.value)) || min) });
-      } else if (mode !== current || !whole) {
-        await this._setKeep(part, mode);
+      if (!whole || want.structure !== now.structure || want.sequence !== now.sequence || want.position !== now.position) {
+        await this._applyPiece(p, atoms, want);
       }
     };
 
+    const span = () => {
+      const lo = Math.max(p.start, Math.min(p.end, Math.round(Number(from.value)) || p.start));
+      const hi = Math.max(lo, Math.min(p.end, Math.round(Number(to.value)) || p.end));
+      return a ? p.atomIndices.filter((i) => Number(a.res_id[i]) >= lo && Number(a.res_id[i]) <= hi) : p.atomIndices;
+    };
+    const link = (text, title, fn, danger = false) => el('button', {
+      type: 'button', class: `rfd4p-link${danger ? ' rfd4p-link-danger' : ''}`, text, title,
+      onclick: () => { const atoms = span(); this._closePop(); void fn(atoms); },
+    });
+    const segment = (atoms, before) => this._mutate('/segments', {
+      minimum: 5, maximum: 10, atom_index: before ? atoms[0] : atoms[atoms.length - 1], before, new_chain: false,
+      chain_id: null, chain_type: 'polypeptide(L)',
+    });
     const extra = [
-      el('button', { type: 'button', class: 'rfd4p-link', text: '+ before', title: 'Add new residues before these',
-        onclick: () => { this._closePop(); void this._mutate('/segments', { minimum: 5, maximum: 10, atom_index: p.atomIndices[0], before: true, new_chain: false, chain_id: null, chain_type: 'polypeptide(L)' }); } }),
-      el('button', { type: 'button', class: 'rfd4p-link', text: '+ after', title: 'Add new residues after these',
-        onclick: () => { this._closePop(); void this._mutate('/segments', { minimum: 5, maximum: 10, atom_index: p.atomIndices[p.atomIndices.length - 1], before: false, new_chain: false, chain_id: null, chain_type: 'polypeptide(L)' }); } }),
-      this._chainItems(c) > 1 ? el('button', { type: 'button', class: 'rfd4p-link rfd4p-link-danger', text: 'Delete',
-        onclick: () => { this._closePop(); void this._mutate('/delete', { atom_indices: p.atomIndices }); } }) : null,
+      link('Add before', 'New residues before these', (atoms) => segment(atoms, true)),
+      link('Add after', 'New residues after these', (atoms) => segment(atoms, false)),
+      link('Replace', 'Replace these residues with new ones (length ±25%, editable after)', (atoms) => {
+        const n = new Set(atoms.map((i) => Number(a.res_id[i]))).size;
+        return this._mutate('/segments/replace', { atom_indices: atoms, minimum: Math.max(1, Math.round(n * 0.75)), maximum: Math.max(1, Math.round(n * 1.25)) });
+      }),
+      this._chainItems(c) > 1 || p.count > 1 ? link('Delete', 'Delete these residues', (atoms) => this._mutate('/delete', { atom_indices: atoms }), true) : null,
     ].filter(Boolean);
 
+    const row = (label, ...children) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...children);
     return [
-      this._popHead(`Chain ${c.id}, ${p.source ?? this._range(c, p)}`, this._sourceOf(c)),
-      p.count > 1 ? el('div', { class: 'rfd4p-pop-row', title: 'Narrow the range to change only some of these residues' },
-        el('span', { class: 'rfd4p-pop-label', text: 'Residues' }),
-        el('span', { class: 'rfd4p-pop-inline' }, el('span', { text: c.id }), from, el('span', { text: '–' }), to)) : null,
-      el('div', { class: 'rfd4p-pop-section' }, el('span', { class: 'rfd4p-pop-label', text: 'Keep' }), ...radios),
-      el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Hotspots' }), hot),
-      el('label', { class: 'rfd4p-pop-row', title: 'The model chooses where in the chain these residues go' },
-        el('span', { class: 'rfd4p-pop-label' }), anywhere, el('span', { text: 'Anywhere in the chain' })),
-      p.count > 1 ? el('div', { class: 'rfd4p-pop-row', title: 'Keep just these residues; the rest of the chain becomes new residues (a motif)' },
-        el('span', { class: 'rfd4p-pop-label', text: 'Keep only' }), keepOnly) : null,
+      this._popHead(`Chain ${c.id}`, this._sourceOf(c)),
+      row('Residues', el('span', { class: 'rfd4p-pop-inline', title: 'Narrow the range to change only some of these residues' },
+        el('span', { text: c.id }), from, el('span', { text: '–' }), to)),
+      row('Structure', structure),
+      row('Sequence', sequence),
+      row('Position', position),
+      row('Hotspots', hot),
+      row('Keep only', keepOnly),
       note,
       this._popActions(() => void apply(), extra),
-    ].filter(Boolean);
+    ];
+  }
+
+  /** A piece's three properties, as the popup and the row name them. */
+  _properties(p) {
+    if (p.kind !== 'kept') return { structure: 'designed', sequence: 'designed', position: 'fixed' };
+    const structure = { all: 'fixed', backbone: 'fixed', sidechain: 'sidechain', shape: 'rigid' }[p.keep] ?? 'designed';
+    const sequence = p.keep === 'backbone' ? 'designed' : 'fixed';
+    return { structure, sequence, position: p.anywhere ? 'anywhere' : 'fixed' };
+  }
+
+  /** Set structure / sequence / position on `atoms` (all or part of piece `p`). Rigid holds are internal coordinates. */
+  async _applyPiece(p, atoms, { structure, sequence, position }) {
+    const backbone = this._backboneOf(atoms);
+    const side = atoms.filter((i) => !backbone.includes(i));
+    // Internal coordinates are their own edit: clear them before anything else, set them before the rest.
+    if (p.kind === 'kept' && p.keep === 'shape' && !await this._mutate('/internal-coords', { atom_indices: atoms, enabled: false })) return false;
+    if (structure === 'rigid' && !await this._mutate('/internal-coords', { atom_indices: atoms, enabled: true })) return false;
+    const edits = [];
+    if (structure !== 'rigid') {
+      edits.push({ condition: 'coordinate', atom_indices: atoms, enabled: false });
+      // Fixed with a designed sequence holds the backbone only: the side chains will change.
+      const held = structure === 'fixed' ? (sequence === 'fixed' ? atoms : backbone) : structure === 'sidechain' ? side : [];
+      if (held.length) edits.push({ condition: 'coordinate', atom_indices: held, enabled: true });
+    }
+    edits.push({ condition: 'sequence', atom_indices: atoms, enabled: sequence === 'fixed' });
+    edits.push({ condition: 'index', atom_indices: atoms, enabled: position === 'anywhere' });
+    return this._batch(edits);
   }
 
   /** New residues: how many, or remove them. */
@@ -737,32 +772,13 @@ export class DesignPanel {
     return [
       this._popHead(`Ligand ${l.name}`, this._sourceOf(c)),
       el('div', { class: 'rfd4p-pop-section' }, el('span', { class: 'rfd4p-pop-label', text: 'Pose' }),
-        el('label', { class: 'rfd4p-pop-choice' }, keepPose, el('span', {}, el('strong', { text: 'Keep it where it is' }))),
-        el('label', { class: 'rfd4p-pop-choice' }, free, el('span', {}, el('strong', { text: 'Let the model place it' })))),
-      l.pose === 'partly fixed' ? el('p', { class: 'muted', title: 'Set atom by atom in the Advanced editor', text: `${l.fixedAtoms} of ${l.atoms} atoms kept now` }) : null,
+        el('label', { class: 'rfd4p-pop-choice', title: 'Kept where it is' }, keepPose, el('span', { text: 'fixed' })),
+        el('label', { class: 'rfd4p-pop-choice', title: 'The model places it' }, free, el('span', { text: 'free' }))),
+      l.pose === 'partly fixed' ? el('p', { class: 'muted', title: 'Set atom by atom in the Advanced editor', text: `${l.fixedAtoms} of ${l.atoms} atoms fixed now` }) : null,
       el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Swap' }), code),
       note,
       this._popActions(() => void apply(), extra),
     ].filter(Boolean);
-  }
-
-  /** How a kept piece is held, or 'designed' to redesign it in place. Shape-only holds are cleared first. */
-  async _setKeep(p, mode) {
-    const all = p.atomIndices;
-    const backbone = this._backboneOf(all);
-    const side = all.filter((i) => !backbone.includes(i));
-    if (p.keep === 'shape' && !await this._mutate('/internal-coords', { atom_indices: all, enabled: false })) return false;
-    if (mode === 'shape') {
-      return await this._mutate('/internal-coords', { atom_indices: all, enabled: true })
-        && this._batch([{ condition: 'sequence', atom_indices: all, enabled: true }]);
-    }
-    const edits = [{ condition: 'coordinate', atom_indices: all, enabled: false }];
-    if (mode === 'all') edits.push({ condition: 'coordinate', atom_indices: all, enabled: true });
-    if (mode === 'backbone' && backbone.length) edits.push({ condition: 'coordinate', atom_indices: backbone, enabled: true });
-    if (mode === 'sidechain' && side.length) edits.push({ condition: 'coordinate', atom_indices: side, enabled: true });
-    edits.push({ condition: 'sequence', atom_indices: all, enabled: mode !== 'backbone' && mode !== 'designed' });
-    if (mode === 'designed') edits.push({ condition: 'index', atom_indices: all, enabled: false });
-    return this._batch(edits);
   }
 
   _backboneOf(indices) {

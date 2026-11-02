@@ -1371,3 +1371,6 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
 .rfd4p-piece-pop .rfd4p-pop-choice .rfd4p-pop-inline { margin-left: auto; }
 .rfd4p-piece-pop .rfd4p-pop-section { gap: 2px; }
 .rfd4p-piece-pop .rfd4p-pop-row { flex-wrap: nowrap; }
+
+#rfd4p-studio-card .rfd4p-row-button .rfd4p-piece-label { max-width: 60%; }
+.rfd4p-piece-pop select { flex: 1; height: 24px; min-height: 0; padding: 0 4px; font-size: 12px; }

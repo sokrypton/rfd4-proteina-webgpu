@@ -242,17 +242,6 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
   };
 }
 
-/**
- * How a kept piece is held: everything (the default), or only part of it. Each is a modifier the panel shows as a chip.
- */
-export const KEEP_MODES = {
-  all: { chip: '', label: 'Keep everything', help: 'Structure and sequence kept as they are' },
-  sequence: { chip: 'sequence only', label: 'Keep the sequence only', help: 'Same amino acids; the model predicts the shape' },
-  backbone: { chip: 'backbone only', label: 'Keep the backbone only', help: 'Same shape; the model writes a new sequence' },
-  sidechain: { chip: 'side chains only', label: 'Keep the side chains only', help: 'Catalytic or binding groups kept; backbone free' },
-  shape: { chip: 'shape only', label: 'Keep the shape, not the position', help: 'Held rigid as a unit, but free to move (a framework)' },
-};
-
 /** A residue's piece kind ('kept', 'designed', 'new') and, for a kept one, its keep mode. */
 function pieceOf(r) {
   if (r.kind === 'segment') return { kind: 'new' };
@@ -288,6 +277,9 @@ function chainPieces(residues, segmentWhere) {
       continue;
     }
     const src = splitSource(r.source);
+    // A glycine has no side chain to hold, so "side chains only" leaves it with its amino acid alone: it belongs to
+    // the side-chain run it sits in rather than splitting it.
+    if (run?.keep === 'sidechain' && p.keep === 'sequence' && r.resName === 'GLY') p.keep = 'sidechain';
     const sameRun = run && run.kind === p.kind && run.keep === p.keep && run.anywhere === p.anywhere
       && r.resId === run.end + 1
       && (!run.src && !src || (run.src && src && src[0] === run.src[0] && src[1] === run.srcEnd + 1));
