@@ -222,7 +222,7 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
   const warnings = [];
   if (!n) warnings.push('Open a structure or pick a task to start.');
   else if (task.key === 'redesign_all') {
-    warnings.push('Nothing in this structure is fixed, so all of it will be redesigned. Choose what to keep above.');
+    warnings.push('Nothing in this structure is kept, so all of it will be redesigned. Use a piece\'s Edit menu to keep what should stay.');
   } else if (task.key === 'nothing') {
     warnings.push('Everything is fixed, so there is nothing to design. Free a chain or add new residues.');
   }

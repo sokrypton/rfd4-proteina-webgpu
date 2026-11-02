@@ -10,7 +10,7 @@
     <!-- This site serves the Studio bundle itself; its offline cache would pin stale assets on Pages. -->
     <meta name="atomworks-studio-service-worker" content="off" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="./web/styles.css?v=dcb4576c90" />
+    <link rel="stylesheet" href="./web/styles.css?v=97d9d251e1" />
     <!-- app.js first: its import of studio-api.js installs the /api/* fetch interceptor the Studio bundle boots against. -->
     <!-- module-versions:start (tools/stamp-modules.mjs) -->
     <script type="importmap">
@@ -39,8 +39,8 @@
           "./shared/rfd4p/safetensors.js": "./shared/rfd4p/safetensors.js?v=816ee6d627",
           "./shared/rfd4p/vendor/fzstd.js": "./shared/rfd4p/vendor/fzstd.js?v=e6cdba40d4",
           "./web/app.js": "./web/app.js?v=0bc608b987",
-          "./web/design-panel.js": "./web/design-panel.js?v=3be4248d4f",
-          "./web/design-spec.js": "./web/design-spec.js?v=cad2ef3022",
+          "./web/design-panel.js": "./web/design-panel.js?v=563fc109de",
+          "./web/design-spec.js": "./web/design-spec.js?v=f824f40b5a",
           "./web/ligand-ccd.js": "./web/ligand-ccd.js?v=b937ddbebf",
           "./web/localfold.js": "./web/localfold.js?v=8b16694f7b",
           "./web/refold-view.js": "./web/refold-view.js?v=81c34e0c0a",
@@ -104,13 +104,11 @@
                         <strong id="rfd4p-task-label"></strong>
                     </div>
                     <span class="rfd4p-task-buttons">
-                        <button id="rfd4p-change-task" type="button" class="secondary compact">Change…</button>
                         <button id="rfd4p-new" type="button" class="secondary compact" title="Start over with an example, a PDB ID or your own file">New…</button>
                         <button id="rfd4p-undo" type="button" class="secondary compact" title="Undo the last change" disabled>Undo</button>
                     </span>
                 </div>
                 <p id="rfd4p-task-detail" class="rfd4p-task-detail muted"></p>
-                <div id="rfd4p-guided" class="rfd4p-guided" hidden></div>
                 <p id="rfd4p-edit-hint" class="rfd4p-edit-hint muted">The design, chain by chain and piece by piece. <strong>Kept</strong> pieces stay as they are, <strong>New</strong> and <strong>Redesigned</strong> ones are made by the model. Use a piece's <em>Edit</em> menu to change it; tags show anything special about it (× removes one).</p>
                 <div id="rfd4p-chain-list" class="rfd4p-chain-list"></div>
                 <div class="rfd4p-chain-actions" role="group" aria-label="Add to the design">
@@ -145,6 +143,13 @@
                 <span id="seed-mode" class="rfd4p-seed-mode muted"></span>
             </div>
 
+            <div class="rfd4p-partial-setting" title="Partial diffusion: start part of the way from the input structure instead of from noise. About 70% is a good start; higher changes it more. Needs every residue defined, with coordinates.">
+                <label class="checkbox" for="partial-diffusion">
+                    <input type="checkbox" id="partial-diffusion" /> Start from the input structure
+                </label>
+                <input type="range" id="partial-diffusion-percent" class="rfd4p-slider" min="1" max="100" step="1" value="70" disabled aria-label="How far from the input (%)" />
+                <input type="number" id="partial-diffusion-percent-num" class="rfd4p-slider-num" min="1" max="100" step="1" value="70" disabled aria-label="How far from the input (%)" />
+            </div>
             <details class="rfd4p-sampling-details" id="sampling-accordion">
                 <summary>More settings</summary>
                 <div class="rfd4p-sampling-body">
@@ -162,16 +167,6 @@
                             <input type="number" id="latent-k-num" class="rfd4p-slider-num" min="1" max="6" step="0.1" value="4" />
                         </span>
                         <input type="range" id="latent-k" class="rfd4p-slider" min="1" max="6" step="0.1" value="4" />
-                    </label>
-                    <label class="checkbox" for="partial-diffusion">
-                        <input type="checkbox" id="partial-diffusion" /> Partial diffusion
-                    </label>
-                    <label for="partial-diffusion-percent" title="About 70% is a good starting point. Higher values change the input more. Requires an input with defined residues and coordinates.">
-                        <span class="rfd4p-slider-head">
-                            <span>Partial diffusion (% of trajectory)</span>
-                            <input type="number" id="partial-diffusion-percent-num" class="rfd4p-slider-num" min="1" max="100" step="1" value="70" disabled />
-                        </span>
-                        <input type="range" id="partial-diffusion-percent" class="rfd4p-slider" min="1" max="100" step="1" value="70" disabled />
                     </label>
                     <label class="checkbox" for="early-stop" title="Stop once the structure and sequence have both stopped changing for 5 steps (identical sequence, under 0.1 Å from a full run in testing)">
                         <input type="checkbox" id="early-stop" checked /> Early stop when converged

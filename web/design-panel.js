@@ -1,5 +1,5 @@
 /**
- * The RFD4-Proteina card's guided layer over AtomWorks Studio: a "what do you want to design?" start screen, a Design
+ * The RFD4-Proteina card's layer over AtomWorks Studio: a "what do you want to design?" start screen, a Design
  * panel that states what the open document will generate (task, chain roles, lengths, contig) and edits it, and the
  * simple/advanced switch that hides Studio's expert tools.
  *
@@ -26,16 +26,6 @@ const TASKS = [
   { example: 'partial_diffusion', title: 'Diversify a structure', desc: 'Variants close to a starting fold (2KL8)' },
 ];
 
-/** Guided set-ups for a document (shown for an unconstrained structure, or on "Change…"). */
-const FLOWS = [
-  { key: 'binder', title: 'Design a binder to it', desc: 'Keep it fixed and add a new chain' },
-  { key: 'scaffold', title: 'Keep the selected residues', desc: 'Motif scaffolding: fix them, rebuild the rest' },
-  { key: 'ligand', title: 'Design a protein around the ligand', desc: 'Small-molecule binder or enzyme pocket' },
-  { key: 'sequence', title: 'Redesign the sequence', desc: 'Keep the backbone, new sequence' },
-  { key: 'diversify', title: 'Diversify it', desc: 'Partial diffusion from this structure' },
-  { key: 'scratch', title: 'Redesign everything', desc: 'Same chain lengths, nothing kept' },
-];
-
 const el = (tag, attrs = {}, ...children) => {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -58,8 +48,6 @@ export class DesignPanel {
   /** @param {object} app the `Rfd4pStudioApp` (input session, partial-diffusion controls, run state) */
   constructor(app) {
     this.app = app;
-    this.showFlows = false;
-    this.flowForm = null;
     this.selectionCount = 0;
     this.busy = false;
     const $ = (id) => document.getElementById(id);
@@ -73,10 +61,8 @@ export class DesignPanel {
       design: $('rfd4p-design'),
       taskLabel: $('rfd4p-task-label'),
       taskDetail: $('rfd4p-task-detail'),
-      changeTask: $('rfd4p-change-task'),
       newDoc: $('rfd4p-new'),
       back: $('rfd4p-back'),
-      guided: $('rfd4p-guided'),
       chainList: $('rfd4p-chain-list'),
       addSeq: $('rfd4p-add-seq'),
       addPdb: $('rfd4p-add-pdb'),
@@ -287,11 +273,6 @@ export class DesignPanel {
     els.newDoc?.addEventListener('click', () => { this.showStart = true; this.render(); });
     els.back?.addEventListener('click', () => { this.showStart = false; this.render(); });
     document.getElementById('file-input')?.addEventListener('change', () => { this.showStart = false; });
-    els.changeTask?.addEventListener('click', () => {
-      this.showFlows = !this.showFlows;
-      this.flowForm = null;
-      this.render();
-    });
     els.addSeq?.addEventListener('click', () => void this._mutate('/segments', {
       minimum: 60, maximum: 100, atom_index: null, before: false, new_chain: true, chain_id: null,
       chain_type: 'polypeptide(L)',
@@ -327,10 +308,6 @@ export class DesignPanel {
       if (ev.detail?.type !== 'selection') return;
       this.selectionCount = ev.detail?.count ?? 0;
       queueMicrotask(() => this._renderPop());
-      if (!this.els.guided || this.els.guided.hidden) return;
-      // An open form keeps what the user typed: refresh only the selection-dependent parts.
-      if (this.flowForm && this.formUpdate) this.formUpdate();
-      else this._renderFlows(this._spec(), true);
     });
     for (const id of ['partial-diffusion', 'partial-diffusion-percent', 'partial-diffusion-percent-num']) {
       document.getElementById(id)?.addEventListener('input', () => this.render());
@@ -400,7 +377,6 @@ export class DesignPanel {
     els.taskDetail.textContent = viewingDesign
       ? 'Showing a generated design. Select Input under View to change the setup.'
       : spec.task.detail;
-    els.changeTask.hidden = viewingDesign;
     if (els.newDoc) els.newDoc.hidden = viewingDesign;
     const actions = els.addSeq?.parentElement;
     if (actions) actions.hidden = viewingDesign;
@@ -426,9 +402,6 @@ export class DesignPanel {
 
     this._renderPartial(spec, viewingDesign);
     this.showHotspots();
-
-    const needsChoice = ['redesign_all', 'nothing'].includes(spec.task.key);
-    this._renderFlows(spec, !viewingDesign && (this.showFlows || needsChoice || this.flowForm !== null));
 
     // Nothing to generate: keep Generate off (a running job keeps its Stop button).
     if (!this.app.activeAbortController && this.app.els.predictBtn) {
@@ -554,6 +527,15 @@ export class DesignPanel {
     if (chips.childElementCount) piece.append(chips);
 
     if (readonly) return piece;
+    // Split: a residue range of this piece; the next Edit choice applies to those residues only.
+    const split = this.splitting?.key === key ? this.splitting : null;
+    const a = this._inputDoc()?.atoms;
+    const target = split && a
+      ? p.atomIndices.filter((i) => Number(a.res_id[i]) >= split.from && Number(a.res_id[i]) <= split.to)
+      : p.atomIndices;
+    const part = { ...p, atomIndices: target, count: split ? split.to - split.from + 1 : p.count };
+    if (split) piece.append(this._splitRow(c, p, key, split));
+    if (this.keepingOnly === key) piece.append(this._keepOnlyRow(c, p, key));
     const options = [];
     if (p.kind === 'kept') {
       options.push(['', '— Keep —']);
@@ -569,29 +551,40 @@ export class DesignPanel {
       options.push(['', '— Change —']);
       options.push(['keep:all', 'Keep these residues instead']);
     }
+    if (p.count > 1 && !split) {
+      options.push(['split', 'Split: change only some of these residues…']);
+      options.push(['keeponly', 'Keep only some residues, rebuild the rest (motif)…']);
+    }
     options.push(['replace', 'Replace with new residues (any length)']);
     options.push(['before', 'Add new residues before']);
     options.push(['after', 'Add new residues after']);
-    // Alone in its chain, a piece is deleted with the chain's own ×.
-    if (this._chainItems(c) > 1) options.push(['delete', 'Delete these residues']);
-    line.append(this._menu(`Edit ${label.textContent}`, options, (v) => {
-      if (v.startsWith('keep:')) return this._setKeep(p, v.slice(5));
+    // Alone in its chain, a whole piece is deleted with the chain's own ×.
+    if (split || this._chainItems(c) > 1) options.push(['delete', 'Delete these residues']);
+    line.append(this._menu(split ? `Edit ${c.id}${split.from}–${split.to}` : `Edit ${label.textContent}`, options, (v) => {
+      if (v === 'split') {
+        this.splitting = { key, from: p.start, to: Math.min(p.end, p.start + Math.max(0, Math.floor(p.count / 2) - 1)) };
+        this.render();
+        return null;
+      }
+      if (v === 'keeponly') { this.keepingOnly = key; this.render(); return null; }
+      this.splitting = null;
+      if (v.startsWith('keep:')) return this._setKeep(part, v.slice(5));
       if (v === 'hotspots') { this.editingHotspots = key; this.render(); return null; }
       if (v === 'anywhere' || v === 'here') {
-        return this._batch([{ condition: 'index', atom_indices: p.atomIndices, enabled: v === 'anywhere' }]);
+        return this._batch([{ condition: 'index', atom_indices: part.atomIndices, enabled: v === 'anywhere' }]);
       }
       if (v === 'replace') {
         return this._mutate('/segments/replace', {
-          atom_indices: p.atomIndices, minimum: Math.max(1, Math.round(p.count * 0.75)), maximum: Math.max(1, Math.round(p.count * 1.25)),
+          atom_indices: part.atomIndices, minimum: Math.max(1, Math.round(part.count * 0.75)), maximum: Math.max(1, Math.round(part.count * 1.25)),
         });
       }
       if (v === 'before' || v === 'after') {
         return this._mutate('/segments', {
-          minimum: 5, maximum: 10, atom_index: v === 'before' ? p.atomIndices[0] : p.atomIndices[p.atomIndices.length - 1],
+          minimum: 5, maximum: 10, atom_index: v === 'before' ? part.atomIndices[0] : part.atomIndices[part.atomIndices.length - 1],
           before: v === 'before', new_chain: false, chain_id: null, chain_type: 'polypeptide(L)',
         });
       }
-      if (v === 'delete') return this._mutate('/delete', { atom_indices: p.atomIndices });
+      if (v === 'delete') return this._mutate('/delete', { atom_indices: part.atomIndices });
       return null;
     }));
     return piece;
@@ -600,6 +593,60 @@ export class DesignPanel {
   /** Pieces and ligands in a chain: with one, the chain's × is that item's delete. */
   _chainItems(c) {
     return c.pieces.length + c.ligands.length;
+  }
+
+  /** "Only A[38]–[40] ×": the residues a split applies the next Edit choice to. */
+  _splitRow(c, p, key, split) {
+    const num = (value, label) => el('input', { type: 'number', min: p.start, max: p.end, value, 'aria-label': label });
+    const from = num(split.from, 'First residue');
+    const to = num(split.to, 'Last residue');
+    const commit = () => {
+      const lo = Math.max(p.start, Math.min(p.end, Math.round(Number(from.value)) || p.start));
+      const hi = Math.max(lo, Math.min(p.end, Math.round(Number(to.value)) || lo));
+      this.splitting = { key, from: lo, to: hi };
+      this.render();
+    };
+    from.addEventListener('change', commit);
+    to.addEventListener('change', commit);
+    return el('div', { class: 'rfd4p-split-row' },
+      el('span', { text: `Only ${c.id}` }), from, el('span', { text: '–' }), to,
+      el('button', {
+        type: 'button', class: 'rfd4p-chip-x', text: '×', 'aria-label': 'Cancel the split',
+        onclick: () => { this.splitting = null; this.render(); },
+      }));
+  }
+
+  /** "Keep [A14, A38, A99] [Keep]": the motif set-up, the rest of the chain rebuilt as new residues (±25%). */
+  _keepOnlyRow(c, p, key) {
+    const input = el('input', {
+      type: 'text', class: 'rfd4p-hotspot-input', spellcheck: 'false', autocomplete: 'off',
+      placeholder: `${c.id}${p.start}, ${c.id}${Math.min(p.end, p.start + 10)}`, 'aria-label': 'Residues to keep',
+    });
+    const note = el('span', { class: 'rfd4p-hotspot-note muted' });
+    const go = el('button', { type: 'submit', class: 'primary compact', text: 'Keep' });
+    const form = el('form', { class: 'rfd4p-split-row' }, el('span', { text: 'Keep' }), input, go,
+      el('button', {
+        type: 'button', class: 'rfd4p-chip-x', text: '×', 'aria-label': 'Cancel',
+        onclick: () => { this.keepingOnly = null; this.render(); },
+      }), note);
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const a = this._inputDoc()?.atoms;
+      const { residues, bad } = parseResidueList(input.value, c.id);
+      const want = new Set(residues.filter((r) => r.chain === c.id).map((r) => r.resId));
+      const atoms = a ? c.polymerAtomIndices.filter((i) => want.has(Number(a.res_id[i]))) : [];
+      const found = new Set(atoms.map((i) => Number(a.res_id[i])));
+      const missing = [...want].filter((id) => !found.has(id));
+      if (bad.length || missing.length || !atoms.length) {
+        note.textContent = bad.length ? `not understood: ${bad.join(' ')}`
+          : missing.length ? `not in chain ${c.id}: ${formatResidueList(c.id, missing)}` : 'type the residues to keep';
+        return;
+      }
+      this.keepingOnly = null;
+      void this._runFlow('scaffold', this._spec(), { atoms });
+    });
+    queueMicrotask(() => input.focus());
+    return form;
   }
 
   /** One small "Edit" menu: a select whose first option is its label, reset after every choice. */
@@ -841,25 +888,14 @@ export class DesignPanel {
         }))),
         min, el('span', { text: '–' }), max, el('span', { class: 'muted', text: 'new' })));
       rows.push(el('div', { class: 'rfd4p-pop-row' },
-        btn('Scaffold around these…', () => {
-          pop.hidden = true;
-          this.showFlows = true;
-          this.flowForm = 'scaffold';
-          this.render();
-          this.els.guided?.scrollIntoView({ block: 'nearest' });
-        }),
+        btn('Scaffold around these', act(() => this._runFlow('scaffold', this._spec()))),
         btn('Delete', act(() => this._mutate('/delete', { atom_indices: residues })), 'danger compact')));
     }
     if (ligandAtoms.length) {
       const fixed = ligandAtoms.some(hasCrd);
       rows.push(el('div', { class: 'rfd4p-pop-row' },
         btn(fixed ? 'Free pose' : 'Fix pose', act(() => this._batch([{ condition: 'coordinate', atom_indices: ligandAtoms, enabled: !fixed }]))),
-        btn('Design a protein around it…', () => {
-          pop.hidden = true;
-          this.showFlows = true;
-          this.flowForm = 'ligand';
-          this.render();
-        }),
+        btn('Design a protein around it', act(() => this._runFlow('ligand', this._spec()))),
         polymerAtoms.length ? null : btn('Delete', act(() => this._mutate('/delete', { atom_indices: ligandAtoms })), 'danger compact')));
     }
     pop.replaceChildren(...rows);
@@ -875,186 +911,15 @@ export class DesignPanel {
     pop.style.top = `${Math.max(8, Math.min(window.innerHeight - h - 8, p.y + 14))}px`;
   }
 
-  // ---- guided set-ups -----------------------------------------------------------------------------------------
-
-  _renderFlows(spec, visible = !this.els.guided?.hidden) {
-    const box = this.els.guided;
-    if (!box) return;
-    // The open form (if any) installs its own selection updater below.
-    this.formUpdate = () => this._updateScaffoldButton();
-    box.hidden = !visible || !spec;
-    if (box.hidden) return;
-    const children = [el('p', { class: 'rfd4p-lead', text: 'What should happen to this structure?' })];
-    const hasPolymer = spec.chains.some((c) => c.residues > 0);
-    const hasLigand = spec.chains.some((c) => c.ligands.length > 0);
-    for (const f of FLOWS) {
-      if (f.key === 'ligand' && !hasLigand) continue;
-      const needsSelection = f.key === 'scaffold' && this.selectionCount === 0;
-      const disabled = (f.key !== 'ligand' && !hasPolymer) || needsSelection;
-      children.push(el('button', {
-        type: 'button',
-        class: `rfd4p-flow${this.flowForm === f.key ? ' active' : ''}`,
-        'data-flow': f.key,
-        disabled,
-        title: needsSelection ? 'Select residues in the sequence bar or viewer first' : null,
-        onclick: () => {
-          if (f.key === 'binder' || f.key === 'scaffold' || f.key === 'ligand') {
-            this.flowForm = this.flowForm === f.key ? null : f.key;
-            this._renderFlows(spec, true);
-          } else {
-            void this._runFlow(f.key, spec);
-          }
-        },
-      }, el('strong', { text: f.title }), el('span', { text: needsSelection ? 'Select residues first' : f.desc })));
-      if (f.key === 'binder' && this.flowForm === 'binder') children.push(this._binderForm(spec));
-      if (f.key === 'scaffold' && this.flowForm === 'scaffold' && !needsSelection) children.push(this._scaffoldForm(spec));
-      if (f.key === 'ligand' && this.flowForm === 'ligand') children.push(this._ligandForm(spec));
-    }
-    box.replaceChildren(...children);
-  }
-
-  /** Selection-dependent state of the scaffold button (enabled only with a selection). */
-  _updateScaffoldButton() {
-    const b = this.els.guided?.querySelector('[data-flow="scaffold"]');
-    if (!b) return;
-    const none = this.selectionCount === 0;
-    b.disabled = none;
-    b.title = none ? 'Select residues in the sequence bar or viewer first' : '';
-    const sub = b.querySelector('span');
-    if (sub) sub.textContent = none ? 'Select residues first' : FLOWS.find((f) => f.key === 'scaffold').desc;
-  }
-
-  _binderForm(spec) {
-    const min = el('input', { type: 'number', min: 10, max: 500, value: 60, 'aria-label': 'Binder minimum length' });
-    const max = el('input', { type: 'number', min: 10, max: 500, value: 100, 'aria-label': 'Binder maximum length' });
-    const hot = el('input', { type: 'checkbox', checked: this.selectionCount > 0, disabled: this.selectionCount === 0 });
-    const hotLabel = () => (this.selectionCount
-      ? ` Use the ${this._selectedResidueCount()} selected residues as hotspots`
-      : ' Hotspots: select 3–6 target residues at the interface first');
-    const hotText = document.createTextNode(hotLabel());
-    let wasNone = this.selectionCount === 0;
-    this.formUpdate = () => {
-      hotText.textContent = hotLabel();
-      hot.disabled = this.selectionCount === 0;
-      // Selecting the first hotspots ticks the box; after that it is the user's choice.
-      if (wasNone && this.selectionCount > 0) hot.checked = true;
-      wasNone = this.selectionCount === 0;
-      this._updateScaffoldButton();
-    };
-    const apply = el('button', {
-      type: 'button', class: 'primary compact', text: 'Set up binder',
-      onclick: () => void this._runFlow('binder', spec, {
-        min: Number(min.value), max: Number(max.value), hotspots: hot.checked,
-      }),
-    });
-    return el('div', { class: 'rfd4p-flow-form' },
-      el('p', { class: 'muted', text: 'Hotspots are recommended: without them the model sometimes returns a copy of the target (a homodimer). Click residues in the sequence bar to select them.' }),
-      el('div', { class: 'rfd4p-flow-length' }, el('span', { text: 'Binder length' }), min, el('span', { text: '–' }), max),
-      el('label', { class: 'checkbox' }, hot, hotText),
-      apply);
-  }
-
-  _selectedResidueCount() {
-    const a = this._inputDoc()?.atoms;
-    const sel = window.atomworksStudio?.getSelection?.() ?? [];
-    if (!a) return sel.length;
-    return new Set(sel.map((i) => `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code?.[i] ?? ''}`)).size;
-  }
-
-  _scaffoldForm(spec) {
-    const rebuild = el('input', { type: 'radio', name: 'rfd4p-scaffold-mode', value: 'rebuild', checked: true });
-    const inPlace = el('input', { type: 'radio', name: 'rfd4p-scaffold-mode', value: 'in-place' });
-    const spread = el('input', { type: 'number', class: 'rfd4p-pct', min: 0, max: 100, step: 5, value: 25, 'aria-label': 'Length variation (%)' });
-    const fix = el('select', { 'aria-label': 'What to fix' },
-      el('option', { value: 'whole', text: 'Whole residues (backbone + side chain)' }),
-      el('option', { value: 'sidechain', text: 'Side chains only (e.g. catalytic groups)' }));
-    const where = el('select', { 'aria-label': 'Motif position' },
-      el('option', { value: 'indexed', text: 'Same order and spacing as now' }),
-      el('option', { value: 'anywhere', text: 'Anywhere in the new chain (unindexed)' }));
-    const chainLen = Math.max(...spec.chains.map((c) => c.residues), 1);
-    const totMin = el('input', { type: 'number', min: 1, max: 1000, value: Math.round(chainLen * 0.75), 'aria-label': 'Total minimum length' });
-    const totMax = el('input', { type: 'number', min: 1, max: 1000, value: Math.round(chainLen * 1.25), 'aria-label': 'Total maximum length' });
-    const total = el('div', { class: 'rfd4p-flow-length', hidden: true }, el('span', { text: 'New chain length' }), totMin, el('span', { text: '–' }), totMax);
-    const gapLine = el('label', { class: 'checkbox' }, rebuild, ' Rebuild the rest as new segments, each its original length ±', spread, '%');
-    const inPlaceLine = el('label', { class: 'checkbox' }, inPlace, ' Keep the chain length; redesign the rest in place');
-    where.addEventListener('change', () => {
-      const anywhere = where.value === 'anywhere';
-      total.hidden = !anywhere;
-      gapLine.hidden = anywhere;
-      inPlaceLine.hidden = anywhere;
-    });
-    const apply = el('button', {
-      type: 'button', class: 'primary compact', text: 'Set up motif scaffolding',
-      onclick: () => void this._runFlow('scaffold', spec, {
-        rebuild: rebuild.checked || where.value === 'anywhere',
-        spread: Math.max(0, Math.min(100, Number(spread.value) || 0)) / 100,
-        sidechainsOnly: fix.value === 'sidechain',
-        unindexed: where.value === 'anywhere',
-        totalMin: Number(totMin.value),
-        totalMax: Number(totMax.value),
-      }),
-    });
-    const count = el('p', { class: 'muted' });
-    const showCount = () => {
-      const k = this._selectedResidueCount();
-      count.textContent = k
-        ? `Keeps the ${k} selected residue${k === 1 ? '' : 's'} fixed (sequence, and the structure chosen below).`
-        : 'Select the motif residues in the sequence bar or viewer.';
-    };
-    showCount();
-    this.formUpdate = () => {
-      showCount();
-      apply.disabled = this.selectionCount === 0;
-      this._updateScaffoldButton();
-    };
-    return el('div', { class: 'rfd4p-flow-form' },
-      count,
-      el('label', {}, 'Fix ', fix),
-      el('label', {}, 'Motif position ', where),
-      total, gapLine, inPlaceLine, apply);
-  }
-
-  _ligandForm(spec) {
-    const names = [...new Set(spec.chains.flatMap((c) => c.ligands.map((l) => l.name)))].join(', ');
-    const remove = el('input', { type: 'checkbox', checked: spec.chains.some((c) => c.residues > 0) });
-    const posed = el('select', { 'aria-label': 'Ligand pose' },
-      el('option', { value: 'fixed', text: 'Keep its pose (fixed coordinates)' }),
-      el('option', { value: 'predicted', text: 'Predict its pose (only its identity is given)' }));
-    const min = el('input', { type: 'number', min: 20, max: 500, value: 100, 'aria-label': 'Protein minimum length' });
-    const max = el('input', { type: 'number', min: 20, max: 500, value: 150, 'aria-label': 'Protein maximum length' });
-    const apply = el('button', {
-      type: 'button', class: 'primary compact', text: 'Set up',
-      onclick: () => void this._runFlow('ligand', spec, {
-        removeProtein: remove.checked, poseFixed: posed.value === 'fixed', min: Number(min.value), max: Number(max.value),
-      }),
-    });
-    return el('div', { class: 'rfd4p-flow-form' },
-      el('p', { class: 'muted', text: `Ligand${names.includes(',') ? 's' : ''}: ${names}.` }),
-      el('label', {}, 'Ligand ', posed),
-      el('div', { class: 'rfd4p-flow-length' }, el('span', { text: 'Protein length' }), min, el('span', { text: '–' }), max),
-      el('label', { class: 'checkbox' }, remove, ' Remove the existing protein chains'),
-      apply);
-  }
+  // ---- set-ups (the start screen's "then", and the selection popup's shortcuts) --------------------------------
 
   async _runFlow(key, spec, opts = {}) {
     const polymers = spec.chains.filter((c) => c.residues > 0);
-    const ligandAtoms = spec.chains.flatMap((c) => c.ligandAtomIndices);
     const roleEdits = (c, role) => this._roleEdits(c, role);
-    const selection = window.atomworksStudio?.getSelection?.() ?? [];
+    const selection = opts.atoms ?? window.atomworksStudio?.getSelection?.() ?? [];
     // Each step must succeed before the next; a failure keeps the form open with its error shown.
     let ok = true;
-    if (key === 'binder') {
-      const edits = polymers.flatMap((c) => roleEdits(c, 'fixed'));
-      if (ligandAtoms.length) edits.push({ condition: 'coordinate', atom_indices: ligandAtoms, enabled: true });
-      const lo = Math.max(10, Math.round(opts.min) || 60);
-      ok = await this._batch(edits)
-        && await this._mutate('/segments', {
-          minimum: lo, maximum: Math.max(lo, Math.round(opts.max) || 100), atom_index: null, before: false,
-          new_chain: true, chain_id: null, chain_type: 'polypeptide(L)',
-        })
-        && (!opts.hotspots || !selection.length
-          || await this._mutate('/conditions', { condition: 'hotspot', atom_indices: selection, enabled: true, scope: 'atom' }));
-    } else if (key === 'ligand') {
+    if (key === 'ligand') {
       const lo = Math.max(20, Math.round(opts.min) || 100);
       ok = await this._mutate('/segments/ligand-binder', {
         remove_protein: opts.removeProtein !== false, pose_fixed: opts.poseFixed !== false,
@@ -1083,14 +948,8 @@ export class DesignPanel {
       }
     } else if (key === 'sequence') {
       ok = await this._batch(polymers.flatMap((c) => roleEdits(c, 'backbone')));
-    } else if (key === 'diversify' || key === 'scratch') {
-      ok = await this._batch(polymers.flatMap((c) => roleEdits(c, 'free')));
     }
-    if (ok) {
-      this.app._setPartialDiffusion?.(key === 'diversify');
-      this.showFlows = false;
-      this.flowForm = null;
-    }
+    if (ok) this.app._setPartialDiffusion?.(false);
     this.render();
   }
 
@@ -1195,7 +1054,6 @@ export class DesignPanel {
       const opened = await window.atomworksStudio?.openFile?.(new File([text], `${id}.cif`, { type: 'chemical/x-mmcif' }));
       status.textContent = opened === false ? `Opening ${id} was cancelled.` : '';
       if (opened !== false) this.showStart = false;
-      this.showFlows = true;
     } catch (err) {
       status.textContent = `Could not fetch ${id}: ${err?.message ?? err}`;
     } finally {
