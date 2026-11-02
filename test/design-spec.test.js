@@ -152,17 +152,21 @@ test('review fixes: scaffolding with a ligand selected, re-scaffolding, modified
   assert.equal(m.chains[0].residues, 59);
 });
 
-test('chains read as their pieces, in order, with hotspots placed on them', () => {
+test('chains read as their pieces, in order, with how each is kept and its hotspots', () => {
   const pieces = (file, chain) => specOf(file).chains.find((c) => c.id === chain).pieces
-    .map((p) => (p.kind === 'new' ? `new ${p.min}-${p.max}` : `${p.kind} ${p.start}-${p.end}`));
-  assert.deepEqual(pieces('protein_binder.cif', 'A'), ['kept 17-131']);
+    .map((p) => (p.kind === 'new' ? `new ${p.min}-${p.max}`
+      : `${p.kind}${p.keep ? `/${p.keep}` : ''}${p.anywhere ? '/anywhere' : ''} ${p.start}-${p.end}${p.source ? ` from ${p.source}` : ''}`));
+  assert.deepEqual(pieces('protein_binder.cif', 'A'), ['kept/all 17-131']);
   assert.deepEqual(pieces('protein_binder.cif', 'B'), ['new 50-120']);
-  assert.deepEqual(pieces('antibody_design.cif', 'H'), ['relative 1-98', 'designed 99-109', 'relative 110-120']);
+  assert.deepEqual(pieces('antibody_design.cif', 'H'), ['kept/shape 1-98', 'designed 99-109', 'kept/shape 110-120']);
   assert.deepEqual(pieces('nanobody.cif', 'H'),
-    ['relative 1-22', 'new 11-16', 'relative 24-37', 'new 8-12', 'relative 39-75', 'new 8-22', 'relative 77-86']);
+    ['kept/shape 1-22', 'new 11-16', 'kept/shape 24-37', 'new 8-12', 'kept/shape 39-75', 'new 8-22', 'kept/shape 77-86']);
+  // A set-up renumbers the motif residues it keeps; the pieces still say where they came from.
   assert.deepEqual(pieces('motif_scaffolding.cif', 'A'),
-    ['new 10-20', 'kept 1-1', 'new 15-30', 'kept 3-3', 'new 15-30', 'kept 5-5', 'new 10-20']);
-  assert.deepEqual(pieces('enzyme_design.cif', 'A'), ['new 180-180', 'unindexed 1-1']);
+    ['new 10-20', 'kept/all 1-1 from A38', 'new 15-30', 'kept/all 3-3 from A14', 'new 15-30', 'kept/all 5-5 from A99', 'new 10-20']);
+  // The catalytic residue: only its side-chain tip held, placed anywhere in the new chain.
+  assert.deepEqual(pieces('enzyme_design.cif', 'A'), ['new 180-180', 'kept/sidechain/anywhere 1-1 from A250']);
+  assert.deepEqual(pieces('inverse_folding.cif', 'A'), ['designed 1-7', 'designed 28-79']);
   const target = specOf('protein_binder.cif').chains.find((c) => c.id === 'A');
   assert.deepEqual(target.hotspotResIds, [56, 115, 123]);
   assert.deepEqual(target.pieces[0].hotspots, [56, 115, 123]);

@@ -10,7 +10,7 @@
     <!-- This site serves the Studio bundle itself; its offline cache would pin stale assets on Pages. -->
     <meta name="atomworks-studio-service-worker" content="off" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="./web/styles.css?v=c42f86dfa7" />
+    <link rel="stylesheet" href="./web/styles.css?v=135c55ebd0" />
     <!-- app.js first: its import of studio-api.js installs the /api/* fetch interceptor the Studio bundle boots against. -->
     <!-- module-versions:start (tools/stamp-modules.mjs) -->
     <script type="importmap">
@@ -39,8 +39,8 @@
           "./shared/rfd4p/safetensors.js": "./shared/rfd4p/safetensors.js?v=816ee6d627",
           "./shared/rfd4p/vendor/fzstd.js": "./shared/rfd4p/vendor/fzstd.js?v=e6cdba40d4",
           "./web/app.js": "./web/app.js?v=f65da9bcbc",
-          "./web/design-panel.js": "./web/design-panel.js?v=0041e868d4",
-          "./web/design-spec.js": "./web/design-spec.js?v=6a92bec4f1",
+          "./web/design-panel.js": "./web/design-panel.js?v=be031d7365",
+          "./web/design-spec.js": "./web/design-spec.js?v=cad2ef3022",
           "./web/localfold.js": "./web/localfold.js?v=8b16694f7b",
           "./web/refold-view.js": "./web/refold-view.js?v=81c34e0c0a",
           "./web/results-zip.js": "./web/results-zip.js?v=a85ae171f0",
@@ -109,10 +109,14 @@
                 </div>
                 <p id="rfd4p-task-detail" class="rfd4p-task-detail muted"></p>
                 <div id="rfd4p-guided" class="rfd4p-guided" hidden></div>
-                <p id="rfd4p-edit-hint" class="rfd4p-edit-hint muted">Each chain is listed piece by piece, in order. Change any piece with its menu, type hotspots, add chains, or swap the target: examples are edited the same way as your own setups.</p>
+                <p id="rfd4p-edit-hint" class="rfd4p-edit-hint muted">The design, chain by chain and piece by piece. <strong>Kept</strong> pieces stay as they are, <strong>New</strong> and <strong>Redesigned</strong> ones are made by the model. Use a piece's <em>Edit</em> menu to change it; tags show anything special about it (× removes one).</p>
                 <div id="rfd4p-chain-list" class="rfd4p-chain-list"></div>
                 <div class="rfd4p-chain-actions">
-                    <button id="rfd4p-add-chain" type="button" class="secondary compact">+ New designed chain</button>
+                    <select id="rfd4p-add-menu" class="rfd4p-add-menu" aria-label="Add to the design">
+                        <option value="" selected>+ Add to the design…</option>
+                        <option value="chain">A new designed chain</option>
+                        <option value="structure">Chains from a PDB entry or file (e.g. a target)</option>
+                    </select>
                     <button id="rfd4p-undo" type="button" class="secondary compact" disabled>Undo</button>
                 </div>
                 <p id="rfd4p-total" class="rfd4p-total"></p>

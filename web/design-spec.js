@@ -47,6 +47,8 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
   const hotspot = ann.condition_hotspot_1_atom;
   const group = ann.condition_CoordinateGroup_1_atom;
   const internal = ann.condition_InternalCoordinate_1_atom;
+  // Where a residue came from ("A38"), when a set-up renumbered it.
+  const source = ann['annotation_src-component_1_atom'];
   const segMin = ann.annotation_expsegmin_1_residue;
   const segMax = ann.annotation_expsegmax_1_residue;
 
@@ -77,6 +79,7 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
         seqFixed: false,
         unindexed: false,
         relative: false,
+        source: null,
         hotspots: 0,
         atoms: 0,
         atomIndices: [],
@@ -100,6 +103,7 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
     if (indexCond && indexCond[i] === false) res.unindexed = true;
     // Held by its shape only (a framework): a coordinate group other than the absolute one, or internal coordinates.
     if (Number(group?.[i]) > 0 || hasCrd(internal?.[i])) res.relative = true;
+    if (res.source == null && /^[A-Za-z]{1,4}-?\d+$/.test(String(source?.[i] ?? ''))) res.source = String(source[i]);
     if (hotspot?.[i]) res.hotspots += 1;
   }
 
@@ -238,51 +242,73 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
   };
 }
 
-/** What a piece of a chain is, as the design panel names it. */
-export const PIECE_LABELS = {
-  kept: 'Kept',
-  relative: 'Framework',
-  backbone: 'Backbone kept',
-  sequence: 'Sequence kept',
-  designed: 'Redesigned',
-  unindexed: 'Motif, placed anywhere',
-  new: 'New residues',
+/**
+ * How a kept piece is held: everything (the default), or only part of it. Each is a modifier the panel shows as a chip.
+ */
+export const KEEP_MODES = {
+  all: { chip: '', label: 'Keep everything', help: 'Structure and sequence kept as they are' },
+  sequence: { chip: 'sequence only', label: 'Keep the sequence only', help: 'Same amino acids; the model predicts the shape' },
+  backbone: { chip: 'backbone only', label: 'Keep the backbone only', help: 'Same shape; the model writes a new sequence' },
+  sidechain: { chip: 'side chains only', label: 'Keep the side chains only', help: 'Catalytic or binding groups kept; backbone free' },
+  shape: { chip: 'shape only', label: 'Keep the shape, not the position', help: 'Held rigid as a unit, but free to move (a framework)' },
 };
 
-/** What happens to a residue: one of PIECE_LABELS' keys. */
-function pieceKind(r) {
-  if (r.kind === 'segment') return 'new';
-  if (r.unindexed) return 'unindexed';
-  if (r.relative) return 'relative';
-  if (r.crdAtoms > 0) return r.seqFixed ? 'kept' : 'backbone';
-  return r.seqFixed ? 'sequence' : 'designed';
+/** A residue's piece kind ('kept', 'designed', 'new') and, for a kept one, its keep mode. */
+function pieceOf(r) {
+  if (r.kind === 'segment') return { kind: 'new' };
+  let keep = null;
+  if (r.relative) keep = 'shape';
+  else if (r.crdAtoms > 0) keep = r.crdBackbone === 0 ? 'sidechain' : r.seqFixed ? 'all' : 'backbone';
+  else if (r.seqFixed) keep = 'sequence';
+  return keep ? { kind: 'kept', keep, anywhere: r.unindexed } : { kind: 'designed' };
 }
 
+/** "A38" -> ["A", 38] */
+const splitSource = (s) => {
+  const m = /^([A-Za-z]{1,4})(-?\d+)$/.exec(s ?? '');
+  return m ? [m[1], Number(m[2])] : null;
+};
+
 /**
- * A chain as the pieces a contig is made of, in order: runs of consecutive residues treated alike, and each
- * new-residue segment on its own. Ligands are not pieces (they are listed per chain).
+ * A chain as the pieces a contig is made of, in order: runs of consecutive residues treated alike (`kept`, with a
+ * keep mode and whether it may sit anywhere, or `designed` in place), and each new-residue segment (`new`) on its
+ * own. A run renumbered by a set-up carries where it came from (`source`, e.g. "A38" or "A38–40"). Ligands are not
+ * pieces (they are listed per chain).
  */
 function chainPieces(residues, segmentWhere) {
   const out = [];
   let run = null;
   for (const r of residues) {
     if (!r.kind) continue;
-    const kind = pieceKind(r);
-    if (kind === 'new') {
+    const p = pieceOf(r);
+    if (p.kind === 'new') {
       run = null;
-      out.push({ kind, min: r.segment.min, max: r.segment.max, atomIndex: r.segment.atomIndex,
+      out.push({ kind: 'new', min: r.segment.min, max: r.segment.max, atomIndex: r.segment.atomIndex,
         where: segmentWhere.get(r.segment.atomIndex) ?? '', count: 0, atomIndices: r.atomIndices, hotspots: [] });
       continue;
     }
-    if (run && run.kind === kind && r.resId === run.end + 1) {
+    const src = splitSource(r.source);
+    const sameRun = run && run.kind === p.kind && run.keep === p.keep && run.anywhere === p.anywhere
+      && r.resId === run.end + 1
+      && (!run.src && !src || (run.src && src && src[0] === run.src[0] && src[1] === run.srcEnd + 1));
+    if (sameRun) {
       run.end = r.resId;
       run.count += 1;
+      if (src) run.srcEnd = src[1];
       run.atomIndices.push(...r.atomIndices);
     } else {
-      run = { kind, start: r.resId, end: r.resId, count: 1, atomIndices: [...r.atomIndices], hotspots: [] };
+      run = { ...p, start: r.resId, end: r.resId, count: 1, atomIndices: [...r.atomIndices], hotspots: [],
+        src, srcEnd: src?.[1] ?? null };
       out.push(run);
     }
     if (r.hotspots > 0) run.hotspots.push(r.resId);
+  }
+  for (const p of out) {
+    if (p.src && (p.src[1] !== p.start || p.srcEnd !== p.end)) {
+      p.source = p.src[1] === p.srcEnd ? `${p.src[0]}${p.src[1]}` : `${p.src[0]}${p.src[1]}–${p.srcEnd}`;
+    }
+    delete p.src;
+    delete p.srcEnd;
   }
   return out;
 }
