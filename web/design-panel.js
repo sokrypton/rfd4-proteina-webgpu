@@ -553,7 +553,7 @@ export class DesignPanel {
       line.append(el('span', { class: 'rfd4p-seg-inputs', title: 'Length: the model picks one in this range for each design' },
         min, el('span', { text: '–' }), max));
       // A chain made only of this segment is removed with the chain's own ×.
-      if (!readonly && c.pieces.length > 1) {
+      if (!readonly && this._chainItems(c) > 1) {
         line.append(this._menu(`Edit new residues ${this._pieceText(c, p)}`, [
           ['delete', 'Remove these new residues'],
         ], () => this._mutate('/delete', { atom_indices: p.atomIndices })));
@@ -595,7 +595,8 @@ export class DesignPanel {
     options.push(['replace', 'Replace with new residues (any length)']);
     options.push(['before', 'Add new residues before']);
     options.push(['after', 'Add new residues after']);
-    options.push(['delete', 'Delete these residues']);
+    // Alone in its chain, a piece is deleted with the chain's own ×.
+    if (this._chainItems(c) > 1) options.push(['delete', 'Delete these residues']);
     line.append(this._menu(`Edit ${label.textContent}`, options, (v) => {
       if (v.startsWith('keep:')) return this._setKeep(p, v.slice(5));
       if (v === 'hotspots') { this.editingHotspots = key; this.render(); return null; }
@@ -617,6 +618,11 @@ export class DesignPanel {
       return null;
     }));
     return piece;
+  }
+
+  /** Pieces and ligands in a chain: with one, the chain's × is that item's delete. */
+  _chainItems(c) {
+    return c.pieces.length + c.ligands.length;
   }
 
   /** One small "Edit" menu: a select whose first option is its label, reset after every choice. */
@@ -672,7 +678,7 @@ export class DesignPanel {
     if (l.pose !== 'fixed') options.push(['fix', 'Fix its pose (keep it where it is)']);
     if (l.pose !== 'predicted') options.push(['free', 'Free its pose (the model places it)']);
     options.push(['swap', 'Swap for another ligand…']);
-    options.push(['delete', 'Delete this ligand']);
+    if (this._chainItems(c) > 1) options.push(['delete', 'Delete this ligand']);
     const key = `${c.id}:${l.name}`;
     line.append(this._menu(`Edit ligand ${l.name}`, options, (v) => {
       if (v === 'swap') { this.swapLigand = key; this.render(); return null; }
