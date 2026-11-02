@@ -898,7 +898,6 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
   text-align: left;
 }
 #rfd4p-studio-card button.rfd4p-source { cursor: pointer; }
-#rfd4p-studio-card .rfd4p-source strong { color: var(--text-secondary, #d1d2d5); font-weight: 600; }
 #rfd4p-studio-card button.rfd4p-source:hover { color: var(--accent, #82aaff); text-decoration: underline; }
 
 /* Chains (web/design-panel.js `_chainRow`): the chain letter on the left, its pieces as sub-cards in order, a "+"

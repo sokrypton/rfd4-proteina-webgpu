@@ -7,7 +7,7 @@
  * `atomworks-studio` "changed" event behave exactly as for edits made in the Studio panels.
  */
 import { designSpec, formatResidueList, parseResidueList } from './design-spec.js';
-import { createStudioDocWithCcd, getSharedStudioStore } from './studio-api.js';
+import { createStudioDocWithCcd, getSharedStudioStore, handleStudioApiRequest } from './studio-api.js';
 import { isCcdCode, ligandCifFromCcd } from './ligand-ccd.js';
 import { fetchCcdComponents } from '../shared/rfd4p/pipeline/ccd.js';
 
@@ -426,6 +426,8 @@ export class DesignPanel {
 
   /** The input document (what Generate will use), if the Studio has one open. */
   _inputDoc() {
+    // An example being built lives in a session Studio does not show until it is finished.
+    if (this.buildSession) return getSharedStudioStore().getSession(this.buildSession);
     const sid = this.app.useStudioSession ? this.app.inputSessionId : null;
     return sid ? getSharedStudioStore().getSession(sid) : null;
   }
@@ -501,13 +503,14 @@ export class DesignPanel {
 
   /** A source's caption (click: replace it with another structure), then its chains. */
   _groupBlock(g, readonly) {
-    // "PDB 5O45 · Structure of human PD-L1 in complex with inhibitor": the entry and its title, on one line.
-    const title = g.label ? this.titles?.get(g.label.replace(/ chains? .*$/, '')) : null;
-    const text = [el('strong', { text: g.label }), title ? ` · ${title}` : ''];
+    // "PDB 5O45 · A": the entry and the chains of it in the job; its title when pointed at.
+    const entry = g.label?.replace(/ chains? .*$/, '');
+    const title = entry ? this.titles?.get(entry) : null;
+    const text = entry ? `${entry} · ${g.chains.map((c) => c.id).join(' ')}` : null;
     const caption = !g.label ? null : readonly
-      ? el('span', { class: 'rfd4p-source', title: title ?? null }, ...text)
-      : el('button', { type: 'button', class: 'rfd4p-source', onclick: () => this._openAddStructure(g),
-        title: [title, `Click to replace ${g.label}`].filter(Boolean).join('\n') }, ...text);
+      ? el('span', { class: 'rfd4p-source', title: title ?? null, text })
+      : el('button', { type: 'button', class: 'rfd4p-source', onclick: () => this._openAddStructure(g), text,
+        title: [title, `Click to replace ${g.label}`].filter(Boolean).join('\n') });
     return el('div', { class: 'rfd4p-group' }, caption, ...g.chains.map((c) => this._chainRow(c, readonly)));
   }
 
@@ -923,7 +926,10 @@ export class DesignPanel {
     const residues = new Map();
     if (hot) {
       for (let i = 0; i < atoms.nAtoms; i += 1) {
-        if (hot[i]) residues.set(`${atoms.chain_id[i]}|${atoms.res_id[i]}`, { chain: String(atoms.chain_id[i]), residue: Number(atoms.res_id[i]) });
+        // The viewer numbers residues as the document's CIF writes auth_seq_id (a fetched entry keeps its authors'
+        // numbering there), not by res_id: 5O45's A40 is author residue 56.
+        const residue = Number(atoms.auth_seq_id?.[i] ?? atoms.res_id[i]);
+        if (hot[i]) residues.set(`${atoms.chain_id[i]}|${residue}`, { chain: String(atoms.chain_id[i]), residue });
       }
     }
     // Sent on every render rather than once: Studio ignores it until its viewer has started.
@@ -1141,7 +1147,7 @@ export class DesignPanel {
 
   /** One edit through Studio's mutate path; resolves true on success. A failure stays shown until the next success. */
   async _mutate(path, body) {
-    if (typeof window.atomworksStudio?.applyEdit !== 'function' || this.busy) return false;
+    if ((!this.buildSession && typeof window.atomworksStudio?.applyEdit !== 'function') || this.busy) return false;
     // A document cannot be emptied ("cannot delete every atom"): removing the last of it means starting over.
     const total = this._inputDoc()?.atoms?.nAtoms ?? 0;
     if (path === '/delete' && total && new Set(body.atom_indices).size >= total) {
@@ -1153,7 +1159,14 @@ export class DesignPanel {
     this.busy = true;
     this.els.design?.classList.add('rfd4p-busy');
     try {
-      await window.atomworksStudio?.applyEdit(path, body);
+      if (this.buildSession) {
+        // Straight to the page's Studio API, so the viewer is not redrawn for every step of an example.
+        const url = new URL(`/api/v1/sessions/${encodeURIComponent(this.buildSession)}${path}`, location.href);
+        const res = await handleStudioApiRequest(url, { method: 'POST', body: JSON.stringify(body) });
+        if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `edit failed (${res.status})`);
+      } else {
+        await window.atomworksStudio?.applyEdit(path, body);
+      }
       this.lastError = null;
       return true;
     } catch (err) {
@@ -1260,7 +1273,26 @@ export class DesignPanel {
     try {
       for (const step of task.recipe) {
         if (step.fetch) {
-          if (!await this._fetchPdb(step.fetch)) return false;
+          const [id, ...chains] = step.fetch.split(/\s+/);
+          let text;
+          try {
+            const res = await fetch(`https://files.rcsb.org/download/${id}.cif`);
+            if (!res.ok) throw new Error(`RCSB returned ${res.status}`);
+            text = await res.text();
+          } catch (err) {
+            this.els.fetchStatus.textContent = `Could not fetch ${id}: ${err?.message ?? err}`;
+            return false;
+          }
+          this._rememberTitle(`PDB ${id}`, text);
+          const doc = await createStudioDocWithCcd(text, id, { preset: 'rcsb', assembly: '1' });
+          if (chains.length) {
+            const drop = [];
+            for (let i = 0; i < doc.atoms.nAtoms; i += 1) if (!chains.includes(String(doc.atoms.chain_id[i]))) drop.push(i);
+            if (drop.length) doc.deleteAtoms(drop);
+          }
+          this.buildSession = `rfd4p_example_${task.example}_${Date.now().toString(36)}`;
+          getSharedStudioStore().sessions.set(this.buildSession, doc);
+          this.render();
           fetched = true;
         } else if (step.piece) {
           const s = step.set;
@@ -1303,18 +1335,23 @@ export class DesignPanel {
           await idle();
         }
       }
-      // An example is a starting point: no Undo back through how it was built.
-      const doc = this._inputDoc();
-      if (doc) {
-        doc.undoStack = [];
-        await window.atomworksStudio?.openSession?.(this.app.inputSessionId);
-      }
+      // An example is a starting point: no Undo back through how it was built. Studio shows it once, finished.
+      const sid = this.buildSession;
+      getSharedStudioStore().getSession(sid).undoStack = [];
+      this.buildSession = null;
+      await window.atomworksStudio?.openSession?.(sid);
       return true;
     } catch (err) {
       console.warn('Example set-up stopped:', err);
       this.lastError = `The ${task.title} example could not be set up: ${String(err?.message ?? err)}`;
       return fetched;
     } finally {
+      // A build that stopped part way is still shown, as far as it got.
+      if (this.buildSession) {
+        const sid = this.buildSession;
+        this.buildSession = null;
+        await window.atomworksStudio?.openSession?.(sid);
+      }
       this.building = false;
       document.body.classList.remove('rfd4p-building');
       this._closePop();
