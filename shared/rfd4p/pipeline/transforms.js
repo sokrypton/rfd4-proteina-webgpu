@@ -408,18 +408,29 @@ export function realizeExpandableSegments(atoms, { segmentLengths = null, rng = 
       }
     }
 
-    const baseResId = cur.res_id[idx];
     const chainIid = cur.chain_iid ? cur.chain_iid[idx] : cur.chain_id[idx];
+    const sameChain = (i) => (cur.chain_iid ? cur.chain_iid[i] : cur.chain_id[i]) === chainIid;
+    // Upstream numbers the new residues from the sentinel's own res_id and moves the rest of the chain up by
+    // segLen - 1, which assumes the sentinel was numbered after the residue before it. A sentinel inserted without
+    // renumbering the chain (web/studio-api.js `insertSegment`) shares that residue's number under an insertion code:
+    // then the new residues start after that residue, and the rest moves only as far as it must to stay after them.
+    let prevResId = null;
+    let nextResId = null;
+    if (idx > 0 && sameChain(idx - 1)) prevResId = cur.res_id[idx - 1];
+    if (idx + 1 < cur.nAtoms && sameChain(idx + 1)) nextResId = cur.res_id[idx + 1];
+    const tucked = prevResId !== null && cur.res_id[idx] <= prevResId;
+    const baseResId = tucked ? prevResId + 1 : cur.res_id[idx];
+    const shift = tucked ? (nextResId === null ? 0 : Math.max(0, baseResId + segLen - nextResId)) : segLen - 1;
 
     const afterLen = cur.nAtoms - (idx + 1);
     const prefix = idx > 0 ? sliceAtoms(cur, 0, idx) : null;
     const suffix = afterLen > 0 ? sliceAtoms(cur, idx + 1, cur.nAtoms) : null;
-    if (suffix && segLen !== 1) {
+    if (suffix && shift !== 0) {
       for (let i = 0; i < suffix.nAtoms; i++) {
         const cIid = suffix.chain_iid ? suffix.chain_iid[i] : suffix.chain_id[i];
         if (cIid === chainIid) {
-          suffix.res_id[i] += segLen - 1;
-          if (suffix.auth_seq_id) suffix.auth_seq_id[i] += segLen - 1;
+          suffix.res_id[i] += shift;
+          if (suffix.auth_seq_id) suffix.auth_seq_id[i] += shift;
         }
       }
     }
@@ -438,6 +449,7 @@ export function realizeExpandableSegments(atoms, { segmentLengths = null, rng = 
       const st = cloneAtoms(single);
       st.res_id[0] = baseResId + s;
       if (st.auth_seq_id) st.auth_seq_id[0] = baseResId + s;
+      if (tucked && st.ins_code) st.ins_code[0] = '';
       stubs.push(st);
     }
     const stubArr = stubs.length > 0 ? concatAtoms(stubs) : null;

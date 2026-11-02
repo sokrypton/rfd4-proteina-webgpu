@@ -54,18 +54,20 @@ test('segment insertion keeps numbering and bonds the placeholder to the chain',
   // ...and is bonded to residue 1's N.
   const n1 = a.atom_name.findIndex((nm, i) => nm === 'N' && a.res_id[i] === 1);
   assert.ok(a.bonds.some(([u, v]) => (u === 0 && v === n1) || (u === n1 && v === 0)));
-  // Inserting after residue 2 (no numbering gap) takes 3 and shifts residue 3 to 4, bonded C(2) - sentinel - N(4).
+  // Inserting after residue 2 (no numbering gap) takes 2A and renumbers nothing, bonded C(2) - sentinel - N(3).
   const c2 = a.atom_name.findIndex((nm, i) => nm === 'C' && a.res_id[i] === 2);
   doc.insertSegment({ minimum: 3, maximum: 3, atomIndex: c2, before: false });
   const b = doc.atoms;
   const sentinel = b.res_name.indexOf('3-3');
-  assert.equal(b.res_id[sentinel], 3);
-  assert.equal(Math.max(...b.res_id), 4);
-  const c2b = b.atom_name.findIndex((nm, i) => nm === 'C' && b.res_id[i] === 2);
-  const n4 = b.atom_name.findIndex((nm, i) => nm === 'N' && b.res_id[i] === 4);
+  assert.deepEqual([b.res_id[sentinel], b.ins_code[sentinel]], [2, 'A']);
+  assert.equal(Math.max(...b.res_id), 3);
+  const c2b = b.atom_name.findIndex((nm, i) => nm === 'C' && b.res_id[i] === 2 && !b.ins_code[i]);
+  const n3 = b.atom_name.findIndex((nm, i) => nm === 'N' && b.res_id[i] === 3);
   const bonded = (x, y) => b.bonds.some(([u, v]) => (u === x && v === y) || (u === y && v === x));
-  assert.ok(bonded(c2b, sentinel) && bonded(sentinel, n4) && !bonded(c2b, n4));
-  assert.match(doc.toCif(), /_struct_conn\.id[\s\S]*covale sing A A GLY 3-3 2 3 C UNK/);
+  assert.ok(bonded(c2b, sentinel) && bonded(sentinel, n3) && !bonded(c2b, n3));
+  const back = parseCifToAtomArray(doc.toCif());
+  const s2 = back.res_name.indexOf('3-3');
+  assert.deepEqual([back.res_id[s2], back.ins_code[s2]], [2, 'A'], 'the insertion code survives export');
 });
 
 test('rcsb preparation: waters, additives, MSE, per-chain altloc, unmodeled residues', () => {

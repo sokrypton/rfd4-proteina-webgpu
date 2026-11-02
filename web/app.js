@@ -457,9 +457,11 @@ class LiveSequenceStrip {
 /** The hotspot residues of a Studio document, as `chain|resId|resName` keys. */
 function hotspotResidueKeys(atoms) {
   const keys = new Set();
-  const hot = atoms?.annotations?.condition_hotspot_1_atom;
+  // A Studio document keeps it under `annotations`; a built batch's atoms also carry it flat.
+  const hot = atoms?.annotations?.condition_hotspot_1_atom ?? atoms?.condition_hotspot_1_atom;
   if (!hot) return keys;
-  for (let i = 0; i < atoms.nAtoms; i += 1) {
+  const n = atoms.nAtoms ?? atoms.chain_id.length;
+  for (let i = 0; i < n; i += 1) {
     if (hot[i]) keys.add(`${atoms.chain_id[i]}|${atoms.res_id[i]}|${atoms.res_name[i]}`);
   }
   return keys;
@@ -1366,9 +1368,9 @@ class Rfd4pStudioApp {
       this.generatedViews.clear();
       const viewChoices = [];
       const earlyStops = [];
-      // Hotspots stay marked while the design runs and on every design it makes (the target keeps its chain and numbering).
-      const hotspotKeys = hotspotResidueKeys(store.getSession(this.inputSessionId)?.atoms);
-      liveSequence.start(hotspotKeys);
+      // Hotspots stay marked while the design runs and on every design it makes. Each sample's keys come from its
+      // own batch (below): new residues inside a chain renumber what follows them there, as in the design.
+      liveSequence.start(hotspotResidueKeys(store.getSession(this.inputSessionId)?.atoms));
       let inputRevision = 1;
       if (!this.inputSessionId && this.currentCifText) {
         const { sessionId } = store.createSession(this.currentCifText, 'uncond_short.cif');
@@ -1395,6 +1397,7 @@ class Rfd4pStudioApp {
       for (let sampleIdx = 0; sampleIdx < numSamples; sampleIdx += 1) {
         const sampleSeed = baseSeed + sampleIdx;
         const { batch, n, atoms } = sampleIdx === 0 ? firstBatchRes : this._buildCurrentBatch(sampleSeed);
+        liveSequence.hotspots = hotspotResidueKeys(atoms);
         const tokens = extractTokenMetadata(batch);
         const fixedAnchors = extractFixedTokenAnchorsNm(batch, n);
         const allTokenIndices = Int32Array.from({ length: n }, (_, idx) => idx);
@@ -1549,7 +1552,7 @@ class Rfd4pStudioApp {
         const { sessionId: designSessionId } = store.createSession(result.cif, designName, {
           trajectoryCif,
         });
-        markHotspots(store.getSession(designSessionId), hotspotKeys);
+        markHotspots(store.getSession(designSessionId), hotspotResidueKeys(atoms));
         const designed = designedChains(atoms, result.structure?.atoms ?? []);
         this.generatedViews.set(designSessionId, {
           label: `Design ${sampleIdx + 1} · seed ${sampleSeed}`,

@@ -1742,6 +1742,7 @@ export class StudioDoc {
     const targetChain = newChain ? ((chainId || '').trim() || this.nextChainId()) : a.chain_id[atomIndex ?? 0];
     let insertPos = n;
     let resId = 1;
+    let insCode = '';
     let shiftDownstream = false;
 
     if (!newChain && atomIndex !== null && atomIndex >= 0 && atomIndex < n) {
@@ -1754,24 +1755,34 @@ export class StudioDoc {
         }
       }
       insertPos = before ? resStarts[rIdx] : resStarts[rIdx + 1];
-      // atomworks `_compute_insert_res_id`: take a numbering gap if there is one, else prev + 1 and shift the rest
-      // (inserting before the chain's first residue takes first - 1 when that is still >= 0).
+      // Numbered so that no residue already in the chain is renumbered (atomworks `_compute_insert_res_id` shifts
+      // the rest of the chain up by one, so a target's numbering - and its hotspots - changed under the user): a
+      // numbering gap if there is one; else the residue before's number with the next insertion code ("40A"), which
+      // shared/rfd4p/pipeline/transforms.js `realizeExpandableSegments` numbers past when it expands the segment;
+      // before the chain's first residue, first - 1 (zero or negative is fine).
       const chainIdx = [];
       for (let i = 0; i < n; i += 1) if (a.chain_id[i] === targetChain) chainIdx.push(i);
       const nBefore = chainIdx.filter((i) => i < insertPos).length;
       if (nBefore > 0) {
-        const prevResId = a.res_id[chainIdx[nBefore - 1]];
-        const nextResId = nBefore < chainIdx.length ? a.res_id[chainIdx[nBefore]] : null;
-        if (nextResId !== null && nextResId > prevResId + 1) {
-          resId = nextResId - 1;
+        const prevAtom = chainIdx[nBefore - 1];
+        const prevResId = a.res_id[prevAtom];
+        const nextAtom = nBefore < chainIdx.length ? chainIdx[nBefore] : null;
+        const nextResId = nextAtom === null ? null : a.res_id[nextAtom];
+        const prevIns = String(a.ins_code[prevAtom] || '');
+        const code = prevIns ? String.fromCharCode(prevIns.charCodeAt(0) + 1) : 'A';
+        const nextIns = nextAtom === null ? '' : String(a.ins_code[nextAtom] || '');
+        if (nextResId === null || nextResId > prevResId + 1) {
+          resId = nextResId === null ? prevResId + 1 : nextResId - 1;
+        } else if (!(nextResId === prevResId && nextIns && nextIns <= code) && /^[A-Z]$/.test(code)) {
+          resId = prevResId;
+          insCode = code;
         } else {
+          // No room between two insertion codes: the upstream rule.
           resId = prevResId + 1;
           shiftDownstream = true;
         }
       } else {
-        const firstResId = a.res_id[chainIdx[0]];
-        resId = firstResId > 0 ? firstResId - 1 : firstResId;
-        shiftDownstream = firstResId <= 0;
+        resId = a.res_id[chainIdx[0]] - 1;
       }
       if (shiftDownstream) {
         for (let i = insertPos; i < n; i += 1) {
@@ -1801,7 +1812,7 @@ export class StudioDoc {
     spliceAt(a.chain_id, targetChain);
     spliceAt(a.label_entity_id, 0);
     spliceAt(a.res_id, resId);
-    spliceAt(a.ins_code, '');
+    spliceAt(a.ins_code, insCode);
     spliceAt(a.auth_seq_id, resId);
     spliceAt(a.atom_id, n + 1);
     spliceAt(a.b_factor, NaN);
@@ -2377,7 +2388,7 @@ export class StudioDoc {
       if (isStdPoly) continue;
       const ord = bt === BOND_TYPE.DOUBLE ? 'doub' : bt === BOND_TYPE.TRIPLE ? 'trip' : 'sing';
       structConnRows.push(
-        `${structConnRows.length + 1} covale ${ord} ${a.chain_id[u]} ${a.chain_id[v]} ${fmtCifVal(a.res_name[u])} ${fmtCifVal(a.res_name[v])} ${a.res_id[u]} ${a.res_id[v]} ${fmtCifVal(a.atom_name[u])} ${fmtCifVal(a.atom_name[v])} . . 1 1`
+        `${structConnRows.length + 1} covale ${ord} ${a.chain_id[u]} ${a.chain_id[v]} ${fmtCifVal(a.res_name[u])} ${fmtCifVal(a.res_name[v])} ${a.res_id[u]} ${a.res_id[v]} ${fmtCifVal(a.atom_name[u])} ${fmtCifVal(a.atom_name[v])} ${a.ins_code[u] || '.'} ${a.ins_code[v] || '.'} 1 1`
       );
     }
     if (structConnRows.length > 0) {
