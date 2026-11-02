@@ -633,8 +633,8 @@ export class DesignPanel {
     sequence.addEventListener('change', sync);
 
     const hot = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
-      value: formatResidueList(c.id, p.hotspots), placeholder: 'none', 'aria-label': 'Hotspots',
-      title: 'Residues a binder should touch, e.g. A56, A60-62' });
+      value: formatResidueList(c.id, c.hotspotResIds), placeholder: 'none', 'aria-label': 'Hotspots',
+      title: 'Residues of this chain a binder should touch, e.g. A56, A60-62' });
     const keepOnly = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
       placeholder: 'all', 'aria-label': 'Keep only these residues',
       title: 'Type some residues (e.g. A38, A99) to keep only those; the rest of the chain becomes new residues (a motif)' });
@@ -648,6 +648,25 @@ export class DesignPanel {
     };
 
     const apply = async () => {
+      // Hotspots are the chain's, whichever of its pieces the popup was opened from.
+      const hotspots = residuesIn(hot.value, c.polymerAtomIndices);
+      if (hotspots.bad.length || hotspots.missing.length) {
+        note.textContent = hotspots.bad.length ? `Hotspots not understood: ${hotspots.bad.join(' ')}`
+          : `Hotspots not in chain ${c.id}: ${formatResidueList(c.id, hotspots.missing)}`;
+        return;
+      }
+      const hotChanged = formatResidueList(c.id, [...hotspots.want]) !== formatResidueList(c.id, c.hotspotResIds);
+      // Re-read after each edit: atom indices move when residues are added or removed.
+      const chainNow = () => this._spec()?.chains.find((x) => x.id === c.id);
+      const setHotspots = async () => {
+        const now = chainNow();
+        if (!hotChanged || !now) return true;
+        const ids = this._inputDoc().atoms.res_id;
+        const edits = [{ condition: 'hotspot', atom_indices: now.polymerAtomIndices, enabled: false }];
+        const on = now.polymerAtomIndices.filter((i) => hotspots.want.has(Number(ids[i])));
+        if (on.length) edits.push({ condition: 'hotspot', atom_indices: on, enabled: true });
+        return this._batch(edits);
+      };
       if (keepOnly.value.trim()) {
         const only = residuesIn(keepOnly.value, c.polymerAtomIndices);
         if (only.bad.length || only.missing.length || !only.atoms.length) {
@@ -655,24 +674,22 @@ export class DesignPanel {
           return;
         }
         this._closePop();
-        // The residues kept take this popup's Structure and Position: side chains only, anywhere (an enzyme's site).
+        // The residues kept take this popup's properties: side chains only and anywhere are part of the set-up (an
+        // enzyme's site); "can move" or a designed sequence are set on them after.
         await this._runFlow('scaffold', this._spec(), {
           atoms: only.atoms, sidechainsOnly: structure.value === 'sidechain', unindexed: position.value === 'anywhere',
         });
-        return;
-      }
-      const hotspots = residuesIn(hot.value, p.atomIndices);
-      if (hotspots.bad.length || hotspots.missing.length) {
-        note.textContent = hotspots.bad.length ? `Hotspots not understood: ${hotspots.bad.join(' ')}`
-          : `Hotspots outside ${this._range(c, p)}: ${formatResidueList(c.id, hotspots.missing)}`;
+        if (structure.value === 'rigid' || (structure.value === 'fixed' && sequence.value === 'designed')) {
+          const now = chainNow();
+          const ids = this._inputDoc().atoms.res_id;
+          const kept = (now?.polymerAtomIndices ?? []).filter((i) => only.want.has(Number(ids[i])));
+          if (kept.length) await this._applyPiece({ kind: 'kept', keep: 'all' }, kept, { structure: structure.value, sequence: sequence.value, position: position.value });
+        }
+        await setHotspots();
         return;
       }
       this._closePop();
-      if (formatResidueList(c.id, [...hotspots.want]) !== formatResidueList(c.id, p.hotspots)) {
-        const edits = [{ condition: 'hotspot', atom_indices: p.atomIndices, enabled: false }];
-        if (hotspots.atoms.length) edits.push({ condition: 'hotspot', atom_indices: hotspots.atoms, enabled: true });
-        if (!await this._batch(edits)) return;
-      }
+      if (!await setHotspots()) return;
       const { lo, hi, atoms, count: n } = span();
       const want = { structure: structure.value, sequence: sequence.value, position: position.value };
       if (!lengthRow.hidden && lenTouched) {
@@ -721,7 +738,9 @@ export class DesignPanel {
     const side = atoms.filter((i) => !backbone.includes(i));
     // Internal coordinates are their own edit: clear them before anything else, set them before the rest.
     if (p.kind === 'kept' && p.keep === 'shape' && !await this._mutate('/internal-coords', { atom_indices: atoms, enabled: false })) return false;
-    if (structure === 'rigid' && !await this._mutate('/internal-coords', { atom_indices: atoms, enabled: true })) return false;
+    // "Fixed, can move" is one rigid body for the whole job (an antibody's two framework chains, a framework split by
+    // CDRs): join the rigid group already there. Separate bodies are the Advanced editor's.
+    if (structure === 'rigid' && !await this._mutate('/internal-coords', { atom_indices: atoms, enabled: true, group_id: this._rigidGroup() })) return false;
     const edits = [];
     if (structure !== 'rigid') {
       edits.push({ condition: 'coordinate', atom_indices: atoms, enabled: false });
@@ -787,6 +806,14 @@ export class DesignPanel {
       note,
       this._popActions(() => void apply()),
     ].filter(Boolean);
+  }
+
+  /** The job's rigid group ("fixed, can move"), if it has one. */
+  _rigidGroup() {
+    const grp = this._inputDoc()?.atoms?.annotations?.condition_CoordinateGroup_1_atom;
+    let id = null;
+    for (const g of grp ?? []) if (g > 0 && (id === null || g < id)) id = g;
+    return id;
   }
 
   _backboneOf(indices) {
@@ -1072,11 +1099,12 @@ export class DesignPanel {
     }
   }
 
+  /** "1QYS", or "1J79 A C E" to open only those chains (as the card names them). */
   async _fetchPdb(raw) {
-    const id = String(raw ?? '').trim().toUpperCase();
+    const [id = '', ...chains] = String(raw ?? '').trim().toUpperCase().split(/[\s,;]+/).filter(Boolean);
     const status = this.els.fetchStatus;
     if (!/^[0-9][A-Z0-9]{3}$/.test(id)) {
-      status.textContent = 'Enter a 4-character PDB ID, e.g. 1QYS.';
+      status.textContent = 'Enter a 4-character PDB ID, e.g. 1QYS, optionally followed by chains: 1J79 A C E.';
       return;
     }
     status.textContent = `Downloading ${id} from RCSB…`;
@@ -1085,6 +1113,15 @@ export class DesignPanel {
       if (!res.ok) throw new Error(res.status === 404 ? `${id} was not found` : `RCSB returned ${res.status}`);
       const text = await res.text();
       const opened = await window.atomworksStudio?.openFile?.(new File([text], `${id}.cif`, { type: 'chemical/x-mmcif' }));
+      if (opened !== false && chains.length) {
+        const a = this._inputDoc()?.atoms;
+        const present = [...new Set(Array.from(a?.chain_id ?? [], String))];
+        const missing = chains.filter((c) => !present.some((p) => p.toUpperCase() === c));
+        if (missing.length) throw new Error(`no chain ${missing.join(', ')} (it has ${present.join(', ')})`);
+        const drop = [];
+        for (let i = 0; i < a.nAtoms; i += 1) if (!chains.includes(String(a.chain_id[i]).toUpperCase())) drop.push(i);
+        if (drop.length) await this._mutate('/delete', { atom_indices: drop });
+      }
       status.textContent = opened === false ? `Opening ${id} was cancelled.` : '';
       if (opened !== false) this.showStart = false;
     } catch (err) {

@@ -39,13 +39,13 @@
           "./shared/rfd4p/safetensors.js": "./shared/rfd4p/safetensors.js?v=816ee6d627",
           "./shared/rfd4p/vendor/fzstd.js": "./shared/rfd4p/vendor/fzstd.js?v=e6cdba40d4",
           "./web/app.js": "./web/app.js?v=50a0a8d3ba",
-          "./web/design-panel.js": "./web/design-panel.js?v=9cbbe83252",
+          "./web/design-panel.js": "./web/design-panel.js?v=9d25427fd0",
           "./web/design-spec.js": "./web/design-spec.js?v=ba6f126c2d",
           "./web/ligand-ccd.js": "./web/ligand-ccd.js?v=b937ddbebf",
           "./web/localfold.js": "./web/localfold.js?v=8b16694f7b",
           "./web/refold-view.js": "./web/refold-view.js?v=81c34e0c0a",
           "./web/results-zip.js": "./web/results-zip.js?v=a85ae171f0",
-          "./web/studio-api.js": "./web/studio-api.js?v=c8702fd6b1",
+          "./web/studio-api.js": "./web/studio-api.js?v=5ca2fcfcac",
           "./web/vendor/py2dmol-ss.js": "./web/vendor/py2dmol-ss.js?v=f2ede21309",
           "./webgpu/index.js": "./webgpu/index.js?v=2aaa227e72",
           "./webgpu/rfd4p/blocks.js": "./webgpu/rfd4p/blocks.js?v=b5e38ecfd2",
@@ -88,7 +88,7 @@
                 <p class="rfd4p-lead rfd4p-lead-sub">Or start from your own structure</p>
                 <form id="rfd4p-fetch-form" class="rfd4p-fetch-row">
                     <input id="rfd4p-pdb-id" type="text" inputmode="latin" autocomplete="off" spellcheck="false"
-                        maxlength="4" placeholder="PDB ID, e.g. 1QYS" aria-label="PDB ID" />
+                        maxlength="40" placeholder="PDB ID, e.g. 1QYS or 1J79 A C" aria-label="PDB ID, optionally with chains" />
                     <button id="rfd4p-fetch-btn" type="submit" class="secondary compact">Fetch</button>
                     <button id="rfd4p-open-file" type="button" class="secondary compact">Open file…</button>
                 </form>

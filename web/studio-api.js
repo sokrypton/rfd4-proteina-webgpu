@@ -21,7 +21,7 @@ import {
 } from '../shared/rfd4p/pipeline/cif.js';
 import { toPdbString } from '../shared/rfd4p/output.js';
 import { decodeTextOrZstd } from '../shared/rfd4p/pipeline/zstd.js';
-import { prepareRcsbStructure } from '../shared/rfd4p/pipeline/prepare.js';
+import { prepareRcsbStructure, removeResidues } from '../shared/rfd4p/pipeline/prepare.js';
 import { componentsNeedingCcd, fetchCcdComponents, mergeCcdIntoBlock } from '../shared/rfd4p/pipeline/ccd.js';
 import { evalPathSelection, evalSelection } from '../shared/rfd4p/pipeline/spec.js';
 
@@ -366,6 +366,9 @@ export async function createStudioDocWithCcd(text, name, opts = {}, fetchFn = gl
   return blocks.size ? new StudioDoc(text, name, { ...opts, ccdBlocks: blocks }) : doc;
 }
 
+/** Buffer ions a fetched structure drops, on top of AtomWorks' rcsb `remove_ccds`. */
+const BUFFER_IONS = ['NA', 'CL'];
+
 export class StudioDoc {
   constructor(cifText, name = 'structure.cif', opts = {}) {
     this.name = name;
@@ -380,7 +383,8 @@ export class StudioDoc {
     if (opts.preset === 'rcsb') {
       // "Unannotated input": the AtomWorks rcsb preset's assembly / water / additive / MSE preparation.
       const prepared = prepareRcsbStructure(this.atoms, this.cifBlock, { assemblyId: opts.assembly ?? '1' });
-      this.atoms = prepared.atoms;
+      // Beyond AtomWorks' additive list: sodium and chloride from the crystallisation buffer, never part of a design.
+      this.atoms = removeResidues(prepared.atoms, BUFFER_IONS);
       this.importNotes = prepared.notes;
       computeIdAndEntityAnnotations(this.atoms);
     }
@@ -1446,7 +1450,8 @@ export class StudioDoc {
     };
   }
 
-  setInternalCoordinateConditioning(indices, enabled = true, scope = 'atom') {
+  /** `groupId`: join that rigid group (default: a new one). */
+  setInternalCoordinateConditioning(indices, enabled = true, scope = 'atom', groupId = null) {
     const selected = this.resolveIndices(indices, scope);
     if (selected.length === 0) throw new Error('at least one atom must be selected');
     this.snapshot();
@@ -1457,6 +1462,7 @@ export class StudioDoc {
     for (let i = 0; i < this.atoms.nAtoms; i += 1) {
       if (grp[i] >= nextGroup) nextGroup = grp[i] + 1;
     }
+    if (Number.isInteger(groupId) && groupId > 0) nextGroup = groupId;
     let affected = 0;
     let skipped = 0;
     for (const idx of selected) {
@@ -3116,7 +3122,7 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
       if (subpath === '/internal-coords' && method === 'POST') {
-        const editResult = doc.setInternalCoordinateConditioning(body.atom_indices, body.enabled ?? true, body.scope || 'atom');
+        const editResult = doc.setInternalCoordinateConditioning(body.atom_indices, body.enabled ?? true, body.scope || 'atom', body.group_id ?? null);
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
       if (subpath === '/internal-coords/clear-targets' && method === 'POST') {
