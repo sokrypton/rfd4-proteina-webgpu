@@ -99,7 +99,9 @@ export class DesignPanel {
       back: $('rfd4p-back'),
       guided: $('rfd4p-guided'),
       chainList: $('rfd4p-chain-list'),
-      addMenu: $('rfd4p-add-menu'),
+      addSeq: $('rfd4p-add-seq'),
+      addPdb: $('rfd4p-add-pdb'),
+      addLig: $('rfd4p-add-lig'),
       undo: $('rfd4p-undo'),
       total: $('rfd4p-total'),
       contig: $('rfd4p-contig'),
@@ -122,12 +124,12 @@ export class DesignPanel {
   }
 
   /**
-   * "Chains from a PDB entry or file": a structure's chains added to the open job as kept chains (a target),
+   * "+ pdb": a structure's chains added to the open job as kept chains (a target),
    * optionally in place of the job's current kept chains, so an example's target can be swapped without setting
    * the job up again.
    */
   _buildAddStructure() {
-    const actions = this.els.addMenu?.parentElement;
+    const actions = this.els.addPdb?.parentElement;
     if (!actions) return;
     const id = el('input', {
       type: 'text', class: 'rfd4p-add-id', spellcheck: 'false', autocomplete: 'off', maxlength: 40,
@@ -311,34 +313,31 @@ export class DesignPanel {
       this.flowForm = null;
       this.render();
     });
-    els.addMenu?.addEventListener('change', () => {
-      const v = els.addMenu.value;
-      els.addMenu.value = '';
-      if (v === 'chain') {
-        void this._mutate('/segments', {
-          minimum: 60, maximum: 100, atom_index: null, before: false, new_chain: true, chain_id: null,
-          chain_type: 'polypeptide(L)',
-        });
-      } else if (v === 'structure') this._openAddStructure();
-      else if (v === 'ligand') {
-        this.addLigandForm?.remove();
-        this.addLigandForm = this._ligandCodeForm({
-          label: 'Add a ligand',
-          button: 'Add',
-          onSubmit: async (code) => {
-            await this._addLigand(code);
-            this.addLigandForm?.remove();
-            this.addLigandForm = null;
-          },
-          onCancel: () => { this.addLigandForm?.remove(); this.addLigandForm = null; },
-        });
-        els.addMenu.parentElement.after(this.addLigandForm);
-      }
+    els.addSeq?.addEventListener('click', () => void this._mutate('/segments', {
+      minimum: 60, maximum: 100, atom_index: null, before: false, new_chain: true, chain_id: null,
+      chain_type: 'polypeptide(L)',
+    }));
+    els.addPdb?.addEventListener('click', () => this._openAddStructure());
+    els.addLig?.addEventListener('click', () => {
+      this.addLigandForm?.remove();
+      this.addLigandForm = this._ligandCodeForm({
+        label: 'Add a ligand',
+        button: 'Add',
+        onSubmit: async (code) => {
+          await this._addLigand(code);
+          this.addLigandForm?.remove();
+          this.addLigandForm = null;
+        },
+        onCancel: () => { this.addLigandForm?.remove(); this.addLigandForm = null; },
+      });
+      els.addLig.parentElement.after(this.addLigandForm);
     });
     els.undo?.addEventListener('click', () => document.getElementById('undo')?.click());
     els.advanced?.addEventListener('change', () => this._applyAdvanced(els.advanced.checked, true));
     window.addEventListener('atomworks-studio', (ev) => {
       if (ev.detail?.type === 'selection') return;
+      // Studio redraws the document on every change, which drops display-only overlays: redraw the hotspots too.
+      this.studioEpoch = (this.studioEpoch ?? 0) + 1;
       queueMicrotask(() => this.render());
     });
     document.addEventListener('pointerdown', (ev) => {
@@ -426,7 +425,8 @@ export class DesignPanel {
       : spec.task.detail;
     els.changeTask.hidden = viewingDesign;
     if (els.newDoc) els.newDoc.hidden = viewingDesign;
-    if (els.addMenu) els.addMenu.hidden = viewingDesign;
+    const actions = els.addSeq?.parentElement;
+    if (actions) actions.hidden = viewingDesign;
     if (viewingDesign && this.addStructure) this.addStructure.form.hidden = true;
     if (els.editHint) els.editHint.hidden = viewingDesign;
     els.undo.hidden = viewingDesign;
@@ -758,7 +758,7 @@ export class DesignPanel {
         if (residues.has(`${atoms.chain_id[i]}|${atoms.res_id[i]}|${atoms.ins_code?.[i] ?? ''}`)) picked.push(i);
       }
     }
-    const key = `${this.app.studioSessionId}:${picked.join(',')}@${picked.map((i) => atoms.coord[i]?.[0]).join(',')}`;
+    const key = `${this.studioEpoch ?? 0}:${this.app.studioSessionId}:${picked.join(',')}@${picked.map((i) => atoms.coord[i]?.[0]).join(',')}`;
     if (key === this.hotspotOverlayKey || typeof window.atomworksStudio?.setOverlay !== 'function') return;
     this.hotspotOverlayKey = key;
     void window.atomworksStudio.setOverlay('hotspots', picked.length ? hotspotCif(atoms, picked) : null, {

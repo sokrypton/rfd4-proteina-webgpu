@@ -1162,14 +1162,12 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   font: 10.5px var(--font-mono, monospace);
 }
 
-#rfd4p-studio-card .rfd4p-add-menu {
-  flex: 1;
-  height: auto;
-  min-height: 30px;
-  padding: 4px 8px;
-  font-size: 12px;
-  line-height: 1.4;
-}
+.rfd4p-chain-actions { align-items: center; }
+.rfd4p-add-label { font-size: 11.5px; }
+
+/* One renderer (Mol*) is offered, so Studio's "Backend" menu (renderer choice) has nothing to choose. */
+.viewer-menu[data-menu="overflow"],
+#viewer-backend { display: none !important; }
 
 #rfd4p-studio-card .rfd4p-piece-menu {
   flex: none;
