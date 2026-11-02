@@ -544,11 +544,6 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   margin-top: 6px;
 }
 
-.rfd4p-total {
-  margin: 8px 0 2px;
-  font-size: 12px;
-  font-weight: 600;
-}
 
 .rfd4p-contig-row {
   margin: 0;
@@ -707,7 +702,6 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   font-size: 11.5px;
 }
 
-#rfd4p-studio-card .rfd4p-total,
 #rfd4p-studio-card .rfd4p-contig-row code {
   overflow-wrap: anywhere;
 }

@@ -42,8 +42,6 @@ const el = (tag, attrs = {}, ...children) => {
 /** Hotspots' one colour, wherever they are shown: sequence bar, viewer, chain bar, chip (styles.css `--rfd4p-hotspot`). */
 const HOTSPOT_COLOR = 0xf59e0b;
 
-const range = (min, max) => (min === max ? `${min}` : `${min}–${max}`);
-
 export class DesignPanel {
   /** @param {object} app the `Rfd4pStudioApp` (input session, partial-diffusion controls, run state) */
   constructor(app) {
@@ -68,7 +66,6 @@ export class DesignPanel {
       addPdb: $('rfd4p-add-pdb'),
       addLig: $('rfd4p-add-lig'),
       undo: $('rfd4p-undo'),
-      total: $('rfd4p-total'),
       contig: $('rfd4p-contig'),
       warnings: $('rfd4p-warnings'),
       runSettings: $('rfd4p-run-settings'),
@@ -397,8 +394,6 @@ export class DesignPanel {
     els.undo.disabled = document.getElementById('undo')?.disabled ?? true;
 
     els.chainList.replaceChildren(...this._sourceGroups(spec.chains).map((g) => this._groupBlock(g, viewingDesign)));
-    const designed = range(spec.designedMin, spec.designedMax);
-    els.total.textContent = spec.totalMax ? `${range(spec.totalMin, spec.totalMax)} residues · ${designed} designed` : '';
     els.contig.textContent = spec.contig || '—';
 
     const warnings = this.lastError ? [this.lastError, ...spec.warnings] : [...spec.warnings];

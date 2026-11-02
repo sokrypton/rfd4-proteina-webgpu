@@ -362,7 +362,6 @@ class LiveSequenceStrip {
   constructor() {
     this.dock = document.getElementById('sequence-dock');
     this.view = document.getElementById('sequence-view');
-    this.help = document.querySelector('#sequence-dock .sequence-help');
     this.el = null;
     this.tokens = new Map();
   }
@@ -379,12 +378,11 @@ class LiveSequenceStrip {
     this.view.after(this.el);
     // On the dock, not the view: Studio's sequence render resets the view's className.
     this.dock?.classList.add('rfd4p-live');
-    this.helpText = this.help?.textContent ?? null;
     this.tokens.clear();
   }
 
   /** @param {Array<{chainId: string, resId: number, resName: string}>} atoms */
-  update(atoms, step, nsteps, convergence = null) {
+  update(atoms) {
     if (!this.el) return;
     const residues = new Map();
     for (const a of atoms) {
@@ -392,7 +390,6 @@ class LiveSequenceStrip {
       const key = `${a.chainId}:${a.resId}`;
       if (code && !residues.has(key)) residues.set(key, { chainId: a.chainId, resId: a.resId, resName: a.resName, code });
     }
-    let changed = 0;
     if (this.tokens.size !== residues.size || [...residues.keys()].some((k) => !this.tokens.has(k))) {
       this.build(residues);
     } else {
@@ -402,15 +399,9 @@ class LiveSequenceStrip {
         if (diff) {
           tok.textContent = r.code;
           tok.title = `${r.chainId}/${r.resName} ${r.resId}`;
-          changed += 1;
         }
         tok.classList.toggle('rfd4p-changed', diff);
       }
-    }
-    if (this.help) {
-      const conv = convergence?.stop ? ' · converged'
-        : convergence?.streak ? ` · still for ${convergence.streak} step${convergence.streak > 1 ? 's' : ''}` : '';
-      this.help.textContent = `Live · step ${step + 1}/${nsteps}` + (step > 0 ? ` · ${changed} changed` : '') + conv;
     }
   }
 
@@ -450,7 +441,6 @@ class LiveSequenceStrip {
     this.el = null;
     this.tokens.clear();
     this.dock?.classList.remove('rfd4p-live');
-    if (this.help && this.helpText != null) this.help.textContent = this.helpText;
   }
 }
 
@@ -1439,7 +1429,7 @@ class Rfd4pStudioApp {
             if (!fixedAnchors && !isAnchored(structure.atoms) && referenceCaNm) {
               alignStructureAtomsToCa(structure.atoms, referenceCaNm, n);
             }
-            liveSequence.update(structure.atoms, info.step, info.nsteps, info.convergence);
+            liveSequence.update(structure.atoms);
             liveOverlays = designOverlays(structure.atoms, motifOverlay, unmodelled);
             return toCifString(structure) + caSecondaryStructureCif(structure.atoms);
           } catch (err) {
