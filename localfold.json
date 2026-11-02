@@ -3,6 +3,7 @@
   "repository": "sokrypton/localfold",
   "commit": "33e234d3",
   "entries": [
-    "web/validate-design.js"
+    "web/validate-design.js",
+    "web/af3-model.js"
   ]
 }
