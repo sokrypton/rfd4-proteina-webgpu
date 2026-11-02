@@ -23,7 +23,7 @@
                 <p class="rfd4p-lead rfd4p-lead-sub">Or start from your own structure</p>
                 <form id="rfd4p-fetch-form" class="rfd4p-fetch-row">
                     <input id="rfd4p-pdb-id" type="text" inputmode="latin" autocomplete="off" spellcheck="false"
-                        maxlength="40" placeholder="PDB ID, e.g. 1QYS or 1J79 A C" aria-label="PDB ID, optionally with chains" />
+                        maxlength="40" placeholder="1QYS or 1J79 A C" aria-label="PDB ID, optionally with chains" />
                     <button id="rfd4p-fetch-btn" type="submit" class="secondary compact">Fetch</button>
                     <button id="rfd4p-open-file" type="button" class="secondary compact">Open file…</button>
                 </form>
@@ -41,6 +41,11 @@
                     </span>
                 </div>
                 <p id="rfd4p-task-detail" class="rfd4p-task-detail muted"></p>
+                <!-- An example being built step by step (web/design-panel.js `_playRecipe`). -->
+                <div id="rfd4p-demo" class="rfd4p-demo" role="status" aria-live="polite" hidden>
+                    <span id="rfd4p-demo-step"></span>
+                    <button id="rfd4p-demo-skip" type="button" class="secondary compact">Skip</button>
+                </div>
                 <div id="rfd4p-chain-list" class="rfd4p-chain-list"></div>
                 <div class="rfd4p-chain-actions" role="group" aria-label="Add to the design">
                     <button id="rfd4p-add-seq" type="button" class="secondary compact" title="A new chain for the model to design (sequence and structure), 60–100 residues to start">+ seq</button>

@@ -13,17 +13,89 @@ import { fetchCcdComponents } from '../shared/rfd4p/pipeline/ccd.js';
 
 const ADVANCED_KEY = 'rfd4p-advanced-editor';
 
-/** Start-screen tasks, each opening one of the bundled Studio examples (`web/studio/examples`). */
+/**
+ * Start-screen tasks. Each with a `recipe` is built from its PDB entry in front of the user, step by step, with the
+ * card's own controls (`_playRecipe`), so an example shows how to set the task up; residues are the entry's own
+ * (label) numbering. Without a network the bundled Studio example (`example`, web/studio/examples) opens instead.
+ * Steps: `fetch` (ID and chains), `piece` (open the piece holding `at`, fill `set`, Apply), `removeNew` (× the new
+ * residues left in a chain), `addSeq`, `newLength` (the chain's `k`-th new piece), `ligand` (pose), `partial`.
+ */
 const TASKS = [
   { example: 'unconditional', title: 'Protein from scratch', desc: 'A new fold of the length you choose' },
-  { example: 'protein_binder', title: 'Protein binder', desc: 'Bind a target protein (PD-L1)' },
-  { example: 'small_molecule_binder', title: 'Small-molecule binder', desc: 'A pocket around a ligand (SAM)' },
-  { example: 'motif_scaffolding', title: 'Motif scaffolding', desc: 'Keep key residues, build the rest (1QJG)' },
-  { example: 'enzyme_design', title: 'Enzyme', desc: 'Catalytic residues around a ligand' },
-  { example: 'antibody_design', title: 'Antibody loop', desc: 'Redesign CDR H3 against HER2' },
-  { example: 'nanobody', title: 'Nanobody (VHH)', desc: 'Design CDRs against PD-L1' },
-  { example: 'inverse_folding', title: 'Redesign a sequence', desc: 'New sequence for a fixed backbone (2KL8)', then: 'sequence' },
-  { example: 'partial_diffusion', title: 'Diversify a structure', desc: 'Variants close to a starting fold (2KL8)' },
+  {
+    example: 'protein_binder', title: 'Protein binder', desc: 'Bind PD-L1 (PDB 5O45)',
+    recipe: [
+      { fetch: '5O45 A' },
+      { piece: 'A', at: 10, set: { hotspots: 'A40, A99, A107', keepOnly: 'A1-115' } },
+      { removeNew: 'A' },
+      { addSeq: true },
+      { newLength: [50, 120] },
+    ],
+  },
+  {
+    example: 'small_molecule_binder', title: 'Small-molecule binder', desc: 'A pocket around SAM (PDB 1XVA)',
+    recipe: [
+      { fetch: '1XVA D_1' },
+      { addSeq: true },
+      { newLength: [150, 150] },
+      { ligand: 'SAM', pose: 'free' },
+    ],
+  },
+  {
+    example: 'motif_scaffolding', title: 'Motif scaffolding', desc: 'Keep three residues, build the rest (PDB 1QJG)',
+    recipe: [
+      { fetch: '1QJG C' },
+      { piece: 'C', at: 10, set: { keepOnly: 'C14, C38, C99' } },
+    ],
+  },
+  {
+    example: 'enzyme_design', title: 'Enzyme', desc: 'A catalytic Asp around Zn and orotate (PDB 1J79)',
+    recipe: [
+      { fetch: '1J79 A C E' },
+      { piece: 'A', at: 10, set: { structure: 'sidechain', position: 'anywhere', keepOnly: 'A250' } },
+      { newLength: [180, 180], chain: 'A' },
+    ],
+  },
+  {
+    example: 'antibody_design', title: 'Antibody loop', desc: 'Redesign CDR H3 against HER2 (PDB 1N8Z)',
+    recipe: [
+      { fetch: '1N8Z A B C' },
+      { piece: 'A', at: 10, set: { structure: 'rigid', keepOnly: 'A1-107' } },
+      { removeNew: 'A' },
+      { piece: 'B', at: 10, set: { structure: 'rigid', keepOnly: 'B1-120' } },
+      { removeNew: 'B' },
+      { piece: 'B', at: 100, set: { from: 99, to: 109, structure: 'designed', sequence: 'designed' } },
+      { piece: 'C', at: 550, set: { keepOnly: 'C545-580, C591-607', hotspots: 'C557-573, C591-605' } },
+      { removeNew: 'C' },
+    ],
+  },
+  {
+    example: 'nanobody', title: 'Nanobody (VHH)', desc: 'Design CDRs against PD-L1 (PDB 5JDS)',
+    recipe: [
+      { fetch: '5JDS' },
+      { piece: 'A', at: 10, set: { structure: 'rigid', keepOnly: 'A3-125' } },
+      { removeNew: 'A' },
+      { piece: 'B', at: 10, set: { keepOnly: 'B3-115', hotspots: 'B40, B99, B107' } },
+      { removeNew: 'B' },
+      { piece: 'A', at: 100, set: { from: 99, to: 119, structure: 'designed', sequence: 'designed', length: [16, 26] } },
+      { piece: 'A', at: 55, set: { from: 52, to: 61, structure: 'designed', sequence: 'designed', length: [8, 13] } },
+      { piece: 'A', at: 30, set: { from: 28, to: 37, structure: 'designed', sequence: 'designed', length: [8, 13] } },
+    ],
+  },
+  {
+    example: 'inverse_folding', title: 'Redesign a sequence', desc: 'New sequence for a fixed backbone (PDB 2KL8)', then: 'sequence',
+    recipe: [
+      { fetch: '2KL8' },
+      { piece: 'A', at: 10, set: { sequence: 'designed' } },
+    ],
+  },
+  {
+    example: 'partial_diffusion', title: 'Diversify a structure', desc: 'Variants close to a starting fold (PDB 2KL8)',
+    recipe: [
+      { fetch: '2KL8' },
+      { partial: true },
+    ],
+  },
 ];
 
 const el = (tag, attrs = {}, ...children) => {
@@ -578,7 +650,7 @@ export class DesignPanel {
     return el('div', { class: 'rfd4p-pop-actions' },
       el('span', { class: 'rfd4p-pop-spacer' }),
       el('button', { type: 'button', class: 'secondary compact', text: 'Cancel', onclick: () => this._closePop() }),
-      el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: apply }));
+      el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: () => { this.applying = Promise.resolve(apply()); } }));
   }
 
   /** Existing residues: which of them, then three properties (structure, sequence, position), each fixed or designed. */
@@ -720,7 +792,7 @@ export class DesignPanel {
       row('Hotspots', hot),
       row('Keep only', keepOnly),
       note,
-      this._popActions(() => void apply()),
+      this._popActions(apply),
     ];
   }
 
@@ -761,7 +833,7 @@ export class DesignPanel {
       const lo = Math.max(1, Math.round(Number(min.value)) || p.min);
       const hi = Math.max(lo, Math.round(Number(max.value)) || p.max);
       this._closePop();
-      if (lo !== p.min || hi !== p.max) void this._mutate('/segments/range', { atom_index: p.atomIndex, minimum: lo, maximum: hi });
+      return lo !== p.min || hi !== p.max ? this._mutate('/segments/range', { atom_index: p.atomIndex, minimum: lo, maximum: hi }) : true;
     };
     return [
       this._popHead(`Chain ${c.id}, new residues`),
@@ -804,7 +876,7 @@ export class DesignPanel {
       l.pose === 'partly fixed' ? el('p', { class: 'muted', title: 'Set atom by atom in the Advanced editor', text: `${l.fixedAtoms} of ${l.atoms} atoms fixed now` }) : null,
       el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Swap' }), code),
       note,
-      this._popActions(() => void apply()),
+      this._popActions(apply),
     ].filter(Boolean);
   }
 
@@ -1083,10 +1155,11 @@ export class DesignPanel {
   // ---- start screen -------------------------------------------------------------------------------------------
 
   async _startTask(task) {
-    if (typeof window.atomworksStudio?.openExample !== 'function') return;
+    if (typeof window.atomworksStudio?.openExample !== 'function' || this.playing) return;
     const button = this.els.taskGrid?.querySelector(`[data-example="${task.example}"]`);
     button?.classList.add('loading');
     try {
+      if (task.recipe && await this._playRecipe(task)) return;
       await window.atomworksStudio?.openExample(task.example);
       this.showStart = false;
       if (task.then) {
@@ -1124,9 +1197,143 @@ export class DesignPanel {
       }
       status.textContent = opened === false ? `Opening ${id} was cancelled.` : '';
       if (opened !== false) this.showStart = false;
+      return opened !== false;
     } catch (err) {
       status.textContent = `Could not fetch ${id}: ${err?.message ?? err}`;
+      return false;
     } finally {
+      this.render();
+    }
+  }
+
+  // ---- examples, built step by step ---------------------------------------------------------------------------
+
+  /**
+   * Build `task` from its PDB entry with the card's own controls, each step shown: the piece's popup opens, its fields
+   * fill in, Apply. Skip runs the rest without pauses. Resolves false if the entry could not be fetched (nothing is
+   * changed then), true once built.
+   */
+  async _playRecipe(task) {
+    const demo = document.getElementById('rfd4p-demo');
+    const stepLine = document.getElementById('rfd4p-demo-step');
+    const skip = document.getElementById('rfd4p-demo-skip');
+    const sleep = (ms) => new Promise((r) => setTimeout(r, this.skipping ? 0 : ms));
+    const card = (id) => [...this.els.chainList.querySelectorAll('.rfd4p-chain')]
+      .find((c) => c.querySelector('.rfd4p-chain-id')?.textContent === id);
+    const focus = async (node, ms = 450) => {
+      node?.classList.add('rfd4p-demo-focus');
+      await sleep(ms);
+      node?.classList.remove('rfd4p-demo-focus');
+    };
+    const idle = async () => {
+      await this.applying;
+      this.applying = null;
+      for (let i = 0; i < 600 && this.busy; i += 1) await new Promise((r) => setTimeout(r, 50));
+    };
+    const click = async (node) => { await focus(node); node.click(); await idle(); };
+    const fill = async (pop, label, value, event = 'input') => {
+      const field = pop.querySelector(`[aria-label="${label}"]`);
+      if (!field) return;
+      await focus(field, 250);
+      field.value = String(value);
+      field.dispatchEvent(new Event(event));
+      if (event === 'input') field.dispatchEvent(new Event('change'));
+      await sleep(250);
+    };
+    const subs = (chain) => [...(card(chain)?.querySelectorAll('.rfd4p-sub') ?? [])];
+    const isNew = (sub) => sub.querySelector('.rfd4p-sub-status')?.textContent === 'new';
+    const say = (k, text) => { stepLine.textContent = `${k + 1}/${task.recipe.length} · ${text}`; };
+
+    this.playing = true;
+    this.skipping = false;
+    skip.onclick = () => { this.skipping = true; };
+    let fetched = false;
+    try {
+      for (const [k, step] of task.recipe.entries()) {
+        if (step.fetch) {
+          say(k, `Fetch ${step.fetch}`);
+          this.els.pdbId.value = step.fetch;
+          if (!await this._fetchPdb(step.fetch)) return false;
+          fetched = true;
+          demo.hidden = false;
+          this.els.design.classList.add('rfd4p-playing');
+          await sleep(600);
+        } else if (step.piece) {
+          const s = step.set;
+          say(k, `Chain ${step.piece}: ${[
+            s.from != null ? `${step.piece}${s.from}–${s.to}` : '',
+            s.structure ? `structure ${{ rigid: 'fixed, can move', sidechain: 'side chains only' }[s.structure] ?? s.structure}` : '',
+            s.sequence ? `sequence ${s.sequence}` : '', s.position ? `position ${s.position}` : '',
+            s.length ? `length ${s.length[0]}–${s.length[1]}` : '',
+            s.hotspots ? `hotspots ${s.hotspots}` : '', s.keepOnly ? `keep only ${s.keepOnly}` : '',
+          ].filter(Boolean).join(', ')}`);
+          const sub = subs(step.piece).find((x) => {
+            const m = /(\d+)(?:–(\d+))?/.exec(x.querySelector('.rfd4p-sub-name')?.textContent ?? '');
+            return !isNew(x) && m && step.at >= Number(m[1]) && step.at <= Number(m[2] ?? m[1]);
+          });
+          if (!sub) throw new Error(`chain ${step.piece} has no residue ${step.at}`);
+          await focus(sub);
+          sub.querySelector('.rfd4p-sub-open').click();
+          await sleep(300);
+          const pop = this.piecePop;
+          if (s.from != null) { await fill(pop, 'First residue', s.from); await fill(pop, 'Last residue', s.to); }
+          if (s.structure) await fill(pop, 'Structure', s.structure, 'change');
+          if (s.sequence) await fill(pop, 'Sequence', s.sequence, 'change');
+          if (s.position) await fill(pop, 'Position in chain', s.position, 'change');
+          if (s.length) { await fill(pop, 'Fewest residues', s.length[0]); await fill(pop, 'Most residues', s.length[1]); }
+          if (s.hotspots) await fill(pop, 'Hotspots', s.hotspots);
+          if (s.keepOnly) await fill(pop, 'Keep only these residues', s.keepOnly);
+          await click([...pop.querySelectorAll('button')].find((b) => b.textContent === 'Apply'));
+          const note = pop.hidden ? '' : pop.querySelector('.rfd4p-pop-note')?.textContent;
+          if (note) throw new Error(note);
+        } else if (step.removeNew) {
+          say(k, `Chain ${step.removeNew}: remove the residues not kept`);
+          for (let sub = subs(step.removeNew).find(isNew); sub; sub = subs(step.removeNew).find(isNew)) {
+            await click(sub.querySelector('.rfd4p-x'));
+          }
+        } else if (step.addSeq) {
+          say(k, '+ seq: a new chain to design');
+          await click(this.els.addSeq);
+        } else if (step.newLength) {
+          const [lo, hi] = step.newLength;
+          say(k, `New residues: length ${lo === hi ? lo : `${lo}–${hi}`}`);
+          const chains = step.chain ? [card(step.chain)] : [...this.els.chainList.querySelectorAll('.rfd4p-chain')].reverse();
+          const sub = chains.flatMap((c) => [...(c?.querySelectorAll('.rfd4p-sub') ?? [])]).find(isNew);
+          await focus(sub);
+          sub.querySelector('.rfd4p-sub-open').click();
+          await sleep(300);
+          await fill(this.piecePop, 'Fewest new residues', lo);
+          await fill(this.piecePop, 'Most new residues', hi);
+          await click([...this.piecePop.querySelectorAll('button')].find((b) => b.textContent === 'Apply'));
+        } else if (step.ligand) {
+          say(k, `${step.ligand}: pose ${step.pose}`);
+          const sub = [...this.els.chainList.querySelectorAll('.rfd4p-sub')].find((x) => x.querySelector('.rfd4p-sub-name')?.textContent === step.ligand);
+          await focus(sub);
+          sub.querySelector('.rfd4p-sub-open').click();
+          await sleep(300);
+          await fill(this.piecePop, 'Pose', step.pose, 'change');
+          await click([...this.piecePop.querySelectorAll('button')].find((b) => b.textContent === 'Apply'));
+        } else if (step.partial) {
+          say(k, 'Start from the input structure');
+          const box = document.getElementById('partial-diffusion');
+          await focus(box.closest('label') ?? box);
+          box.checked = true;
+          box.dispatchEvent(new Event('change'));
+          await idle();
+        }
+        await sleep(500);
+      }
+      return true;
+    } catch (err) {
+      console.warn('Example set-up stopped:', err);
+      this.lastError = `The example stopped at step ${stepLine.textContent}: ${String(err?.message ?? err)}`;
+      return fetched;
+    } finally {
+      this.playing = false;
+      this.skipping = false;
+      this._closePop();
+      demo.hidden = true;
+      this.els.design.classList.remove('rfd4p-playing');
       this.render();
     }
   }
