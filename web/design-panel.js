@@ -177,16 +177,18 @@ export class DesignPanel {
       const old = spec?.chains.filter((c) => c.role === 'fixed').flatMap((c) => c.atomIndices) ?? [];
       if (old.length && !await this._mutate('/delete', { atom_indices: old })) throw new Error(this.lastError ?? 'could not remove the old target');
     }
-    const added = await this._combine(doc);
-    await this._batch([
-      { condition: 'coordinate', atom_indices: added, enabled: true },
-      { condition: 'sequence', atom_indices: added, enabled: true },
+    // Kept as they are, set on the structure before it is merged, so adding it is one Undo step.
+    const all = Array.from({ length: doc.atoms.nAtoms }, (_, k) => k);
+    doc.setConditions([
+      { condition: 'coordinate', atom_indices: all, enabled: true },
+      { condition: 'sequence', atom_indices: all, enabled: true },
     ]);
+    const added = await this._combine(doc);
     const newChains = [...new Set(added.map((i) => String(this._inputDoc().atoms.chain_id[i])))];
     const original = chains.length === 1 ? ` chain ${chains[0].toUpperCase()}` : '';
     this._rememberSource(newChains, /^[0-9][A-Za-z0-9]{3}$/.test(name) ? `PDB ${name}${original}` : `${name}${original}`);
     status.textContent = `Added ${name} as chain${newChains.length === 1 ? '' : 's'} ${newChains.join(', ')}, kept in place.`
-      + ' To aim a binder at part of it: Edit ▸ Mark hotspots.';
+      + ' Click its row to mark hotspots.';
     this.render();
   }
 
