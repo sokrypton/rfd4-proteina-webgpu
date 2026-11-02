@@ -367,7 +367,9 @@ class LiveSequenceStrip {
     this.tokens = new Map();
   }
 
-  start() {
+  /** @param {Set<string>} [hotspots] `chain|resId|resName` keys (`hotspotResidueKeys`), marked as in Studio's view */
+  start(hotspots = new Set()) {
+    this.hotspots = hotspots;
     if (!this.view || this.el) return;
     document.getElementById('rfd4p-live-sequence')?.remove();
     this.el = document.createElement('div');
@@ -434,6 +436,7 @@ class LiveSequenceStrip {
       }
       const tok = document.createElement('span');
       tok.className = 'sequence-token';
+      if (this.hotspots?.has(`${r.chainId}|${r.resId}|${r.resName}`)) tok.classList.add('condition-hotspot');
       tok.textContent = r.code;
       tok.title = `${r.chainId}/${r.resName} ${r.resId}`;
       track.appendChild(tok);
@@ -449,6 +452,30 @@ class LiveSequenceStrip {
     this.dock?.classList.remove('rfd4p-live');
     if (this.help && this.helpText != null) this.help.textContent = this.helpText;
   }
+}
+
+/** The hotspot residues of a Studio document, as `chain|resId|resName` keys. */
+function hotspotResidueKeys(atoms) {
+  const keys = new Set();
+  const hot = atoms?.annotations?.condition_hotspot_1_atom;
+  if (!hot) return keys;
+  for (let i = 0; i < atoms.nAtoms; i += 1) {
+    if (hot[i]) keys.add(`${atoms.chain_id[i]}|${atoms.res_id[i]}|${atoms.res_name[i]}`);
+  }
+  return keys;
+}
+
+/**
+ * Mark `keys` (`hotspotResidueKeys` of the input) as hotspots on a generated design's document, so its sequence bar
+ * and viewer show them as the input's do. A design keeps a kept chain's letter and numbering; residues that do not
+ * match (chain, number and residue) are left alone.
+ */
+function markHotspots(doc, keys) {
+  if (!doc?.atoms || !keys?.size) return;
+  const a = doc.atoms;
+  const hits = [];
+  for (let i = 0; i < a.nAtoms; i += 1) if (keys.has(`${a.chain_id[i]}|${a.res_id[i]}|${a.res_name[i]}`)) hits.push(i);
+  if (hits.length) doc.setCondition('hotspot', hits, { enabled: true, snapshot: false });
 }
 
 const PRESET_TO_TASK = {
@@ -704,6 +731,7 @@ class Rfd4pStudioApp {
       await window.atomworksStudio?.openSession(sessionId, trajUrl);
       // Display-only reference motif and motif side chains beside a finished design (not part of the saved document).
       await showDesignOverlays(this.generatedViews.get(sessionId)?.overlays);
+      this.designPanel?.showHotspots();
     } catch (err) {
       console.warn('Motif overlay failed:', err);
     }
@@ -1338,7 +1366,9 @@ class Rfd4pStudioApp {
       this.generatedViews.clear();
       const viewChoices = [];
       const earlyStops = [];
-      liveSequence.start();
+      // Hotspots stay marked while the design runs and on every design it makes (the target keeps its chain and numbering).
+      const hotspotKeys = hotspotResidueKeys(store.getSession(this.inputSessionId)?.atoms);
+      liveSequence.start(hotspotKeys);
       let inputRevision = 1;
       if (!this.inputSessionId && this.currentCifText) {
         const { sessionId } = store.createSession(this.currentCifText, 'uncond_short.cif');
@@ -1519,6 +1549,7 @@ class Rfd4pStudioApp {
         const { sessionId: designSessionId } = store.createSession(result.cif, designName, {
           trajectoryCif,
         });
+        markHotspots(store.getSession(designSessionId), hotspotKeys);
         const designed = designedChains(atoms, result.structure?.atoms ?? []);
         this.generatedViews.set(designSessionId, {
           label: `Design ${sampleIdx + 1} · seed ${sampleSeed}`,

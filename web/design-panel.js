@@ -52,27 +52,6 @@ const el = (tag, attrs = {}, ...children) => {
 /** Hotspots' one colour, wherever they are shown: sequence bar, viewer, chain bar, chip (styles.css `--rfd4p-hotspot`). */
 const HOTSPOT_COLOR = 0xf59e0b;
 
-/** A display-only mmCIF of some of a document's atoms (the hotspot residues), heavy atoms only. */
-function hotspotCif(atoms, indices) {
-  const q = (s) => (/[\s'"]/.test(s) ? (s.includes('"') ? `'${s}'` : `"${s}"`) : s);
-  const rows = [];
-  for (const i of indices) {
-    const c = atoms.coord[i];
-    const element = String(atoms.element?.[i] ?? atoms.atom_name[i][0]).toUpperCase();
-    if (!c || !c.slice(0, 3).every(Number.isFinite) || element === 'H' || element === 'D') continue;
-    const name = q(String(atoms.atom_name[i]));
-    const res = String(atoms.res_name[i]);
-    const chain = String(atoms.chain_id[i]);
-    rows.push(['ATOM', rows.length + 1, element, name, res, chain, 1, atoms.res_id[i], atoms.res_id[i], res, chain, name,
-      c[0].toFixed(3), c[1].toFixed(3), c[2].toFixed(3), '1.00', '0.00', 1].join(' '));
-  }
-  return ['data_hotspots', 'loop_',
-    ...['group_PDB', 'id', 'type_symbol', 'label_atom_id', 'label_comp_id', 'label_asym_id', 'label_entity_id',
-      'label_seq_id', 'auth_seq_id', 'auth_comp_id', 'auth_asym_id', 'auth_atom_id', 'Cartn_x', 'Cartn_y', 'Cartn_z',
-      'occupancy', 'B_iso_or_equiv', 'pdbx_PDB_model_num'].map((c) => `_atom_site.${c}`),
-    ...rows, ''].join('\n');
-}
-
 const range = (min, max) => (min === max ? `${min}` : `${min}–${max}`);
 
 export class DesignPanel {
@@ -336,8 +315,6 @@ export class DesignPanel {
     els.advanced?.addEventListener('change', () => this._applyAdvanced(els.advanced.checked, true));
     window.addEventListener('atomworks-studio', (ev) => {
       if (ev.detail?.type === 'selection') return;
-      // Studio redraws the document on every change, which drops display-only overlays: redraw the hotspots too.
-      this.studioEpoch = (this.studioEpoch ?? 0) + 1;
       queueMicrotask(() => this.render());
     });
     document.addEventListener('pointerdown', (ev) => {
@@ -448,7 +425,7 @@ export class DesignPanel {
     els.warnings.replaceChildren(...warnings.map((w) => el('p', { class: 'rfd4p-warning', text: w })));
 
     this._renderPartial(spec, viewingDesign);
-    this._showHotspots(viewingDesign ? null : this._inputDoc()?.atoms);
+    this.showHotspots();
 
     const needsChoice = ['redesign_all', 'nothing'].includes(spec.task.key);
     this._renderFlows(spec, !viewingDesign && (this.showFlows || needsChoice || this.flowForm !== null));
@@ -747,29 +724,26 @@ export class DesignPanel {
   }
 
   /**
-   * The input's hotspot residues drawn in the viewer as amber sticks (a display-only overlay, not part of the
-   * document), so they can be seen in 3D as in the sequence bar. Cleared while a generated design is shown.
+   * The shown document's hotspot residues coloured amber in the viewer, in the structure's own cartoon (Studio's
+   * `setHighlight`; side-chain sticks were too busy): the input's while editing and while a design runs, a
+   * design's own when one is shown (designs carry the input's hotspots, web/app.js `markHotspots`). Studio keeps a
+   * highlight across loads and live frames.
    */
-  _showHotspots(atoms) {
-    const residues = new Map();
+  showHotspots() {
+    if (typeof window.atomworksStudio?.setHighlight !== 'function') return;
+    const shown = this.app.studioSessionId ? getSharedStudioStore().getSession(this.app.studioSessionId) : null;
+    const atoms = (shown ?? this._inputDoc())?.atoms;
     const hot = atoms?.annotations?.condition_hotspot_1_atom;
+    const residues = new Map();
     if (hot) {
       for (let i = 0; i < atoms.nAtoms; i += 1) {
-        if (hot[i]) residues.set(`${atoms.chain_id[i]}|${atoms.res_id[i]}|${atoms.ins_code?.[i] ?? ''}`, true);
+        if (hot[i]) residues.set(`${atoms.chain_id[i]}|${atoms.res_id[i]}`, { chain: String(atoms.chain_id[i]), residue: Number(atoms.res_id[i]) });
       }
     }
-    const picked = [];
-    if (residues.size) {
-      for (let i = 0; i < atoms.nAtoms; i += 1) {
-        if (residues.has(`${atoms.chain_id[i]}|${atoms.res_id[i]}|${atoms.ins_code?.[i] ?? ''}`)) picked.push(i);
-      }
-    }
-    const key = `${this.studioEpoch ?? 0}:${this.app.studioSessionId}:${picked.join(',')}@${picked.map((i) => atoms.coord[i]?.[0]).join(',')}`;
-    if (key === this.hotspotOverlayKey || typeof window.atomworksStudio?.setOverlay !== 'function') return;
-    this.hotspotOverlayKey = key;
-    void window.atomworksStudio.setOverlay('hotspots', picked.length ? hotspotCif(atoms, picked) : null, {
-      label: 'Hotspots', color: HOTSPOT_COLOR, sizeAspectRatio: 0.7,
-    }).catch((err) => console.warn('Hotspot overlay failed:', err));
+    // Sent on every render rather than once: Studio ignores it until its viewer has started.
+    this.hotspotQueue = (this.hotspotQueue ?? Promise.resolve())
+      .then(() => window.atomworksStudio.setHighlight('hotspots', residues.size ? [...residues.values()] : null, { color: HOTSPOT_COLOR }))
+      .catch((err) => console.warn('Hotspot highlight failed:', err));
   }
 
   _renderPartial(spec, readonly) {

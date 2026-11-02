@@ -4,9 +4,9 @@
   "override": {
     "repository": "sokrypton/atomworks-studio",
     "branch": "live-frame-cartoon",
-    "commit": "c1e30a8",
+    "commit": "51fe162",
     "pullRequest": "https://github.com/RosettaCommons/atomworks-studio/pull/29",
-    "why": "setOverlay({ representation: 'cartoon' }) for the refold overlay (cf8aa98, RosettaCommons/atomworks-studio#29), and live frames drawn as cartoon plus ligands (c1e30a8)"
+    "why": "setOverlay({ representation: 'cartoon' }) for the refold overlay (cf8aa98, RosettaCommons/atomworks-studio#29), live frames drawn as cartoon plus ligands (c1e30a8), and setHighlight for hotspots (51fe162)"
   },
   "version": "0.0.6",
   "repository": "RosettaCommons/atomworks-studio",
