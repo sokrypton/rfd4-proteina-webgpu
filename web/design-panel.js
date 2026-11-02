@@ -88,9 +88,9 @@ export class DesignPanel {
   }
 
   /**
-   * "+ pdb": a structure's chains added to the open job as kept chains (a target),
-   * optionally in place of the job's current kept chains, so an example's target can be swapped without setting
-   * the job up again.
+   * "+ pdb": a structure's chains added to the open job, fixed as they are (a target). Opened from a source caption,
+   * the same form replaces that source's chains instead, so an example's target is swapped without setting the job up
+   * again.
    */
   _buildAddStructure() {
     const actions = this.els.addPdb?.parentElement;
@@ -99,19 +99,17 @@ export class DesignPanel {
       type: 'text', class: 'rfd4p-add-id', spellcheck: 'false', autocomplete: 'off', maxlength: 40,
       placeholder: 'PDB ID, then chains: 5O45 A', 'aria-label': 'PDB ID and chains',
     });
-    const replace = el('input', { type: 'checkbox' });
-    const replaceLabel = el('label', { class: 'checkbox' }, replace, ' Instead of the current kept chains (swap the target)');
-    const fetchBtn = el('button', { type: 'submit', class: 'primary compact', text: 'Add' });
+    const title = el('strong');
+    const fetchBtn = el('button', { type: 'submit', class: 'primary compact' });
     const fileInput = el('input', { type: 'file', accept: '.cif,.mmcif,.pdb,.ent,.cif.zst', hidden: true });
     const fileBtn = el('button', { type: 'button', class: 'secondary compact', text: 'Open a file…', onclick: () => fileInput.click() });
     const status = el('p', { class: 'rfd4p-add-status muted', 'aria-live': 'polite' });
     const cancel = el('button', { type: 'button', class: 'secondary compact', text: 'Cancel', onclick: () => { form.hidden = true; } });
     const form = el('form', { class: 'rfd4p-add-structure', hidden: true },
-      el('strong', { text: 'Add chains from a structure' }),
-      el('span', { class: 'muted', text: 'They are kept as they are: a target to design against, for example.' }),
+      title,
       el('div', { class: 'rfd4p-add-row' }, id, fetchBtn), el('div', { class: 'rfd4p-add-row' }, fileBtn, fileInput, cancel),
-      replaceLabel, status);
-    this.addStructure = { form, replace, replaceLabel, status, id };
+      status);
+    this.addStructure = { form, title, fetchBtn, status, id, replace: null };
     form.addEventListener('submit', (ev) => {
       ev.preventDefault();
       const m = /^\s*([0-9][A-Za-z0-9]{3})(?:[\s:_,]+(.*))?$/.exec(id.value);
@@ -123,7 +121,7 @@ export class DesignPanel {
         try {
           const res = await fetch(`https://files.rcsb.org/download/${pdb}.cif`);
           if (!res.ok) throw new Error(res.status === 404 ? `${pdb} was not found` : `RCSB returned ${res.status}`);
-          await this._addStructure(await res.text(), pdb, chains, replace.checked);
+          await this._addStructure(await res.text(), pdb, chains, this.addStructure.replace);
         } catch (err) {
           status.textContent = `Could not add ${pdb}: ${err?.message ?? err}`;
         }
@@ -137,7 +135,7 @@ export class DesignPanel {
       void (async () => {
         try {
           const text = file.name.endsWith('.zst') ? new Uint8Array(await file.arrayBuffer()) : await file.text();
-          await this._addStructure(text, file.name.replace(/\.(cif|mmcif|pdb|ent|zst)+$/i, ''), chains, replace.checked);
+          await this._addStructure(text, file.name.replace(/\.(cif|mmcif|pdb|ent|zst)+$/i, ''), chains, this.addStructure.replace);
         } catch (err) {
           status.textContent = `Could not add ${file.name}: ${err?.message ?? err}`;
         }
@@ -146,18 +144,23 @@ export class DesignPanel {
     actions.after(form);
   }
 
-  _openAddStructure() {
-    const { form, replace, replaceLabel, status, id } = this.addStructure ?? {};
+  /** The + pdb form; with `group` (a source caption's chains), it replaces them. */
+  _openAddStructure(group = null) {
+    const { form, title, fetchBtn, status, id } = this.addStructure ?? {};
     if (!form) return;
-    const hasTarget = Boolean(this._spec()?.chains.some((c) => c.role === 'fixed'));
-    replaceLabel.hidden = !hasTarget;
-    replace.checked = hasTarget;
+    this.addStructure.replace = group ? group.chains.flatMap((c) => c.atomIndices) : null;
+    title.textContent = group ? `Replace ${group.label}` : 'Add chains from a structure';
+    fetchBtn.textContent = group ? 'Replace' : 'Add';
+    // The source's own ID and chains, ready to edit ("5O45 A" for "PDB 5O45 chain A").
+    const m = group ? /^PDB (\S+)(?: chains? (.+))?$/.exec(group.label) : null;
+    id.value = m ? [m[1], m[2] ?? ''].join(' ').trim() : '';
     status.textContent = '';
     form.hidden = false;
     id.focus();
+    id.select();
   }
 
-  /** Add `chains` (all when empty) of a structure to the job as kept chains; with `replace`, drop the kept chains first. */
+  /** Add `chains` (all when empty) of a structure to the job, fixed as they are; first remove the atoms in `replace`. */
   async _addStructure(text, name, chains, replace) {
     const { status } = this.addStructure;
     const doc = await createStudioDocWithCcd(text, name, { preset: 'rcsb', assembly: '1' });
@@ -172,25 +175,22 @@ export class DesignPanel {
       if (drop.length) doc.deleteAtoms(drop);
     }
     if (!doc.atoms.nAtoms) throw new Error('nothing left to add');
-    if (replace) {
-      const spec = this._spec();
-      const old = spec?.chains.filter((c) => c.role === 'fixed').flatMap((c) => c.atomIndices) ?? [];
-      if (old.length && !await this._mutate('/delete', { atom_indices: old })) throw new Error(this.lastError ?? 'could not remove the old target');
-    }
+    if (replace?.length && !await this._mutate('/delete', { atom_indices: replace })) throw new Error(this.lastError ?? 'could not remove the old chains');
     // Opened as a plain structure, it is already fixed throughout, so adding it is one Undo step.
     const added = await this._combine(doc);
     const newChains = [...new Set(added.map((i) => String(this._inputDoc().atoms.chain_id[i])))];
     const original = chains.length === 1 ? ` chain ${chains[0].toUpperCase()}` : '';
     this._rememberSource(newChains, /^[0-9][A-Za-z0-9]{3}$/.test(name) ? `PDB ${name}${original}` : `${name}${original}`);
-    status.textContent = `Added ${name} as chain${newChains.length === 1 ? '' : 's'} ${newChains.join(', ')}, kept in place.`
-      + ' Click its row to mark hotspots.';
+    this.addStructure.form.hidden = true;
+    this.addStructure.replace = null;
     this.render();
   }
 
-  /** Merge a document into the job (one undo step); resolves to the added atoms' indices. */
+  /** Merge a document into the job (one undo step); resolves to the added atoms' indices (the chains that are new). */
   async _combine(doc) {
     const store = getSharedStudioStore();
-    const before = this._inputDoc()?.atoms?.nAtoms ?? 0;
+    const chainsOf = () => new Set(Array.from(this._inputDoc()?.atoms?.chain_id ?? [], String));
+    const before = chainsOf();
     const tmp = `rfd4p_add_${Date.now().toString(36)}`;
     store.sessions.set(tmp, doc);
     try {
@@ -198,8 +198,11 @@ export class DesignPanel {
     } finally {
       store.sessions.delete(tmp);
     }
-    const after = this._inputDoc()?.atoms?.nAtoms ?? before;
-    return Array.from({ length: after - before }, (_, k) => before + k);
+    // Merged chains are not always appended at the end (Studio orders polymers before ligands): find them by chain.
+    const a = this._inputDoc().atoms;
+    const added = [];
+    for (let i = 0; i < a.nAtoms; i += 1) if (!before.has(String(a.chain_id[i]))) added.push(i);
+    return added;
   }
 
   /** Centre of `indices` (all atoms when null) with coordinates, or the origin. */
@@ -231,7 +234,9 @@ export class DesignPanel {
     const doc = await createStudioDocWithCcd(cif, code);
     if (replace && !await this._mutate('/delete', { atom_indices: replace })) throw new Error(this.lastError ?? 'could not remove the old ligand');
     const added = await this._combine(doc);
-    this._rememberSource([...new Set(added.map((i) => String(this._inputDoc().atoms.chain_id[i])))], `${code} in the PDB's ligand dictionary (pose free to start)`);
+    // A ligand added by its code comes from no structure: it sits outside the source groups.
+    this._rememberSource([...new Set(added.map((i) => String(this._inputDoc().atoms.chain_id[i])))], null);
+    this.render();
     return code;
   }
 
@@ -391,7 +396,7 @@ export class DesignPanel {
     els.undo.hidden = viewingDesign;
     els.undo.disabled = document.getElementById('undo')?.disabled ?? true;
 
-    els.chainList.replaceChildren(...spec.chains.map((c) => this._chainRow(c, viewingDesign)));
+    els.chainList.replaceChildren(...this._sourceGroups(spec.chains).map((g) => this._groupBlock(g, viewingDesign)));
     const designed = range(spec.designedMin, spec.designedMax);
     els.total.textContent = spec.totalMax ? `${range(spec.totalMin, spec.totalMax)} residues · ${designed} designed` : '';
     els.contig.textContent = spec.contig || '—';
@@ -409,6 +414,27 @@ export class DesignPanel {
     if (!this.app.activeAbortController && this.app.els.predictBtn) {
       this.app.els.predictBtn.disabled = Boolean(this.app.noWebGpu) || spec.task.key === 'nothing' || spec.task.key === 'empty';
     }
+  }
+
+  /** Chains by where their coordinates come from, in order of first appearance; chains made here last, uncaptioned. */
+  _sourceGroups(chains) {
+    const groups = new Map();
+    const made = { label: null, chains: [] };
+    for (const c of chains) {
+      const label = this._sourceOf(c);
+      if (!label) { made.chains.push(c); continue; }
+      if (!groups.has(label)) groups.set(label, { label, chains: [] });
+      groups.get(label).chains.push(c);
+    }
+    return [...groups.values(), ...(made.chains.length ? [made] : [])];
+  }
+
+  /** A source's caption (click: replace it with another structure), then its chains. */
+  _groupBlock(g, readonly) {
+    const caption = !g.label ? null : readonly
+      ? el('span', { class: 'rfd4p-source', text: g.label })
+      : el('button', { type: 'button', class: 'rfd4p-source', text: g.label, title: `Replace ${g.label}`, onclick: () => this._openAddStructure(g) });
+    return el('div', { class: 'rfd4p-group' }, caption, ...g.chains.map((c) => this._chainRow(c, readonly)));
   }
 
   /**
@@ -501,15 +527,15 @@ export class DesignPanel {
     return this._card(l.name, status, 'rfd4p-sub-ligand', readonly, (anchor) => this._openPop(anchor, () => this._ligandPop(c, l)), remove);
   }
 
-  /** Where a chain's coordinates come from, as the page knows it. */
+  /** Where a chain's coordinates come from, as the page knows it; null for chains made here (+ seq, + lig). */
   _sourceOf(c) {
-    const doc = this._inputDoc();
-    const added = this.sources?.get(doc)?.get(c.id);
-    if (added) return added;
     if (c.role === 'new') return null;
+    const doc = this._inputDoc();
+    const added = this.sources?.get(doc);
+    if (added?.has(c.id)) return added.get(c.id);
     const name = String(doc?.name ?? '').replace(/\.(cif|mmcif|pdb|zst)+$/i, '');
     const task = TASKS.find((t) => t.example === name);
-    if (task) return `the ${task.title} example`;
+    if (task) return `${task.title} example`;
     return /^[0-9][A-Za-z0-9]{3}$/.test(name) ? `PDB ${name.toUpperCase()}` : name || null;
   }
 
@@ -549,9 +575,8 @@ export class DesignPanel {
     if (this.piecePop) this.piecePop.hidden = true;
   }
 
-  _popHead(title, source) {
-    return el('div', { class: 'rfd4p-pop-title' },
-      el('div', {}, el('strong', { text: title }), source ? el('div', { class: 'muted', text: `from ${source}` }) : null));
+  _popHead(title) {
+    return el('div', { class: 'rfd4p-pop-title' }, el('strong', { text: title }));
   }
 
   _popActions(apply) {
@@ -673,7 +698,7 @@ export class DesignPanel {
     const positionRow = row('Position', position);
     sync();
     return [
-      this._popHead(`Chain ${c.id}`, this._sourceOf(c)),
+      this._popHead(`Chain ${c.id}`),
       row('Residues', el('span', { class: 'rfd4p-pop-inline', title: 'Narrow the range to change only some of these residues' },
         el('span', { text: c.id }), from, el('span', { text: '–' }), to)),
       row('Structure', structure),
@@ -725,7 +750,7 @@ export class DesignPanel {
       if (lo !== p.min || hi !== p.max) void this._mutate('/segments/range', { atom_index: p.atomIndex, minimum: lo, maximum: hi });
     };
     return [
-      this._popHead(`Chain ${c.id}, new residues`, null),
+      this._popHead(`Chain ${c.id}, new residues`),
       el('div', { class: 'rfd4p-pop-row', title: 'Each design picks one length from this range' },
         el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, min, el('span', { text: '–' }), max)),
       this._popActions(apply),
@@ -760,7 +785,7 @@ export class DesignPanel {
       }
     };
     return [
-      this._popHead(`Ligand ${l.name}`, this._sourceOf(c)),
+      this._popHead(`Ligand ${l.name}`),
       el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Pose' }), pose),
       l.pose === 'partly fixed' ? el('p', { class: 'muted', title: 'Set atom by atom in the Advanced editor', text: `${l.fixedAtoms} of ${l.atoms} atoms fixed now` }) : null,
       el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Swap' }), code),

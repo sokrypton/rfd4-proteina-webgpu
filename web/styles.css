@@ -885,6 +885,27 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
   font-size: 12px;
 }
 
+/* Chains grouped by source (`_sourceGroups`): one muted caption per structure; clicking it replaces that structure. */
+#rfd4p-studio-card .rfd4p-chain-list { gap: 10px; }
+.rfd4p-group { display: grid; gap: 6px; }
+#rfd4p-studio-card .rfd4p-source {
+  justify-self: start;
+  max-width: 100%;
+  min-height: 0;
+  height: auto;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted, #b1b3b9);
+  font-size: 11px;
+  text-align: left;
+}
+#rfd4p-studio-card button.rfd4p-source { cursor: pointer; }
+#rfd4p-studio-card button.rfd4p-source:hover { color: var(--accent, #82aaff); text-decoration: underline; }
+
 /* Chains (web/design-panel.js `_chainRow`): the chain letter on the left, its pieces as sub-cards in order, a "+"
    between them to insert new residues. Each sub-card opens its popup; its × removes it. */
 #rfd4p-studio-card .rfd4p-chain {
