@@ -42,25 +42,6 @@ body.studio-fullscreen-body {
   font-weight: 500;
 }
 
-.rfd4p-compact-grid {
-  display: grid;
-  grid-template-columns: 1.2fr 1fr;
-  gap: 8px;
-  align-items: end;
-  margin-bottom: 8px;
-}
-
-.rfd4p-compact-grid > label {
-  margin: 0;
-}
-
-.rfd4p-Compact-select,
-.rfd4p-compact-grid select {
-  height: 30px;
-  padding: 4px 8px;
-  font-size: 12px;
-}
-
 .rfd4p-thinking-group {
   margin: 0;
 }
@@ -387,10 +368,6 @@ body.studio-fullscreen-body {
   transition: none;
 }
 
-.rfd4p-thinking-row {
-  margin-bottom: 8px;
-}
-
 .rfd4p-sampling-note {
   margin: 0 0 6px;
   color: var(--text-subtle, #a0a3ab);
@@ -467,14 +444,6 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   color: var(--text-secondary, #d1d2d5);
 }
 
-.rfd4p-eyebrow {
-  display: block;
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-muted, #b1b3b9);
-}
-
 /* Start screen task cards */
 .rfd4p-task-grid {
   display: grid;
@@ -482,8 +451,7 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   gap: 6px;
 }
 
-.rfd4p-task-card,
-.rfd4p-flow {
+.rfd4p-task-card {
   display: grid;
   justify-items: start;
   gap: 2px;
@@ -497,21 +465,17 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   color: var(--text, #f1f1f2);
 }
 
-.rfd4p-task-card:hover,
-.rfd4p-flow:hover:not(:disabled),
-.rfd4p-flow.active {
+.rfd4p-task-card:hover {
   border-color: var(--accent, #82aaff);
   background: var(--accent-soft, #26354c);
 }
 
-.rfd4p-task-card strong,
-.rfd4p-flow strong {
+.rfd4p-task-card strong {
   font-size: 12px;
   font-weight: 600;
 }
 
-.rfd4p-task-card span,
-.rfd4p-flow span {
+.rfd4p-task-card span {
   font-size: 11px;
   line-height: 1.3;
   color: var(--text-muted, #b1b3b9);
@@ -565,104 +529,13 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   font-size: 11.5px;
 }
 
-.rfd4p-guided {
-  display: grid;
-  gap: 6px;
-  margin-bottom: 10px;
-  padding: 8px;
-  border: 1px dashed var(--border-strong, #50535a);
-  border-radius: 5px;
-}
-
-.rfd4p-guided .rfd4p-lead {
-  margin: 0 0 2px;
-  font-size: 12px;
-}
-
-.rfd4p-flow:disabled {
-  opacity: 0.5;
-}
-
-.rfd4p-flow-form {
-  display: grid;
-  gap: 6px;
-  padding: 4px 2px 6px;
-  font-size: 11.5px;
-}
-
-.rfd4p-flow-length {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.rfd4p-flow-length input {
-  width: 64px;
-  height: 26px;
-}
-
 .rfd4p-chain-list {
   display: grid;
   gap: 6px;
 }
 
-.rfd4p-chain {
-  display: grid;
-  grid-template-columns: 24px 1fr;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid var(--border, #383a3f);
-  border-left-width: 3px;
-  border-radius: 4px;
-  background: var(--surface-recessed, #191a1c);
-}
-
-.rfd4p-role-fixed { border-left-color: var(--condition-coordinate, #ffb86c); }
-.rfd4p-role-backbone { border-left-color: var(--condition-sequence, #c3e88d); }
-.rfd4p-role-motif { border-left-color: var(--condition-index, #c792ea); }
-.rfd4p-role-free,
-.rfd4p-role-new { border-left-color: var(--accent, #82aaff); }
-.rfd4p-role-ligand { border-left-color: var(--text-muted, #b1b3b9); }
-
 .rfd4p-chain-id {
   font: 600 12px var(--font-mono, monospace);
-}
-
-.rfd4p-chain-body {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.rfd4p-chain-line {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  font-size: 11.5px;
-}
-
-.rfd4p-chain-line select {
-  max-width: 62%;
-  font-size: 11px;
-}
-
-.rfd4p-seg-inputs {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.rfd4p-seg-inputs input {
-  width: 58px;
-  height: 24px;
-  padding: 2px 6px;
-  font-size: 11px;
-}
-
-.rfd4p-chain-note {
-  margin: 0;
-  font-size: 10.5px;
 }
 
 .rfd4p-chain-actions {
@@ -751,23 +624,10 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   margin: 0;
 }
 
-#rfd4p-studio-card .rfd4p-flow,
 #rfd4p-studio-card .rfd4p-task-card {
   place-items: start;
   justify-content: stretch;
   text-align: left;
-}
-
-.rfd4p-flow-form input.rfd4p-pct {
-  width: 56px;
-  height: 24px;
-  padding: 2px 6px;
-}
-
-.rfd4p-seg-label {
-  min-width: 0;
-  font-size: 11px;
-  color: var(--text-secondary, #d1d2d5);
 }
 
 /* Selection popup (web/design-panel.js _renderPop) */
@@ -810,8 +670,7 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   grid-column: 2;
 }
 
-.rfd4p-pop-close,
-.rfd4p-chain-remove {
+.rfd4p-pop-close {
   min-height: 0;
   padding: 0 6px;
   border: 0;
@@ -821,8 +680,7 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   line-height: 1;
 }
 
-.rfd4p-pop-close:hover,
-.rfd4p-chain-remove:hover {
+.rfd4p-pop-close:hover {
   color: var(--text, #f1f1f2);
 }
 
@@ -840,18 +698,6 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   font-size: 11px;
 }
 
-.rfd4p-chain-head {
-  display: grid;
-  align-content: start;
-  justify-items: start;
-  gap: 2px;
-}
-
-.rfd4p-chain-remove {
-  padding: 0;
-  font-size: 14px;
-}
-
 .rfd4p-partial-row {
   display: flex;
   flex-wrap: wrap;
@@ -859,48 +705,6 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   gap: 6px;
   margin: 0 0 8px;
   font-size: 11.5px;
-}
-
-.rfd4p-flow-form select {
-  width: 100%;
-  font-size: 11px;
-}
-
-/* Chain rows: one line per item, truncated rather than wrapped; the role picker gets its own line. */
-#rfd4p-studio-card .rfd4p-chain-line {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 6px;
-}
-
-#rfd4p-studio-card .rfd4p-chain-info,
-#rfd4p-studio-card .rfd4p-seg-label,
-#rfd4p-studio-card .rfd4p-chain-line > span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-#rfd4p-studio-card .rfd4p-role-select {
-  width: 100%;
-  max-width: none;
-  height: auto;
-  min-height: 28px;
-  padding-top: 3px;
-  padding-bottom: 3px;
-  font-size: 11px;
-  line-height: 1.3;
-}
-
-#rfd4p-studio-card .rfd4p-seg-inputs {
-  white-space: nowrap;
-}
-
-#rfd4p-studio-card .rfd4p-seg-inputs input {
-  width: 50px;
-  min-width: 0;
 }
 
 #rfd4p-studio-card .rfd4p-total,
@@ -921,10 +725,6 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   background: var(--chain-color);
   font-weight: 700;
   text-align: center;
-}
-
-#rfd4p-studio-card .rfd4p-chain {
-  border-left-color: var(--chain-color, var(--border, #383a3f));
 }
 
 #rfd4p-studio-card .rfd4p-chain-id {
@@ -1025,163 +825,11 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   margin-top: 12px;
 }
 
-/* Chains piece by piece (web/design-panel.js `_chainRow`): head across the card, a bar to scale, a row per piece. */
-#rfd4p-studio-card .rfd4p-chain {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 4px;
-}
-
-#rfd4p-studio-card .rfd4p-chain-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.rfd4p-chain-summary {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-}
-
-.rfd4p-edit-hint {
-  margin: 0 0 6px;
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.rfd4p-chain-bar {
-  display: flex;
-  gap: 2px;
-  height: 10px;
-  margin: 2px 0 2px;
-}
-
-.rfd4p-chain-bar > span {
-  position: relative;
-  flex-basis: 0;
-  min-width: 3px;
-  border-radius: 2px;
-  background: var(--chain-color, var(--text-muted, #b1b3b9));
-}
-
-/* Kept: solid (faded when only part of it is kept). Redesigned: striped. New: outlined. */
-.rfd4p-chain-bar .rfd4p-bar-partial { opacity: 0.55; }
-.rfd4p-chain-bar .rfd4p-bar-designed {
-  background: repeating-linear-gradient(135deg, var(--chain-color, #b1b3b9) 0 3px, transparent 3px 6px);
-}
-.rfd4p-chain-bar .rfd4p-bar-new {
-  background: transparent;
-  border: 1px dashed var(--chain-color, var(--text-muted, #b1b3b9));
-}
-
-.rfd4p-bar-hotspot {
-  position: absolute;
-  top: -2px;
-  bottom: -2px;
-  width: 2px;
-  margin-left: -1px;
-  background: var(--rfd4p-hotspot);
-}
-
-#rfd4p-studio-card .rfd4p-piece {
-  display: grid;
-  gap: 3px;
-  padding: 3px 0;
-  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
-}
-
-#rfd4p-studio-card .rfd4p-chain-bar + .rfd4p-piece { border-top: 0; }
-
-.rfd4p-piece-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 26px;
-}
-
-.rfd4p-piece-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: 11.5px;
-}
-
-/* What a piece is, in its first word: kept (held), new / redesigned (made by the model), ligand. */
-.rfd4p-piece-new,
-.rfd4p-piece-designed { color: var(--accent, #82aaff); }
-
-.rfd4p-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.rfd4p-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 100%;
-  padding: 1px 4px 1px 7px;
-  border: 1px solid var(--border-strong, #50535a);
-  border-radius: 10px;
-  font-size: 10.5px;
-  line-height: 16px;
-  color: var(--text-secondary, #d1d2d5);
-}
-
-.rfd4p-chip:not(:has(.rfd4p-chip-x)) { padding-right: 7px; }
-
-.rfd4p-chip-hotspots { border-color: var(--rfd4p-hotspot); }
-
-.rfd4p-chip-x {
-  padding: 0 3px;
-  border: 0;
-  background: none;
-  color: var(--text-muted, #b1b3b9);
-  font-size: 12px;
-  line-height: 14px;
-  cursor: pointer;
-}
-
-.rfd4p-chip-x:hover { color: var(--text, #f1f1f2); }
-
-.rfd4p-chip-wrap {
-  display: grid;
-  gap: 2px;
-}
-
-#rfd4p-studio-card .rfd4p-chip .rfd4p-hotspot-input {
-  width: auto;
-  min-width: 0;
-  max-width: 220px;
-  height: 18px;
-  padding: 0 4px;
-  border-radius: 3px;
-  font: 10.5px var(--font-mono, monospace);
-}
-
-.rfd4p-chain-actions { align-items: center; }
-.rfd4p-add-label { font-size: 11.5px; }
 
 /* One renderer (Mol*) is offered, so Studio's "Backend" menu (renderer choice) has nothing to choose. */
 .viewer-menu[data-menu="overflow"],
 #viewer-backend { display: none !important; }
 
-#rfd4p-studio-card .rfd4p-piece-menu {
-  flex: none;
-  width: 70px;
-  min-width: 70px;
-  height: 26px;
-  padding: 2px 4px;
-  font-size: 11px;
-}
-
-.rfd4p-hotspot-note:empty { display: none; }
-.rfd4p-hotspot-note { font-size: 10.5px; }
-
-.rfd4p-chain-actions { flex-wrap: wrap; }
 
 .rfd4p-add-structure {
   display: grid;
@@ -1228,21 +876,6 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
   font-weight: 700;
 }
 
-.rfd4p-split-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-}
-
-#rfd4p-studio-card .rfd4p-split-row input[type="number"] {
-  width: 56px;
-  height: 22px;
-  padding: 0 4px;
-  font-size: 11px;
-}
-
 .rfd4p-partial-setting {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) 52px;
@@ -1252,79 +885,101 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
   font-size: 12px;
 }
 
-/* Compact rows: chain letter, then either its one item or its length and bar, on one line. */
-#rfd4p-studio-card .rfd4p-chain-head .rfd4p-piece-line { flex: 1; min-width: 0; }
-#rfd4p-studio-card .rfd4p-chain-head .rfd4p-chain-bar { flex: 1; margin: 0; }
-#rfd4p-studio-card .rfd4p-chain-summary { flex: none; }
-#rfd4p-studio-card .rfd4p-piece-line { flex-wrap: wrap; row-gap: 3px; }
-#rfd4p-studio-card .rfd4p-piece-label { flex: none; max-width: 60%; }
-.rfd4p-piece-kind { font-size: 10.5px; color: var(--text-muted, #b1b3b9); }
-.rfd4p-piece-kind.rfd4p-piece-designed { color: var(--accent, #82aaff); }
-/* Tags share the line when they fit, and drop to their own line (still before Edit) when they do not. */
-#rfd4p-studio-card .rfd4p-piece-line .rfd4p-chips { flex: 1 1 150px; min-width: 0; }
-#rfd4p-studio-card .rfd4p-chip-hotspots { flex: 1 1 auto; }
-#rfd4p-studio-card .rfd4p-chip-hotspots .rfd4p-hotspot-input { flex: 1; min-width: 80px; max-width: none; }
-#rfd4p-studio-card .rfd4p-piece-line .rfd4p-seg-inputs { margin-left: auto; }
-#rfd4p-studio-card .rfd4p-piece-line .rfd4p-piece-menu { margin-left: auto; }
-#rfd4p-studio-card .rfd4p-piece-line .rfd4p-chips + .rfd4p-piece-menu { margin-left: 0; }
-#rfd4p-studio-card .rfd4p-piece-line .rfd4p-seg-inputs + .rfd4p-piece-menu { margin-left: 0; }
-
-/* What a piece keeps: two toggles, lit when kept. */
-.rfd4p-toggles {
-  display: inline-flex;
-  flex: none;
-  margin-left: auto;
-  border: 1px solid var(--border-strong, #50535a);
+/* Chains (web/design-panel.js `_chainRow`): the chain letter on the left, its pieces as sub-cards in order, a "+"
+   between them to insert new residues. Each sub-card opens its popup; its × removes it. */
+#rfd4p-studio-card .rfd4p-chain {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 6px;
+  padding: 5px 6px;
+  border: 1px solid var(--border, #383a3f);
+  border-left: 3px solid var(--chain-color, var(--border, #383a3f));
   border-radius: 4px;
-  overflow: hidden;
+  background: var(--surface-recessed, #191a1c);
 }
+.rfd4p-chain-gutter { display: flex; flex-direction: column; align-items: center; gap: 3px; padding-top: 4px; }
+.rfd4p-chain-gutter .rfd4p-chain-id { text-align: center; min-width: 18px; }
+.rfd4p-chain-len { font-size: 10px; color: var(--text-muted, #b1b3b9); white-space: nowrap; }
+.rfd4p-chain-items { display: grid; gap: 0; min-width: 0; }
 
-#rfd4p-studio-card .rfd4p-toggle {
-  min-height: 0;
-  height: 24px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--text-muted, #b1b3b9);
-  font-size: 11px;
-}
-
-#rfd4p-studio-card .rfd4p-toggle + .rfd4p-toggle { border-left: 1px solid var(--border-strong, #50535a); }
-#rfd4p-studio-card .rfd4p-toggle[aria-pressed="true"] { background: var(--chain-color, #b1b3b9); color: #101114; font-weight: 600; }
-#rfd4p-studio-card .rfd4p-toggle:not([aria-pressed="true"]):hover { color: var(--text, #f1f1f2); }
-
-#rfd4p-studio-card .rfd4p-piece-line { flex-wrap: nowrap; }
-#rfd4p-studio-card .rfd4p-piece-line .rfd4p-piece-menu,
-#rfd4p-studio-card .rfd4p-piece-line .rfd4p-chips + .rfd4p-piece-menu,
-#rfd4p-studio-card .rfd4p-piece-line .rfd4p-seg-inputs + .rfd4p-piece-menu { margin-left: 0; }
-#rfd4p-studio-card .rfd4p-piece-menu { width: 34px; min-width: 34px; padding: 2px; text-align: center; }
-#rfd4p-studio-card .rfd4p-piece > .rfd4p-chips { flex: none; }
-#rfd4p-studio-card .rfd4p-piece-label { max-width: none; flex: 1; }
-
-/* Rows open their popup: name, what is kept, ⋯. */
-#rfd4p-studio-card .rfd4p-row-button {
+.rfd4p-sub {
   display: flex;
   align-items: center;
+  min-width: 0;
+  border: 1px solid var(--border, #383a3f);
+  border-radius: 4px;
+  background: var(--surface, #222326);
+}
+.rfd4p-sub + .rfd4p-sub { margin-top: 3px; }
+#rfd4p-studio-card .rfd4p-sub-open {
+  display: flex;
+  flex: 1;
+  align-items: center;
   gap: 8px;
-  width: 100%;
+  min-width: 0;
   min-height: 26px;
   height: auto;
-  padding: 2px 4px;
+  padding: 2px 6px;
   border: 0;
-  border-radius: 3px;
+  border-radius: 3px 0 0 3px;
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
-#rfd4p-studio-card .rfd4p-row-button:hover:not(:disabled) { background: var(--surface-hover, rgba(255, 255, 255, 0.06)); }
-#rfd4p-studio-card .rfd4p-row-button:disabled { cursor: default; }
-#rfd4p-studio-card .rfd4p-row-button .rfd4p-piece-label { flex: none; max-width: 55%; }
-.rfd4p-piece-status { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; color: var(--text-muted, #b1b3b9); text-align: right; }
-.rfd4p-piece-designed .rfd4p-piece-label, .rfd4p-piece-designed .rfd4p-piece-status { color: var(--accent, #82aaff); }
-.rfd4p-row-more { flex: none; color: var(--text-muted, #b1b3b9); font-size: 14px; line-height: 1; }
+#rfd4p-studio-card .rfd4p-sub-open:hover:not(:disabled) { background: var(--surface-hover, rgba(255, 255, 255, 0.06)); }
+#rfd4p-studio-card .rfd4p-sub-open:disabled { cursor: default; }
+.rfd4p-sub-name { flex: none; max-width: 60%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11.5px; }
+.rfd4p-sub-status { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; color: var(--text-muted, #b1b3b9); text-align: right; }
+.rfd4p-sub-designed { border-style: dashed; }
+.rfd4p-sub-designed .rfd4p-sub-name, .rfd4p-sub-designed .rfd4p-sub-status { color: var(--accent, #82aaff); }
+
+#rfd4p-studio-card .rfd4p-x {
+  flex: none;
+  align-self: stretch;
+  min-height: 0;
+  height: auto;
+  padding: 0 7px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, #b1b3b9);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+#rfd4p-studio-card .rfd4p-x:hover { color: var(--text, #f1f1f2); }
+#rfd4p-studio-card .rfd4p-chain-gutter .rfd4p-x { align-self: center; padding: 2px 4px; }
+
+/* Insert slots: a faint "+" on a hairline, plain when pointed at. */
+#rfd4p-studio-card .rfd4p-slot {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 12px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, #b1b3b9);
+  font-size: 11px;
+  line-height: 12px;
+  opacity: 0.6;
+  cursor: pointer;
+}
+#rfd4p-studio-card .rfd4p-slot::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  right: 8px;
+  border-top: 1px dashed currentColor;
+  opacity: 0.5;
+}
+#rfd4p-studio-card .rfd4p-slot span { position: relative; padding: 0 5px; background: var(--surface-recessed, #191a1c); }
+#rfd4p-studio-card .rfd4p-slot:hover,
+#rfd4p-studio-card .rfd4p-slot:focus-visible { opacity: 1; color: var(--accent, #82aaff); }
+.rfd4p-piece-pop [hidden] { display: none !important; }
 
 .rfd4p-piece-pop {
   position: fixed;
@@ -1355,7 +1010,6 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
 .rfd4p-pop-note:empty { display: none; }
 .rfd4p-pop-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 4px; border-top: 1px solid var(--border, #383a3f); }
 .rfd4p-pop-spacer { flex: 1; }
-.rfd4p-piece-pop .rfd4p-link { padding: 0; border: 0; background: none; color: var(--accent, #82aaff); font-size: 11.5px; cursor: pointer; }
 
 /* Studio styles every label, input and checkbox in the page; the popup's own sizes win. */
 .rfd4p-piece-pop label.rfd4p-pop-row { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; margin: 0; font-size: 12px; }
@@ -1364,5 +1018,4 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
 .rfd4p-piece-pop input[type="number"] { flex: none; width: 58px !important; min-width: 0; height: 24px; }
 .rfd4p-piece-pop .rfd4p-pop-row { flex-wrap: nowrap; }
 
-#rfd4p-studio-card .rfd4p-row-button .rfd4p-piece-label { max-width: 60%; }
 .rfd4p-piece-pop select { flex: 1; height: 24px; min-height: 0; padding: 0 4px; font-size: 12px; }

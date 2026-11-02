@@ -193,6 +193,7 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
         pose: r.crdAtoms === 0 ? 'predicted' : r.crdAtoms < r.atoms ? 'partly fixed' : 'fixed',
         atoms: r.atoms,
         fixedAtoms: r.crdAtoms,
+        atomIndices: r.atomIndices,
       })),
       lengthMin,
       lengthMax,

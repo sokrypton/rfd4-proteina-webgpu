@@ -412,54 +412,46 @@ export class DesignPanel {
   }
 
   /**
-   * A chain as its pieces, in order (the contig, spelled out). Each piece is one line: what it is (kept, redesigned,
-   * new), its residues, its modifiers as chips (× removes one), and one Edit menu for everything else. A bar above
-   * draws the pieces to scale.
+   * A chain as its pieces, in order (the contig, spelled out): the chain letter on the left, then one sub-card per
+   * piece and ligand. A sub-card opens its popup and has its own ×; a "+" between sub-cards inserts new residues there.
    */
   _chainRow(c, readonly) {
-    const unit = c.kind === 'dna' || c.kind === 'rna' ? 'nt' : 'aa';
-    const length = c.lengthMin === c.lengthMax ? String(c.lengthMin) : `${c.lengthMin}–${c.lengthMax}`;
-    const remove = readonly ? null : el('button', {
-      type: 'button', class: 'rfd4p-chain-remove', title: `Remove chain ${c.id}`, 'aria-label': `Remove chain ${c.id}`,
-      text: '×', onclick: () => void this._mutate('/delete', { atom_indices: c.atomIndices }),
+    const remove = (title, atoms) => (readonly ? null : el('button', {
+      type: 'button', class: 'rfd4p-x', title, 'aria-label': title, text: '×',
+      onclick: () => void this._mutate('/delete', { atom_indices: atoms }),
+    }));
+    const pieces = c.pieces;
+    const many = pieces.length + c.ligands.length > 1;
+    const items = [];
+    // New residues next to new residues would be one piece: a slot only where a new piece is not already.
+    const slot = (atom, before) => (readonly ? null : el('button', {
+      type: 'button', class: 'rfd4p-slot', title: 'New residues here', 'aria-label': 'New residues here',
+      onclick: () => void this._mutate('/segments', {
+        minimum: 5, maximum: 10, atom_index: atom, before, new_chain: false, chain_id: null, chain_type: 'polypeptide(L)',
+      }),
+    }, el('span', { text: '+' })));
+    pieces.forEach((p, k) => {
+      const prev = pieces[k - 1];
+      if (p.kind !== 'new' && (!prev || prev.kind !== 'new')) {
+        items.push(prev ? slot(prev.atomIndices[prev.atomIndices.length - 1], false) : slot(p.atomIndices[0], true));
+      }
+      items.push(this._pieceCard(c, p, readonly, remove(many ? 'Remove these residues' : `Remove chain ${c.id}`,
+        p.atomIndices)));
+      if (k === pieces.length - 1 && p.kind !== 'new') items.push(slot(p.atomIndices[p.atomIndices.length - 1], false));
     });
-    const id = el('span', { class: 'rfd4p-chain-id', text: c.id });
-    const items = [...c.pieces.map((p) => this._pieceRow(c, p, readonly)), ...c.ligands.map((l) => this._ligandRow(c, l, readonly))];
-    let head;
-    const body = el('div', { class: 'rfd4p-chain-body' });
-    if (items.length === 1) {
-      // One item: the chain is that line (its range, length or ligand says what the header would).
-      const line = items[0].querySelector('.rfd4p-piece-line');
-      head = el('div', { class: 'rfd4p-chain-head' }, id, line, remove);
-      body.append(...[...items[0].children]);
-    } else {
-      head = el('div', { class: 'rfd4p-chain-head' }, id,
-        el('span', { class: 'rfd4p-chain-summary muted', text: `${length} ${unit}` }), this._chainBar(c), remove);
-      body.append(...items);
+    for (const l of c.ligands) {
+      items.push(this._ligandCard(c, l, readonly, remove(many ? `Remove ${l.name}` : `Remove chain ${c.id}`, l.atomIndices)));
     }
-    const row = el('div', { class: `rfd4p-chain rfd4p-role-${c.role}` }, head, body);
+    const length = c.lengthMin === c.lengthMax ? String(c.lengthMin) : `${c.lengthMin}–${c.lengthMax}`;
+    const gutter = el('div', { class: 'rfd4p-chain-gutter' },
+      el('span', { class: 'rfd4p-chain-id', text: c.id }),
+      many && pieces.length ? el('span', { class: 'rfd4p-chain-len', title: 'Residues in this chain', text: length }) : null,
+      many ? remove(`Remove chain ${c.id}`, c.atomIndices) : null);
+    const row = el('div', { class: `rfd4p-chain rfd4p-role-${c.role}` }, gutter, el('div', { class: 'rfd4p-chain-items' }, ...items.filter(Boolean)));
     // The chain's colour, as in the viewer and the sequence bar.
     const color = window.atomworksStudio?.chainColor?.(c.id);
     if (color) row.style.setProperty('--chain-color', color);
     return row;
-  }
-
-  /** The chain to scale: kept pieces solid, designed ones striped, new residues outlined at their mean length. */
-  _chainBar(c) {
-    const bar = el('div', { class: 'rfd4p-chain-bar', 'aria-hidden': 'true' });
-    for (const p of c.pieces) {
-      const len = p.kind === 'new' ? (p.min + p.max) / 2 : p.count;
-      const block = el('span', { class: `rfd4p-bar-${p.kind}${p.keep && p.keep !== 'all' ? ' rfd4p-bar-partial' : ''}`, title: this._pieceText(c, p) });
-      block.style.flexGrow = String(Math.max(1, len));
-      const span = p.kind === 'new' ? 0 : p.end - p.start + 1;
-      for (const id of p.hotspots) {
-        const tick = el('i', { class: 'rfd4p-bar-hotspot' });
-        tick.style.left = `${((id - p.start + 0.5) / span) * 100}%`;
-        block.append(tick);
-      }
-      bar.append(block);
-    }
-    return bar;
   }
 
   _range(c, p) {
@@ -473,10 +465,6 @@ export class DesignPanel {
     // A count only where numbering skips (it would repeat the range otherwise).
     const n = p.count !== p.end - p.start + 1 ? ` (${p.count})` : '';
     return p.source ?? `${this._range(c, p)}${n}`;
-  }
-
-  _pieceKey(c, p) {
-    return `${c.id}:${p.kind === 'new' ? `n${p.atomIndex}` : p.start}`;
   }
 
   /** What a piece row says after its residues: what is kept, in a few words. */
@@ -493,28 +481,26 @@ export class DesignPanel {
       p.hotspots.length ? `${p.hotspots.length} hotspot${p.hotspots.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
   }
 
-  /** A row that opens its popup: name, status, ⋯. */
-  _row(name, status, kindClass, readonly, onOpen) {
-    const line = el('button', {
-      type: 'button', class: `rfd4p-piece-line rfd4p-row-button ${kindClass}`, disabled: readonly,
-      'aria-haspopup': 'dialog', title: readonly ? null : 'Change',
-      onclick: (ev) => onOpen(ev.currentTarget),
-    },
-    el('span', { class: 'rfd4p-piece-label', text: name }),
-    el('span', { class: 'rfd4p-piece-status', text: status }),
-    );
-    return el('div', { class: 'rfd4p-piece' }, line);
+  /** A sub-card: name and status (opens its popup), then its ×. */
+  _card(name, status, kindClass, readonly, onOpen, remove) {
+    return el('div', { class: `rfd4p-sub ${kindClass}` },
+      el('button', {
+        type: 'button', class: 'rfd4p-sub-open', disabled: readonly, 'aria-haspopup': 'dialog',
+        onclick: (ev) => onOpen(ev.currentTarget),
+      },
+      el('span', { class: 'rfd4p-sub-name', text: name }),
+      el('span', { class: 'rfd4p-sub-status', text: status })),
+      remove);
   }
 
-  _pieceRow(c, p, readonly) {
-    const kindClass = p.kind === 'kept' ? 'rfd4p-piece-kept' : 'rfd4p-piece-designed';
-    return this._row(this._pieceText(c, p), this._status(p), kindClass, readonly,
-      (anchor) => this._openPop(anchor, () => (p.kind === 'new' ? this._newPop(c, p) : this._piecePop(c, p))));
+  _pieceCard(c, p, readonly, remove) {
+    return this._card(this._pieceText(c, p), this._status(p), `rfd4p-sub-${p.kind === 'kept' ? 'kept' : 'designed'}`, readonly,
+      (anchor) => this._openPop(anchor, () => (p.kind === 'new' ? this._newPop(c, p) : this._piecePop(c, p))), remove);
   }
 
-  _ligandRow(c, l, readonly) {
+  _ligandCard(c, l, readonly, remove) {
     const status = l.pose === 'fixed' ? 'fixed' : l.pose === 'predicted' ? 'free' : `${l.fixedAtoms} of ${l.atoms} atoms fixed`;
-    return this._row(l.name, status, 'rfd4p-piece-ligand', readonly, (anchor) => this._openPop(anchor, () => this._ligandPop(c, l)));
+    return this._card(l.name, status, 'rfd4p-sub-ligand', readonly, (anchor) => this._openPop(anchor, () => this._ligandPop(c, l)), remove);
   }
 
   /** Where a chain's coordinates come from, as the page knows it. */
@@ -543,7 +529,7 @@ export class DesignPanel {
       this.piecePop = el('div', { class: 'rfd4p-piece-pop', role: 'dialog', hidden: true });
       document.body.append(this.piecePop);
       document.addEventListener('pointerdown', (ev) => {
-        if (!this.piecePop.hidden && !this.piecePop.contains(ev.target) && !ev.target.closest?.('.rfd4p-row-button')) this._closePop();
+        if (!this.piecePop.hidden && !this.piecePop.contains(ev.target) && !ev.target.closest?.('.rfd4p-sub-open')) this._closePop();
       }, true);
       document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') this._closePop(); });
     }
@@ -570,9 +556,8 @@ export class DesignPanel {
       el('div', {}, el('strong', { text: title }), source ? el('div', { class: 'muted', text: `from ${source}` }) : null));
   }
 
-  _popActions(apply, extra = []) {
+  _popActions(apply) {
     return el('div', { class: 'rfd4p-pop-actions' },
-      ...extra,
       el('span', { class: 'rfd4p-pop-spacer' }),
       el('button', { type: 'button', class: 'secondary compact', text: 'Cancel', onclick: () => this._closePop() }),
       el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: apply }));
@@ -596,17 +581,38 @@ export class DesignPanel {
       'Fixed: these amino acids. Designed: the model writes them.');
     const position = select('Position in chain', [['fixed', 'fixed'], ['anywhere', 'anywhere']], now.position,
       'Anywhere: the model chooses where in the chain these residues go.');
-    // Side chains only means those side chains, so their amino acids; a fully designed piece has no position to keep.
+    const span = () => {
+      const lo = Math.max(p.start, Math.min(p.end, Math.round(Number(from.value)) || p.start));
+      const hi = Math.max(lo, Math.min(p.end, Math.round(Number(to.value)) || p.end));
+      const atoms = a ? p.atomIndices.filter((i) => Number(a.res_id[i]) >= lo && Number(a.res_id[i]) <= hi) : p.atomIndices;
+      return { lo, hi, atoms, count: a ? new Set(atoms.map((i) => `${a.res_id[i]}${a.ins_code[i]}`)).size : p.count };
+    };
+    // Designed residues may change length: a length other than their count makes them new residues.
+    const count = span().count;
+    const lenMin = el('input', { type: 'number', min: 1, max: 1000, value: count, 'aria-label': 'Fewest residues' });
+    const lenMax = el('input', { type: 'number', min: 1, max: 1000, value: count, 'aria-label': 'Most residues' });
+    let lenTouched = false;
+    for (const input of [lenMin, lenMax]) input.addEventListener('input', () => { lenTouched = true; });
+    for (const input of [from, to]) {
+      input.addEventListener('input', () => {
+        if (lenTouched) return;
+        lenMin.value = lenMax.value = String(span().count);
+      });
+    }
+    const lengthRow = el('div', { class: 'rfd4p-pop-row', title: 'Each design picks one length from this range' },
+      el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, lenMin, el('span', { text: '–' }), lenMax));
+    // Side chains only means those side chains, so their amino acids; a fully designed piece has no position to keep,
+    // only a length.
     const sync = () => {
       if (structure.value === 'sidechain') sequence.value = 'fixed';
       sequence.disabled = structure.value === 'sidechain';
       const free = structure.value === 'designed' && sequence.value === 'designed';
       if (free) position.value = 'fixed';
-      position.disabled = free;
+      positionRow.hidden = free;
+      lengthRow.hidden = !free;
     };
     structure.addEventListener('change', sync);
     sequence.addEventListener('change', sync);
-    sync();
 
     const hot = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
       value: formatResidueList(c.id, p.hotspots), placeholder: 'none', 'aria-label': 'Hotspots',
@@ -649,50 +655,37 @@ export class DesignPanel {
         if (hotspots.atoms.length) edits.push({ condition: 'hotspot', atom_indices: hotspots.atoms, enabled: true });
         if (!await this._batch(edits)) return;
       }
-      const lo = Math.max(p.start, Math.min(p.end, Math.round(Number(from.value)) || p.start));
-      const hi = Math.max(lo, Math.min(p.end, Math.round(Number(to.value)) || p.end));
-      const atoms = a ? p.atomIndices.filter((i) => Number(a.res_id[i]) >= lo && Number(a.res_id[i]) <= hi) : p.atomIndices;
+      const { lo, hi, atoms, count: n } = span();
       const want = { structure: structure.value, sequence: sequence.value, position: position.value };
+      if (!lengthRow.hidden && lenTouched) {
+        const min = Math.max(1, Math.round(Number(lenMin.value)) || n);
+        const max = Math.max(min, Math.round(Number(lenMax.value)) || n);
+        if (min !== n || max !== n) {
+          await this._mutate('/segments/replace', { atom_indices: atoms, minimum: min, maximum: max });
+          return;
+        }
+      }
       const whole = lo === p.start && hi === p.end;
       if (!whole || want.structure !== now.structure || want.sequence !== now.sequence || want.position !== now.position) {
         await this._applyPiece(p, atoms, want);
       }
     };
 
-    const span = () => {
-      const lo = Math.max(p.start, Math.min(p.end, Math.round(Number(from.value)) || p.start));
-      const hi = Math.max(lo, Math.min(p.end, Math.round(Number(to.value)) || p.end));
-      return a ? p.atomIndices.filter((i) => Number(a.res_id[i]) >= lo && Number(a.res_id[i]) <= hi) : p.atomIndices;
-    };
-    const link = (text, title, fn) => el('button', {
-      type: 'button', class: 'rfd4p-link', text, title,
-      onclick: () => { const atoms = span(); this._closePop(); void fn(atoms); },
-    });
-    const segment = (atoms, before) => this._mutate('/segments', {
-      minimum: 5, maximum: 10, atom_index: before ? atoms[0] : atoms[atoms.length - 1], before, new_chain: false,
-      chain_id: null, chain_type: 'polypeptide(L)',
-    });
-    const extra = [
-      link('Add before', 'New residues before these', (atoms) => segment(atoms, true)),
-      link('Add after', 'New residues after these', (atoms) => segment(atoms, false)),
-      link('Replace', 'Replace these residues with new ones (length ±25%, editable after)', (atoms) => {
-        const n = new Set(atoms.map((i) => Number(a.res_id[i]))).size;
-        return this._mutate('/segments/replace', { atom_indices: atoms, minimum: Math.max(1, Math.round(n * 0.75)), maximum: Math.max(1, Math.round(n * 1.25)) });
-      }),
-    ];
-
     const row = (label, ...children) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...children);
+    const positionRow = row('Position', position);
+    sync();
     return [
       this._popHead(`Chain ${c.id}`, this._sourceOf(c)),
       row('Residues', el('span', { class: 'rfd4p-pop-inline', title: 'Narrow the range to change only some of these residues' },
         el('span', { text: c.id }), from, el('span', { text: '–' }), to)),
       row('Structure', structure),
       row('Sequence', sequence),
-      row('Position', position),
+      positionRow,
+      lengthRow,
       row('Hotspots', hot),
       row('Keep only', keepOnly),
       note,
-      this._popActions(() => void apply(), extra),
+      this._popActions(() => void apply()),
     ];
   }
 
@@ -743,7 +736,7 @@ export class DesignPanel {
 
   /** A ligand: where it goes, or another molecule in its place. */
   _ligandPop(c, l) {
-    const atoms = c.ligandAtomIndices;
+    const atoms = l.atomIndices;
     const pose = el('select', { 'aria-label': 'Pose', title: 'Fixed: kept where it is. Free: the model places it.' },
       el('option', { value: 'fixed', text: 'fixed', selected: l.pose !== 'predicted' }),
       el('option', { value: 'free', text: 'free', selected: l.pose === 'predicted' }));
