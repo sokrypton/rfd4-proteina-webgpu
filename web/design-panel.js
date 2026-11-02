@@ -479,11 +479,6 @@ export class DesignPanel {
     return `${c.id}:${p.kind === 'new' ? `n${p.atomIndex}` : p.start}`;
   }
 
-  /** Pieces and ligands in a chain: with one, the chain's × is that item's delete. */
-  _chainItems(c) {
-    return c.pieces.length + c.ligands.length;
-  }
-
   /** What a piece row says after its residues: what is kept, in a few words. */
   _status(p) {
     if (p.kind === 'new') return 'new';
@@ -542,7 +537,7 @@ export class DesignPanel {
     for (const id of chains) this.sources.get(doc).set(id, label);
   }
 
-  /** The one popup, next to the row that opened it. `build` makes its content; closed by ×, Cancel, Escape or outside. */
+  /** The one popup, next to the row that opened it. `build` makes its content; closed by Cancel, Escape or a click outside (× on a row means delete). */
   _openPop(anchor, build) {
     if (!this.piecePop) {
       this.piecePop = el('div', { class: 'rfd4p-piece-pop', role: 'dialog', hidden: true });
@@ -572,8 +567,7 @@ export class DesignPanel {
 
   _popHead(title, source) {
     return el('div', { class: 'rfd4p-pop-title' },
-      el('div', {}, el('strong', { text: title }), source ? el('div', { class: 'muted', text: `from ${source}` }) : null),
-      el('button', { type: 'button', class: 'rfd4p-pop-close', 'aria-label': 'Close', text: '×', onclick: () => this._closePop() }));
+      el('div', {}, el('strong', { text: title }), source ? el('div', { class: 'muted', text: `from ${source}` }) : null));
   }
 
   _popActions(apply, extra = []) {
@@ -670,8 +664,8 @@ export class DesignPanel {
       const hi = Math.max(lo, Math.min(p.end, Math.round(Number(to.value)) || p.end));
       return a ? p.atomIndices.filter((i) => Number(a.res_id[i]) >= lo && Number(a.res_id[i]) <= hi) : p.atomIndices;
     };
-    const link = (text, title, fn, danger = false) => el('button', {
-      type: 'button', class: `rfd4p-link${danger ? ' rfd4p-link-danger' : ''}`, text, title,
+    const link = (text, title, fn) => el('button', {
+      type: 'button', class: 'rfd4p-link', text, title,
       onclick: () => { const atoms = span(); this._closePop(); void fn(atoms); },
     });
     const segment = (atoms, before) => this._mutate('/segments', {
@@ -685,8 +679,7 @@ export class DesignPanel {
         const n = new Set(atoms.map((i) => Number(a.res_id[i]))).size;
         return this._mutate('/segments/replace', { atom_indices: atoms, minimum: Math.max(1, Math.round(n * 0.75)), maximum: Math.max(1, Math.round(n * 1.25)) });
       }),
-      this._chainItems(c) > 1 || p.count > 1 ? link('Delete', 'Delete these residues', (atoms) => this._mutate('/delete', { atom_indices: atoms }), true) : null,
-    ].filter(Boolean);
+    ];
 
     const row = (label, ...children) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...children);
     return [
@@ -740,22 +733,20 @@ export class DesignPanel {
       this._closePop();
       if (lo !== p.min || hi !== p.max) void this._mutate('/segments/range', { atom_index: p.atomIndex, minimum: lo, maximum: hi });
     };
-    const extra = this._chainItems(c) > 1 ? [el('button', { type: 'button', class: 'rfd4p-link rfd4p-link-danger', text: 'Delete',
-      onclick: () => { this._closePop(); void this._mutate('/delete', { atom_indices: p.atomIndices }); } })] : [];
     return [
       this._popHead(`Chain ${c.id}, new residues`, null),
       el('div', { class: 'rfd4p-pop-row', title: 'Each design picks one length from this range' },
         el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, min, el('span', { text: '–' }), max)),
-      this._popActions(apply, extra),
+      this._popActions(apply),
     ];
   }
 
   /** A ligand: where it goes, or another molecule in its place. */
   _ligandPop(c, l) {
     const atoms = c.ligandAtomIndices;
-    const group = `rfd4p-pose-${Date.now()}`;
-    const keepPose = el('input', { type: 'radio', name: group, checked: l.pose !== 'predicted' });
-    const free = el('input', { type: 'radio', name: group, checked: l.pose === 'predicted' });
+    const pose = el('select', { 'aria-label': 'Pose', title: 'Fixed: kept where it is. Free: the model places it.' },
+      el('option', { value: 'fixed', text: 'fixed', selected: l.pose !== 'predicted' }),
+      el('option', { value: 'free', text: 'free', selected: l.pose === 'predicted' }));
     const code = el('input', { type: 'text', class: 'rfd4p-pop-text', maxlength: 5, spellcheck: 'false', autocomplete: 'off',
       placeholder: `another code, e.g. HEM`, 'aria-label': 'Swap for ligand code' });
     const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
@@ -772,22 +763,18 @@ export class DesignPanel {
         return;
       }
       this._closePop();
-      const fix = keepPose.checked;
-      if (fix !== (l.pose === 'fixed') && !(fix && l.pose === 'partly fixed' && false)) {
+      const fix = pose.value === 'fixed';
+      if (fix !== (l.pose === 'fixed')) {
         void this._batch([{ condition: 'coordinate', atom_indices: atoms, enabled: fix }]);
       }
     };
-    const extra = this._chainItems(c) > 1 ? [el('button', { type: 'button', class: 'rfd4p-link rfd4p-link-danger', text: 'Delete',
-      onclick: () => { this._closePop(); void this._mutate('/delete', { atom_indices: atoms }); } })] : [];
     return [
       this._popHead(`Ligand ${l.name}`, this._sourceOf(c)),
-      el('div', { class: 'rfd4p-pop-section' }, el('span', { class: 'rfd4p-pop-label', text: 'Pose' }),
-        el('label', { class: 'rfd4p-pop-choice', title: 'Kept where it is' }, keepPose, el('span', { text: 'fixed' })),
-        el('label', { class: 'rfd4p-pop-choice', title: 'The model places it' }, free, el('span', { text: 'free' }))),
+      el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Pose' }), pose),
       l.pose === 'partly fixed' ? el('p', { class: 'muted', title: 'Set atom by atom in the Advanced editor', text: `${l.fixedAtoms} of ${l.atoms} atoms fixed now` }) : null,
       el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Swap' }), code),
       note,
-      this._popActions(() => void apply(), extra),
+      this._popActions(() => void apply()),
     ].filter(Boolean);
   }
 

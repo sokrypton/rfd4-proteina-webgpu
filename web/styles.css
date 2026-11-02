@@ -1346,12 +1346,8 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
 .rfd4p-piece-pop[hidden] { display: none; }
 .rfd4p-pop-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .rfd4p-pop-title .muted { font-size: 11px; }
-.rfd4p-pop-close { padding: 0 4px; border: 0; background: none; color: var(--text-muted, #b1b3b9); font-size: 16px; cursor: pointer; }
-.rfd4p-pop-section { display: grid; gap: 3px; }
 .rfd4p-pop-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .rfd4p-pop-label { flex: none; width: 64px; color: var(--text-muted, #b1b3b9); font-size: 11px; }
-.rfd4p-pop-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; }
-.rfd4p-pop-choice .muted { font-size: 11px; }
 .rfd4p-pop-inline { display: inline-flex; align-items: center; gap: 4px; }
 .rfd4p-piece-pop input[type="number"] { width: 58px; height: 24px; padding: 0 4px; font-size: 11.5px; }
 .rfd4p-pop-text { flex: 1; min-width: 120px; height: 24px; padding: 0 6px; font: 11.5px var(--font-mono, monospace); }
@@ -1360,16 +1356,12 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
 .rfd4p-pop-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 4px; border-top: 1px solid var(--border, #383a3f); }
 .rfd4p-pop-spacer { flex: 1; }
 .rfd4p-piece-pop .rfd4p-link { padding: 0; border: 0; background: none; color: var(--accent, #82aaff); font-size: 11.5px; cursor: pointer; }
-.rfd4p-piece-pop .rfd4p-link-danger { color: var(--danger, #ff6b6b); }
 
 /* Studio styles every label, input and checkbox in the page; the popup's own sizes win. */
-.rfd4p-piece-pop label.rfd4p-pop-choice,
 .rfd4p-piece-pop label.rfd4p-pop-row { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; margin: 0; font-size: 12px; }
 .rfd4p-piece-pop input[type="radio"],
 .rfd4p-piece-pop input[type="checkbox"] { flex: none; width: 14px; height: 14px; min-height: 0; margin: 0; padding: 0; }
 .rfd4p-piece-pop input[type="number"] { flex: none; width: 58px !important; min-width: 0; height: 24px; }
-.rfd4p-piece-pop .rfd4p-pop-choice .rfd4p-pop-inline { margin-left: auto; }
-.rfd4p-piece-pop .rfd4p-pop-section { gap: 2px; }
 .rfd4p-piece-pop .rfd4p-pop-row { flex-wrap: nowrap; }
 
 #rfd4p-studio-card .rfd4p-row-button .rfd4p-piece-label { max-width: 60%; }
