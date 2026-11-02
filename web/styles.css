@@ -1251,3 +1251,53 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
   margin: 6px 0;
   font-size: 12px;
 }
+
+/* Compact rows: chain letter, then either its one item or its length and bar, on one line. */
+#rfd4p-studio-card .rfd4p-chain-head .rfd4p-piece-line { flex: 1; min-width: 0; }
+#rfd4p-studio-card .rfd4p-chain-head .rfd4p-chain-bar { flex: 1; margin: 0; }
+#rfd4p-studio-card .rfd4p-chain-summary { flex: none; }
+#rfd4p-studio-card .rfd4p-piece-line { flex-wrap: wrap; row-gap: 3px; }
+#rfd4p-studio-card .rfd4p-piece-label { flex: none; max-width: 60%; }
+.rfd4p-piece-kind { font-size: 10.5px; color: var(--text-muted, #b1b3b9); }
+.rfd4p-piece-kind.rfd4p-piece-designed { color: var(--accent, #82aaff); }
+/* Tags share the line when they fit, and drop to their own line (still before Edit) when they do not. */
+#rfd4p-studio-card .rfd4p-piece-line .rfd4p-chips { flex: 1 1 150px; min-width: 0; }
+#rfd4p-studio-card .rfd4p-chip-hotspots { flex: 1 1 auto; }
+#rfd4p-studio-card .rfd4p-chip-hotspots .rfd4p-hotspot-input { flex: 1; min-width: 80px; max-width: none; }
+#rfd4p-studio-card .rfd4p-piece-line .rfd4p-seg-inputs { margin-left: auto; }
+#rfd4p-studio-card .rfd4p-piece-line .rfd4p-piece-menu { margin-left: auto; }
+#rfd4p-studio-card .rfd4p-piece-line .rfd4p-chips + .rfd4p-piece-menu { margin-left: 0; }
+#rfd4p-studio-card .rfd4p-piece-line .rfd4p-seg-inputs + .rfd4p-piece-menu { margin-left: 0; }
+
+/* What a piece keeps: two toggles, lit when kept. */
+.rfd4p-toggles {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+  border: 1px solid var(--border-strong, #50535a);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+#rfd4p-studio-card .rfd4p-toggle {
+  min-height: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted, #b1b3b9);
+  font-size: 11px;
+}
+
+#rfd4p-studio-card .rfd4p-toggle + .rfd4p-toggle { border-left: 1px solid var(--border-strong, #50535a); }
+#rfd4p-studio-card .rfd4p-toggle[aria-pressed="true"] { background: var(--chain-color, #b1b3b9); color: #101114; font-weight: 600; }
+#rfd4p-studio-card .rfd4p-toggle:not([aria-pressed="true"]):hover { color: var(--text, #f1f1f2); }
+
+#rfd4p-studio-card .rfd4p-piece-line { flex-wrap: nowrap; }
+#rfd4p-studio-card .rfd4p-piece-line .rfd4p-piece-menu,
+#rfd4p-studio-card .rfd4p-piece-line .rfd4p-chips + .rfd4p-piece-menu,
+#rfd4p-studio-card .rfd4p-piece-line .rfd4p-seg-inputs + .rfd4p-piece-menu { margin-left: 0; }
+#rfd4p-studio-card .rfd4p-piece-menu { width: 34px; min-width: 34px; padding: 2px; text-align: center; }
+#rfd4p-studio-card .rfd4p-piece > .rfd4p-chips { flex: none; }
+#rfd4p-studio-card .rfd4p-piece-label { max-width: none; flex: 1; }

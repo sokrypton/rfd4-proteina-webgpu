@@ -34,20 +34,15 @@
             <!-- Design: what will be generated, read from the open document. -->
             <div id="rfd4p-design" class="rfd4p-design" hidden>
                 <div class="rfd4p-task-head">
-                    <div>
-                        <span class="rfd4p-eyebrow">Task</span>
-                        <strong id="rfd4p-task-label"></strong>
-                    </div>
+                    <strong id="rfd4p-task-label"></strong>
                     <span class="rfd4p-task-buttons">
                         <button id="rfd4p-new" type="button" class="secondary compact" title="Start over with an example, a PDB ID or your own file">New…</button>
                         <button id="rfd4p-undo" type="button" class="secondary compact" title="Undo the last change" disabled>Undo</button>
                     </span>
                 </div>
                 <p id="rfd4p-task-detail" class="rfd4p-task-detail muted"></p>
-                <p id="rfd4p-edit-hint" class="rfd4p-edit-hint muted">The design, chain by chain and piece by piece. <strong>Kept</strong> pieces stay as they are, <strong>New</strong> and <strong>Redesigned</strong> ones are made by the model. Use a piece's <em>Edit</em> menu to change it; tags show anything special about it (× removes one).</p>
                 <div id="rfd4p-chain-list" class="rfd4p-chain-list"></div>
                 <div class="rfd4p-chain-actions" role="group" aria-label="Add to the design">
-                    <span class="rfd4p-add-label muted">Add</span>
                     <button id="rfd4p-add-seq" type="button" class="secondary compact" title="A new chain for the model to design (sequence and structure), 60–100 residues to start">+ seq</button>
                     <button id="rfd4p-add-pdb" type="button" class="secondary compact" title="Chains from a PDB entry or file, kept as they are (e.g. a target to bind)">+ pdb</button>
                     <button id="rfd4p-add-lig" type="button" class="secondary compact" title="A small molecule by its PDB code (HEM, ATP, ZN…)">+ lig</button>
