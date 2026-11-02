@@ -899,7 +899,6 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
 }
 .rfd4p-chain-gutter { display: flex; flex-direction: column; align-items: center; gap: 3px; padding-top: 4px; }
 .rfd4p-chain-gutter .rfd4p-chain-id { text-align: center; min-width: 18px; }
-.rfd4p-chain-len { font-size: 10px; color: var(--text-muted, #b1b3b9); white-space: nowrap; }
 .rfd4p-chain-items { display: grid; gap: 0; min-width: 0; }
 
 .rfd4p-sub {

@@ -442,10 +442,8 @@ export class DesignPanel {
     for (const l of c.ligands) {
       items.push(this._ligandCard(c, l, readonly, remove(many ? `Remove ${l.name}` : `Remove chain ${c.id}`, l.atomIndices)));
     }
-    const length = c.lengthMin === c.lengthMax ? String(c.lengthMin) : `${c.lengthMin}–${c.lengthMax}`;
     const gutter = el('div', { class: 'rfd4p-chain-gutter' },
       el('span', { class: 'rfd4p-chain-id', text: c.id }),
-      many && pieces.length ? el('span', { class: 'rfd4p-chain-len', title: 'Residues in this chain', text: length }) : null,
       many ? remove(`Remove chain ${c.id}`, c.atomIndices) : null);
     const row = el('div', { class: `rfd4p-chain rfd4p-role-${c.role}` }, gutter, el('div', { class: 'rfd4p-chain-items' }, ...items.filter(Boolean)));
     // The chain's colour, as in the viewer and the sequence bar.
