@@ -6,8 +6,8 @@
  * Every edit goes through Studio's own mutate path (`window.atomworksStudio?.applyEdit`), so Undo, the viewer and the
  * `atomworks-studio` "changed" event behave exactly as for edits made in the Studio panels.
  */
-import { designSpec, ROLE_LABELS } from './design-spec.js';
-import { getSharedStudioStore } from './studio-api.js';
+import { designSpec, formatResidueList, parseResidueList, PIECE_LABELS } from './design-spec.js';
+import { createStudioDocWithCcd, getSharedStudioStore } from './studio-api.js';
 
 const ADVANCED_KEY = 'rfd4p-advanced-editor';
 
@@ -80,6 +80,7 @@ export class DesignPanel {
       warnings: $('rfd4p-warnings'),
       runSettings: $('rfd4p-run-settings'),
       advanced: $('rfd4p-advanced'),
+      editHint: $('rfd4p-edit-hint'),
     };
     // Floating actions next to the pointer for the current selection (viewer or sequence bar).
     this.pop = el('div', { class: 'rfd4p-pop', role: 'dialog', 'aria-label': 'Selection actions', hidden: true });
@@ -87,9 +88,121 @@ export class DesignPanel {
     this.lastPointer = null;
     this.partialRow = el('div', { class: 'rfd4p-partial-row', hidden: true });
     this.els.taskDetail?.after(this.partialRow);
+    this._buildAddStructure();
     this._buildTaskGrid();
     this._bind();
     this._applyAdvanced(this._readAdvanced());
+    this.render();
+  }
+
+  /**
+   * "+ Chains from PDB…": a structure's chains added to the open job as kept chains (a target), optionally in place
+   * of the job's current kept chains, so an example's target can be swapped without setting the job up again.
+   */
+  _buildAddStructure() {
+    const actions = this.els.addChain?.parentElement;
+    if (!actions) return;
+    const toggle = el('button', {
+      type: 'button', class: 'secondary compact', text: '+ Chains from PDB…',
+      title: 'Add chains of another structure to this job, kept in place (a target to design against)',
+    });
+    const id = el('input', {
+      type: 'text', class: 'rfd4p-add-id', spellcheck: 'false', autocomplete: 'off', maxlength: 40,
+      placeholder: 'PDB ID and chains, e.g. 5O45 A', 'aria-label': 'PDB ID and chains',
+    });
+    const replace = el('input', { type: 'checkbox' });
+    const replaceLabel = el('label', { class: 'checkbox' }, replace, ' Replace the kept chains (the current target)');
+    const fetchBtn = el('button', { type: 'submit', class: 'primary compact', text: 'Add' });
+    const fileInput = el('input', { type: 'file', accept: '.cif,.mmcif,.pdb,.ent,.cif.zst', hidden: true });
+    const fileBtn = el('button', { type: 'button', class: 'secondary compact', text: 'File…', onclick: () => fileInput.click() });
+    const status = el('p', { class: 'rfd4p-add-status muted', 'aria-live': 'polite' });
+    const form = el('form', { class: 'rfd4p-add-structure', hidden: true },
+      el('div', { class: 'rfd4p-add-row' }, id, fetchBtn, fileBtn, fileInput), replaceLabel, status);
+    this.addStructure = { form, toggle, replace, replaceLabel, status, id };
+    toggle.addEventListener('click', () => {
+      form.hidden = !form.hidden;
+      if (!form.hidden) {
+        const spec = this._spec();
+        const hasTarget = Boolean(spec?.chains.some((c) => c.role === 'fixed'));
+        replaceLabel.hidden = !hasTarget;
+        replace.checked = hasTarget;
+        status.textContent = '';
+        id.focus();
+      }
+    });
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const m = /^\s*([0-9][A-Za-z0-9]{3})(?:[\s:_,]+(.*))?$/.exec(id.value);
+      if (!m) { status.textContent = 'Type a 4-character PDB ID, optionally followed by chains: 5O45 A'; return; }
+      const pdb = m[1].toUpperCase();
+      const chains = (m[2] ?? '').split(/[\s,;]+/).filter(Boolean);
+      void (async () => {
+        status.textContent = `Downloading ${pdb} from RCSB…`;
+        try {
+          const res = await fetch(`https://files.rcsb.org/download/${pdb}.cif`);
+          if (!res.ok) throw new Error(res.status === 404 ? `${pdb} was not found` : `RCSB returned ${res.status}`);
+          await this._addStructure(await res.text(), pdb, chains, replace.checked);
+        } catch (err) {
+          status.textContent = `Could not add ${pdb}: ${err?.message ?? err}`;
+        }
+      })();
+    });
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files?.[0];
+      fileInput.value = '';
+      if (!file) return;
+      const chains = id.value.trim().split(/[\s,;]+/).filter((t) => /^[A-Za-z0-9]{1,4}$/.test(t) && !/^[0-9][A-Za-z0-9]{3}$/.test(t));
+      void (async () => {
+        try {
+          const text = file.name.endsWith('.zst') ? new Uint8Array(await file.arrayBuffer()) : await file.text();
+          await this._addStructure(text, file.name.replace(/\.(cif|mmcif|pdb|ent|zst)+$/i, ''), chains, replace.checked);
+        } catch (err) {
+          status.textContent = `Could not add ${file.name}: ${err?.message ?? err}`;
+        }
+      })();
+    });
+    actions.append(toggle);
+    actions.after(form);
+  }
+
+  /** Add `chains` (all when empty) of a structure to the job as kept chains; with `replace`, drop the kept chains first. */
+  async _addStructure(text, name, chains, replace) {
+    const { status } = this.addStructure;
+    const doc = await createStudioDocWithCcd(text, name, { preset: 'rcsb', assembly: '1' });
+    const a = doc.atoms;
+    const present = [...new Set(a.chain_id.map(String))];
+    const wanted = new Set(chains.map((c) => c.toUpperCase()));
+    const missing = [...wanted].filter((c) => !present.some((p) => p.toUpperCase() === c));
+    if (missing.length) throw new Error(`no chain ${missing.join(', ')} (it has ${present.join(', ')})`);
+    if (wanted.size) {
+      const drop = [];
+      for (let i = 0; i < a.nAtoms; i += 1) if (!wanted.has(String(a.chain_id[i]).toUpperCase())) drop.push(i);
+      if (drop.length) doc.deleteAtoms(drop);
+    }
+    if (!doc.atoms.nAtoms) throw new Error('nothing left to add');
+    if (replace) {
+      const spec = this._spec();
+      const old = spec?.chains.filter((c) => c.role === 'fixed').flatMap((c) => c.atomIndices) ?? [];
+      if (old.length && !await this._mutate('/delete', { atom_indices: old })) throw new Error(this.lastError ?? 'could not remove the old target');
+    }
+    const store = getSharedStudioStore();
+    const before = this._inputDoc()?.atoms?.nAtoms ?? 0;
+    const tmp = `rfd4p_add_${Date.now().toString(36)}`;
+    store.sessions.set(tmp, doc);
+    try {
+      if (!await this._mutate('/combine', { session_ids: [tmp] })) throw new Error(this.lastError ?? 'could not add the chains');
+    } finally {
+      store.sessions.delete(tmp);
+    }
+    const after = this._inputDoc()?.atoms?.nAtoms ?? before;
+    const added = Array.from({ length: after - before }, (_, k) => before + k);
+    await this._batch([
+      { condition: 'coordinate', atom_indices: added, enabled: true },
+      { condition: 'sequence', atom_indices: added, enabled: true },
+    ]);
+    const newChains = [...new Set(added.map((i) => String(this._inputDoc().atoms.chain_id[i])))];
+    status.textContent = `Added ${name} as chain${newChains.length === 1 ? '' : 's'} ${newChains.join(', ')}, kept in place.`
+      + ' Type hotspots on it, or select residues and press Hotspot.';
     this.render();
   }
 
@@ -207,6 +320,11 @@ export class DesignPanel {
     els.changeTask.hidden = viewingDesign;
     if (els.newDoc) els.newDoc.hidden = viewingDesign;
     els.addChain.hidden = viewingDesign;
+    if (this.addStructure) {
+      this.addStructure.toggle.hidden = viewingDesign;
+      if (viewingDesign) this.addStructure.form.hidden = true;
+    }
+    if (els.editHint) els.editHint.hidden = viewingDesign;
     els.undo.hidden = viewingDesign;
     els.undo.disabled = document.getElementById('undo')?.disabled ?? true;
 
@@ -236,8 +354,18 @@ export class DesignPanel {
     }
   }
 
+  /**
+   * A chain as its pieces, in order (the contig, spelled out): a bar drawing them to scale, then a row per piece
+   * with what happens to it and a menu to change that, the chain's hotspots as text, and buttons for new residues.
+   */
   _chainRow(c, readonly) {
-    const head = el('div', { class: 'rfd4p-chain-head' }, el('span', { class: 'rfd4p-chain-id', text: c.id }),
+    const kindName = { protein: 'protein', dna: 'DNA', rna: 'RNA' }[c.kind] ?? '';
+    const length = c.lengthMin === c.lengthMax ? String(c.lengthMin) : `${c.lengthMin}–${c.lengthMax}`;
+    const summary = c.role === 'ligand' ? 'Ligand'
+      : `${length} residues${kindName && kindName !== 'protein' ? ` · ${kindName}` : ''}${c.residues ? '' : ' · new chain'}`;
+    const head = el('div', { class: 'rfd4p-chain-head' },
+      el('span', { class: 'rfd4p-chain-id', text: c.id }),
+      el('span', { class: 'rfd4p-chain-summary muted', text: summary }),
       readonly ? null : el('button', {
         type: 'button', class: 'rfd4p-chain-remove', title: `Remove chain ${c.id}`, 'aria-label': `Remove chain ${c.id}`,
         text: '×', onclick: () => void this._mutate('/delete', { atom_indices: c.atomIndices }),
@@ -248,84 +376,161 @@ export class DesignPanel {
     const color = window.atomworksStudio?.chainColor?.(c.id);
     if (color) row.style.setProperty('--chain-color', color);
 
-    if (c.role === 'ligand') {
-      for (const l of c.ligands) {
-        const label = `${l.name} · ${l.pose === 'fixed' ? 'fixed pose' : l.pose === 'predicted' ? 'pose predicted' : 'pose partly fixed'}`;
-        const toggle = el('button', {
-          type: 'button',
-          class: 'secondary compact',
-          disabled: readonly,
-          text: l.pose === 'predicted' ? 'Fix pose' : 'Free pose',
-          onclick: () => void this._batch([{
-            condition: 'coordinate', atom_indices: c.ligandAtomIndices, enabled: l.pose === 'predicted',
-          }]),
-        });
-        body.append(el('div', { class: 'rfd4p-chain-line' }, el('span', { text: label }), toggle));
-      }
-      return row;
-    }
+    if (c.pieces.length) body.append(this._chainBar(c));
+    c.pieces.forEach((p, k) => body.append(this._pieceRow(c, p, k, readonly)));
+    for (const l of c.ligands) body.append(this._ligandRow(c, l, readonly));
 
-    if (c.residues) {
-      const span = c.firstResId != null ? ` (${c.firstResId}–${c.lastResId})` : '';
-      const info = el('span', { class: 'rfd4p-chain-info', text: `${c.residues} residue${c.residues === 1 ? '' : 's'}${span}` });
-      const select = el('select', { class: 'rfd4p-role-select', 'aria-label': `Chain ${c.id} role`, disabled: readonly });
-      const options = [
-        ['fixed', 'Fixed (kept as is)'],
-        ['backbone', 'Keep backbone, new sequence'],
-        ['sequence', 'Keep sequence, predict structure'],
-        ['free', 'Redesign'],
-      ];
-      if (!options.some(([k]) => k === c.role)) options.unshift([c.role, `${ROLE_LABELS[c.role]} (custom)`]);
-      for (const [value, label] of options) {
-        select.append(el('option', { value, text: label, selected: value === c.role }));
-      }
-      select.addEventListener('change', () => void this._setRole(c, select.value));
-      info.title = info.textContent;
-      body.append(el('div', { class: 'rfd4p-chain-line' }, info), select);
-      const notes = [];
-      if (c.role === 'motif') {
-        const plural = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
-        const seqOnly = c.seqFixed - c.fixed;
-        if (c.fixed) notes.push(`${plural(c.fixed, 'residue')} fixed`);
-        if (seqOnly > 0) notes.push(`${plural(seqOnly, 'residue')} sequence only`);
-        if (c.designed) notes.push(`${plural(c.designed, 'residue')} redesigned`);
-        if (c.segments.length) notes.push(plural(c.segments.length, 'new segment'));
-      }
-      if (c.unindexed) notes.push(`${c.unindexed === c.fixed ? 'motif' : c.unindexed} placed anywhere`);
-      if (c.unresolved) notes.push(`${c.unresolved} unmodelled residue${c.unresolved === 1 ? '' : 's'} (built by the model)`);
-      if (notes.length) body.append(el('p', { class: 'rfd4p-chain-note muted', text: notes.join(' · ') }));
-      if (c.hotspots) {
-        body.append(el('div', { class: 'rfd4p-chain-line rfd4p-chain-note' },
-          el('span', { class: 'muted', text: `${c.hotspots} hotspot residue${c.hotspots === 1 ? '' : 's'}` }),
-          readonly ? null : el('button', {
-            type: 'button', class: 'secondary compact', text: 'Clear hotspots',
-            onclick: () => void this._batch([{ condition: 'hotspot', atom_indices: c.atomIndices, enabled: false }]),
-          })));
-      }
-    } else {
-      body.append(el('div', { class: 'rfd4p-chain-line' }, el('span', { class: 'rfd4p-chain-info', text: 'New chain' })));
-    }
+    // Hotspots: on a chain the design is placed against (anything held in place).
+    const held = c.pieces.some((p) => p.kind === 'kept' || p.kind === 'backbone');
+    if (held && (c.role === 'fixed' || c.hotspots)) body.append(this._hotspotRow(c, readonly));
 
-    for (const seg of c.segments) {
-      const min = el('input', { type: 'number', min: 1, max: 1000, value: seg.min, 'aria-label': 'Minimum length', disabled: readonly });
-      const max = el('input', { type: 'number', min: 1, max: 1000, value: seg.max, 'aria-label': 'Maximum length', disabled: readonly });
+    if (!readonly && c.pieces.length && c.role !== 'ligand') {
+      const first = c.pieces[0];
+      const last = c.pieces[c.pieces.length - 1];
+      const add = (text, piece, before) => el('button', {
+        type: 'button', class: 'rfd4p-link', text, title: `Add designed residues at the ${before ? 'start' : 'end'} of chain ${c.id}`,
+        onclick: () => void this._mutate('/segments', {
+          minimum: 10, maximum: 20, atom_index: piece.atomIndices[0], before, new_chain: false, chain_id: null,
+          chain_type: 'polypeptide(L)',
+        }),
+      });
+      const buttons = [first.kind === 'new' ? null : add('at start', first, true),
+        last.kind === 'new' ? null : add('at end', last, false)].filter(Boolean);
+      if (buttons.length) {
+        body.append(el('div', { class: 'rfd4p-chain-adds' }, el('span', { class: 'muted', text: 'Add new residues:' }), ...buttons));
+      }
+    }
+    return row;
+  }
+
+  /** The chain to scale: kept pieces solid, designed ones striped, new residues outlined at their mean length. */
+  _chainBar(c) {
+    const bar = el('div', { class: 'rfd4p-chain-bar', 'aria-hidden': 'true' });
+    for (const p of c.pieces) {
+      const len = p.kind === 'new' ? (p.min + p.max) / 2 : p.count;
+      const block = el('span', { class: `rfd4p-bar-${p.kind}`, title: this._pieceText(c, p) });
+      block.style.flexGrow = String(Math.max(1, len));
+      const span = p.kind === 'new' ? 0 : p.end - p.start + 1;
+      for (const id of p.hotspots) {
+        const tick = el('i', { class: 'rfd4p-bar-hotspot' });
+        tick.style.left = `${((id - p.start + 0.5) / span) * 100}%`;
+        block.append(tick);
+      }
+      bar.append(block);
+    }
+    return bar;
+  }
+
+  _pieceText(c, p) {
+    if (p.kind === 'new') {
+      // "between H22 and H24" -> "after H22": the row is short, and the bar shows where it is.
+      const where = p.where.replace(/^between (\S+) and \S+$/, 'after $1').replace('-terminal', '-term');
+      return `${PIECE_LABELS.new}${where ? ` · ${where}` : ''}`;
+    }
+    const range = p.start === p.end ? `${c.id}${p.start}` : `${c.id}${p.start}–${p.end}`;
+    return `${PIECE_LABELS[p.kind]} · ${range}${p.count > 1 ? ` (${p.count})` : ''}`;
+  }
+
+  _pieceRow(c, p, k, readonly) {
+    const label = el('span', { class: `rfd4p-piece-label rfd4p-piece-${p.kind}`, text: this._pieceText(c, p) });
+    label.title = label.textContent;
+    if (p.kind === 'new') {
+      const min = el('input', { type: 'number', min: 1, max: 1000, value: p.min, 'aria-label': 'Minimum length', disabled: readonly });
+      const max = el('input', { type: 'number', min: 1, max: 1000, value: p.max, 'aria-label': 'Maximum length', disabled: readonly });
       const commit = () => {
-        const lo = Math.max(1, Math.round(Number(min.value)) || seg.min);
-        const hi = Math.max(lo, Math.round(Number(max.value)) || seg.max);
-        if (lo === seg.min && hi === seg.max) return;
-        void this._mutate('/segments/range', { atom_index: seg.atomIndex, minimum: lo, maximum: hi });
+        const lo = Math.max(1, Math.round(Number(min.value)) || p.min);
+        const hi = Math.max(lo, Math.round(Number(max.value)) || p.max);
+        if (lo === p.min && hi === p.max) return;
+        void this._mutate('/segments/range', { atom_index: p.atomIndex, minimum: lo, maximum: hi });
       };
       min.addEventListener('change', commit);
       max.addEventListener('change', commit);
-      body.append(el('div', { class: 'rfd4p-chain-line rfd4p-seg-line' },
-        el('span', {
-          class: 'rfd4p-seg-label',
-          text: c.residues ? `New${seg.where ? ` · ${seg.where}` : ' residues'}` : 'Length',
-          title: c.residues ? `New residues${seg.where ? `, ${seg.where}` : ''}` : 'Length of the new chain',
-        }),
-        el('span', { class: 'rfd4p-seg-inputs' }, min, el('span', { text: '–' }), max)));
+      // A chain made only of this segment is removed with the chain's own ×.
+      const removable = !readonly && c.pieces.length > 1;
+      return el('div', { class: 'rfd4p-chain-line rfd4p-piece' }, label,
+        el('span', { class: 'rfd4p-seg-inputs' }, min, el('span', { text: '–' }), max,
+          removable ? el('button', {
+            type: 'button', class: 'rfd4p-chain-remove', text: '×', title: 'Remove these new residues',
+            'aria-label': 'Remove these new residues', onclick: () => void this._mutate('/delete', { atom_indices: p.atomIndices }),
+          }) : null));
     }
-    return row;
+    if (readonly) return el('div', { class: 'rfd4p-chain-line rfd4p-piece' }, label);
+    const options = [
+      ['', 'Change…'],
+      ['kept', 'Keep (structure and sequence)'],
+      ['sequence', 'Keep sequence, predict structure'],
+      ['backbone', 'Keep backbone, new sequence'],
+      ['designed', 'Redesign in place'],
+      ['replace', 'Replace with new residues…'],
+      ['delete', 'Delete'],
+    ];
+    const select = el('select', { class: 'rfd4p-piece-menu', 'aria-label': `Change ${label.textContent}` });
+    for (const [value, text] of options) {
+      select.append(el('option', { value, text, disabled: value === p.kind }));
+    }
+    select.addEventListener('change', () => {
+      const v = select.value;
+      select.value = '';
+      if (v === 'delete') void this._mutate('/delete', { atom_indices: p.atomIndices });
+      else if (v === 'replace') {
+        void this._mutate('/segments/replace', {
+          atom_indices: p.atomIndices, minimum: Math.max(1, Math.round(p.count * 0.75)), maximum: Math.max(1, Math.round(p.count * 1.25)),
+        });
+      } else if (v) void this._batch(this._roleEdits({ polymerAtomIndices: p.atomIndices, backboneAtomIndices: this._backboneOf(p.atomIndices) }, v === 'designed' ? 'free' : v === 'kept' ? 'fixed' : v));
+    });
+    return el('div', { class: 'rfd4p-chain-line rfd4p-piece' }, label, select);
+  }
+
+  _backboneOf(indices) {
+    const a = this._inputDoc()?.atoms;
+    if (!a) return [];
+    return indices.filter((i) => ['N', 'CA', 'C', 'O'].includes(String(a.atom_name[i])));
+  }
+
+  _ligandRow(c, l, readonly) {
+    const label = `${l.name} · ${l.pose === 'fixed' ? 'pose fixed' : l.pose === 'predicted' ? 'pose predicted' : 'pose partly fixed'}`;
+    return el('div', { class: 'rfd4p-chain-line rfd4p-piece' },
+      el('span', { class: 'rfd4p-piece-label rfd4p-piece-ligand', text: label }),
+      readonly ? null : el('button', {
+        type: 'button', class: 'secondary compact', text: l.pose === 'predicted' ? 'Fix pose' : 'Free pose',
+        onclick: () => void this._batch([{
+          condition: 'coordinate', atom_indices: c.ligandAtomIndices, enabled: l.pose === 'predicted',
+        }]),
+      }));
+  }
+
+  /** The chain's hotspots as editable text ("A56, A115–117"); kept in step with clicking residues. */
+  _hotspotRow(c, readonly) {
+    const input = el('input', {
+      type: 'text', class: 'rfd4p-hotspot-input', spellcheck: 'false', autocomplete: 'off', disabled: readonly,
+      value: formatResidueList(c.id, c.hotspotResIds), placeholder: `e.g. ${c.id}${c.firstResId ?? 1}, ${c.id}${(c.firstResId ?? 1) + 4}`,
+      'aria-label': `Hotspots on chain ${c.id}`,
+      title: 'Target residues the design should touch: 3–6 at the interface work well. Type them, or select residues and press Hotspot.',
+    });
+    const note = el('span', { class: 'rfd4p-hotspot-note muted' });
+    input.addEventListener('change', () => {
+      const { residues, bad } = parseResidueList(input.value, c.id);
+      const doc = this._inputDoc();
+      const a = doc?.atoms;
+      if (!a) return;
+      const wanted = new Set(residues.filter((r) => r.chain === c.id).map((r) => r.resId));
+      const atoms = c.polymerAtomIndices.filter((i) => wanted.has(Number(a.res_id[i])));
+      const found = new Set(atoms.map((i) => Number(a.res_id[i])));
+      const missing = [...wanted].filter((id) => !found.has(id));
+      const otherChain = residues.filter((r) => r.chain !== c.id).map((r) => `${r.chain}${r.resId}`);
+      const problems = [
+        bad.length ? `not understood: ${bad.join(' ')}` : '',
+        missing.length ? `not in chain ${c.id}: ${formatResidueList(c.id, missing)}` : '',
+        otherChain.length ? `other chains go in their own box: ${otherChain.slice(0, 3).join(', ')}` : '',
+      ].filter(Boolean);
+      this.hotspotNote = problems.length ? { chain: c.id, text: problems.join('; ') } : null;
+      const edits = [{ condition: 'hotspot', atom_indices: c.atomIndices, enabled: false }];
+      if (atoms.length) edits.push({ condition: 'hotspot', atom_indices: atoms, enabled: true });
+      void this._batch(edits);
+    });
+    if (this.hotspotNote?.chain === c.id) note.textContent = this.hotspotNote.text;
+    return el('div', { class: 'rfd4p-hotspot-row' },
+      el('label', { class: 'rfd4p-hotspot-label' }, el('span', { text: 'Hotspots' }), input), note);
   }
 
   _renderPartial(spec, readonly) {

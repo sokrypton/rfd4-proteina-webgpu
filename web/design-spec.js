@@ -45,6 +45,8 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
   const seqCond = ann.condition_sequence_1_residue;
   const indexCond = ann.condition_index_1_residue;
   const hotspot = ann.condition_hotspot_1_atom;
+  const group = ann.condition_CoordinateGroup_1_atom;
+  const internal = ann.condition_InternalCoordinate_1_atom;
   const segMin = ann.annotation_expsegmin_1_residue;
   const segMax = ann.annotation_expsegmax_1_residue;
 
@@ -74,6 +76,7 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
         resolved: false,
         seqFixed: false,
         unindexed: false,
+        relative: false,
         hotspots: 0,
         atoms: 0,
         atomIndices: [],
@@ -95,6 +98,8 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
     const s = seqCond?.[i];
     if (s != null && s !== '<M>' && s !== '.' && s !== '' && s !== '?') res.seqFixed = true;
     if (indexCond && indexCond[i] === false) res.unindexed = true;
+    // Held by its shape only (a framework): a coordinate group other than the absolute one, or internal coordinates.
+    if (Number(group?.[i]) > 0 || hasCrd(internal?.[i])) res.relative = true;
     if (hotspot?.[i]) res.hotspots += 1;
   }
 
@@ -160,6 +165,7 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
     flush();
 
     const placed = polymer.filter((r) => !r.unindexed).length;
+    const segmentWhere = new Map(segments.map((g) => [g.atomIndex, g.where]));
     const lengthMin = placed + segMinSum;
     const lengthMax = placed + segMaxSum;
     out.push({
@@ -187,6 +193,8 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
       lengthMin,
       lengthMax,
       contig: pieces.join('/'),
+      pieces: chainPieces(chain.residues, segmentWhere),
+      hotspotResIds: polymer.filter((r) => r.hotspots > 0).map((r) => r.resId),
       atomIndices: chain.atomIndices,
       polymerAtomIndices: polymer.flatMap((r) => r.atomIndices),
       backboneAtomIndices: polymer.flatMap((r) => r.atomIndices.filter((i) => BACKBONE_ATOMS.has(String(atoms.atom_name[i])))),
@@ -228,6 +236,87 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
       (ligandNames.length ? ` + ${ligandNames.join(', ')}` : ''),
     warnings,
   };
+}
+
+/** What a piece of a chain is, as the design panel names it. */
+export const PIECE_LABELS = {
+  kept: 'Kept',
+  relative: 'Framework',
+  backbone: 'Backbone kept',
+  sequence: 'Sequence kept',
+  designed: 'Redesigned',
+  unindexed: 'Motif, placed anywhere',
+  new: 'New residues',
+};
+
+/** What happens to a residue: one of PIECE_LABELS' keys. */
+function pieceKind(r) {
+  if (r.kind === 'segment') return 'new';
+  if (r.unindexed) return 'unindexed';
+  if (r.relative) return 'relative';
+  if (r.crdAtoms > 0) return r.seqFixed ? 'kept' : 'backbone';
+  return r.seqFixed ? 'sequence' : 'designed';
+}
+
+/**
+ * A chain as the pieces a contig is made of, in order: runs of consecutive residues treated alike, and each
+ * new-residue segment on its own. Ligands are not pieces (they are listed per chain).
+ */
+function chainPieces(residues, segmentWhere) {
+  const out = [];
+  let run = null;
+  for (const r of residues) {
+    if (!r.kind) continue;
+    const kind = pieceKind(r);
+    if (kind === 'new') {
+      run = null;
+      out.push({ kind, min: r.segment.min, max: r.segment.max, atomIndex: r.segment.atomIndex,
+        where: segmentWhere.get(r.segment.atomIndex) ?? '', count: 0, atomIndices: r.atomIndices, hotspots: [] });
+      continue;
+    }
+    if (run && run.kind === kind && r.resId === run.end + 1) {
+      run.end = r.resId;
+      run.count += 1;
+      run.atomIndices.push(...r.atomIndices);
+    } else {
+      run = { kind, start: r.resId, end: r.resId, count: 1, atomIndices: [...r.atomIndices], hotspots: [] };
+      out.push(run);
+    }
+    if (r.hotspots > 0) run.hotspots.push(r.resId);
+  }
+  return out;
+}
+
+/**
+ * Residues as typed: "A56, A115-123, B7" (chain letter then number or range; a bare number takes `defaultChain`).
+ * Returns `{residues: [{chain, resId}], bad: ['tokens not understood']}`.
+ */
+export function parseResidueList(text, defaultChain = null) {
+  const residues = [];
+  const bad = [];
+  for (const token of String(text ?? '').split(/[\s,;]+/).filter(Boolean)) {
+    const m = /^([A-Za-z]{1,4})?:?(-?\d+)(?:[-–](-?\d+))?$/.exec(token.replace(/^([A-Za-z]+)(\d)/, '$1:$2'));
+    const chain = m?.[1] ?? defaultChain;
+    if (!m || !chain) { bad.push(token); continue; }
+    const lo = Number(m[2]);
+    const hi = m[3] == null ? lo : Number(m[3]);
+    if (hi < lo || hi - lo > 2000) { bad.push(token); continue; }
+    for (let id = lo; id <= hi; id += 1) residues.push({ chain, resId: id });
+  }
+  return { residues, bad };
+}
+
+/** The inverse of parseResidueList for one chain: [56, 115, 116, 117] -> "A56, A115–117". */
+export function formatResidueList(chain, resIds) {
+  const ids = [...new Set(resIds)].sort((a, b) => a - b);
+  const parts = [];
+  for (let k = 0; k < ids.length;) {
+    let j = k;
+    while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j += 1;
+    parts.push(j === k ? `${chain}${ids[k]}` : `${chain}${ids[k]}–${ids[j]}`);
+    k = j + 1;
+  }
+  return parts.join(', ');
 }
 
 function inferTask({ polymers, ligands, anyCondition, designedMax, predicted, partialDiffusion, partialPercent }) {

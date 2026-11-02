@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { parseCifToAtomArray } from '../shared/rfd4p/pipeline/cif.js';
-import { designSpec } from '../web/design-spec.js';
+import { designSpec, formatResidueList, parseResidueList } from '../web/design-spec.js';
 import { StudioDoc } from '../web/studio-api.js';
 
 const exampleCif = (file) => readFileSync(new URL(`../web/studio/examples/${file}`, import.meta.url), 'utf8');
@@ -150,4 +150,35 @@ test('review fixes: scaffolding with a ligand selected, re-scaffolding, modified
   assert.equal(m.chains.length, 1);
   assert.equal(m.chains[0].ligands.length, 0);
   assert.equal(m.chains[0].residues, 59);
+});
+
+test('chains read as their pieces, in order, with hotspots placed on them', () => {
+  const pieces = (file, chain) => specOf(file).chains.find((c) => c.id === chain).pieces
+    .map((p) => (p.kind === 'new' ? `new ${p.min}-${p.max}` : `${p.kind} ${p.start}-${p.end}`));
+  assert.deepEqual(pieces('protein_binder.cif', 'A'), ['kept 17-131']);
+  assert.deepEqual(pieces('protein_binder.cif', 'B'), ['new 50-120']);
+  assert.deepEqual(pieces('antibody_design.cif', 'H'), ['relative 1-98', 'designed 99-109', 'relative 110-120']);
+  assert.deepEqual(pieces('nanobody.cif', 'H'),
+    ['relative 1-22', 'new 11-16', 'relative 24-37', 'new 8-12', 'relative 39-75', 'new 8-22', 'relative 77-86']);
+  assert.deepEqual(pieces('motif_scaffolding.cif', 'A'),
+    ['new 10-20', 'kept 1-1', 'new 15-30', 'kept 3-3', 'new 15-30', 'kept 5-5', 'new 10-20']);
+  assert.deepEqual(pieces('enzyme_design.cif', 'A'), ['new 180-180', 'unindexed 1-1']);
+  const target = specOf('protein_binder.cif').chains.find((c) => c.id === 'A');
+  assert.deepEqual(target.hotspotResIds, [56, 115, 123]);
+  assert.deepEqual(target.pieces[0].hotspots, [56, 115, 123]);
+});
+
+test('typed residue lists parse and format both ways', () => {
+  assert.deepEqual(parseResidueList('A56, A115-117 B7;9 x?', 'T'), {
+    residues: [
+      { chain: 'A', resId: 56 }, { chain: 'A', resId: 115 }, { chain: 'A', resId: 116 }, { chain: 'A', resId: 117 },
+      { chain: 'B', resId: 7 }, { chain: 'T', resId: 9 },
+    ],
+    bad: ['x?'],
+  });
+  assert.deepEqual(parseResidueList('A5–3').bad, ['A5–3']);
+  assert.deepEqual(parseResidueList('12').bad, ['12']);
+  assert.equal(formatResidueList('A', [117, 56, 115, 116]), 'A56, A115–117');
+  const again = parseResidueList(formatResidueList('A', [56, 115, 116, 117])).residues.map((r) => r.resId);
+  assert.deepEqual(again, [56, 115, 116, 117]);
 });
