@@ -14,9 +14,9 @@ import { fetchCcdComponents } from '../shared/rfd4p/pipeline/ccd.js';
 const ADVANCED_KEY = 'rfd4p-advanced-editor';
 
 /**
- * Start-screen tasks. Each with a `recipe` is built from its PDB entry in front of the user, step by step, with the
- * card's own controls (`_playRecipe`), so an example shows how to set the task up; residues are the entry's own
- * (label) numbering. Without a network the bundled Studio example (`example`, web/studio/examples) opens instead.
+ * Start-screen tasks. Each with a `recipe` is built from its PDB entry with the card's own controls, out of sight
+ * (`_buildRecipe`), and shown finished: the set-up a user would make, numbered as the entry is and captioned with it.
+ * Without a network the bundled Studio example (`example`, web/studio/examples) opens instead.
  * Steps: `fetch` (ID and chains), `piece` (open the piece holding `at`, fill `set`, Apply), `removeNew` (× the new
  * residues left in a chain), `addSeq`, `newLength` (the chain's `k`-th new piece), `ligand` (pose), `partial`.
  */
@@ -190,7 +190,9 @@ export class DesignPanel {
         try {
           const res = await fetch(`https://files.rcsb.org/download/${pdb}.cif`);
           if (!res.ok) throw new Error(res.status === 404 ? `${pdb} was not found` : `RCSB returned ${res.status}`);
-          await this._addStructure(await res.text(), pdb, chains, this.addStructure.replace);
+          const text = await res.text();
+          this._rememberTitle(`PDB ${pdb}`, text);
+          await this._addStructure(text, pdb, chains, this.addStructure.replace);
         } catch (err) {
           status.textContent = `Could not add ${pdb}: ${err?.message ?? err}`;
         }
@@ -446,12 +448,13 @@ export class DesignPanel {
     const spec = this._spec();
     const { els } = this;
     const hasDoc = Boolean(spec && !spec.empty);
-    const starting = !hasDoc || Boolean(this.showStart);
+    // An example being built keeps the start screen up; its chains are laid out (hidden) for the build to use.
+    const starting = !hasDoc || Boolean(this.showStart) || Boolean(this.building);
     if (els.start) els.start.hidden = !starting;
     if (els.back) els.back.hidden = !hasDoc;
     if (els.design) els.design.hidden = starting;
     if (els.runSettings) els.runSettings.hidden = starting;
-    if (starting) return;
+    if (!hasDoc || (starting && !this.building)) return;
 
     const viewingDesign = this._viewingDesign();
     els.design.classList.toggle('rfd4p-readonly', viewingDesign);
@@ -498,9 +501,13 @@ export class DesignPanel {
 
   /** A source's caption (click: replace it with another structure), then its chains. */
   _groupBlock(g, readonly) {
+    // "PDB 5O45 · Structure of human PD-L1 in complex with inhibitor": the entry and its title, on one line.
+    const title = g.label ? this.titles?.get(g.label.replace(/ chains? .*$/, '')) : null;
+    const text = [el('strong', { text: g.label }), title ? ` · ${title}` : ''];
     const caption = !g.label ? null : readonly
-      ? el('span', { class: 'rfd4p-source', text: g.label })
-      : el('button', { type: 'button', class: 'rfd4p-source', text: g.label, title: `Replace ${g.label}`, onclick: () => this._openAddStructure(g) });
+      ? el('span', { class: 'rfd4p-source', title: title ?? null }, ...text)
+      : el('button', { type: 'button', class: 'rfd4p-source', onclick: () => this._openAddStructure(g),
+        title: [title, `Click to replace ${g.label}`].filter(Boolean).join('\n') }, ...text);
     return el('div', { class: 'rfd4p-group' }, caption, ...g.chains.map((c) => this._chainRow(c, readonly)));
   }
 
@@ -604,6 +611,14 @@ export class DesignPanel {
     const task = TASKS.find((t) => t.example === name);
     if (task) return `${task.title} example`;
     return /^[0-9][A-Za-z0-9]{3}$/.test(name) ? `PDB ${name.toUpperCase()}` : name || null;
+  }
+
+  /** The entry's title (`_struct.title`), shown when pointing at its caption. */
+  _rememberTitle(label, cifText) {
+    // A value on the same line or the next, quoted, bare, or a ;-delimited block.
+    const m = /^_struct\.title\s+(?:'([^']*)'|"([^"]*)"|;([\s\S]*?)\n;|([^\s?'";_][^\n]*))/m.exec(cifText);
+    const title = (m?.[1] ?? m?.[2] ?? m?.[3] ?? m?.[4] ?? '').replace(/\s+/g, ' ').trim();
+    if (title) (this.titles ??= new Map()).set(label, title);
   }
 
   _rememberSource(chains, label) {
@@ -1155,11 +1170,11 @@ export class DesignPanel {
   // ---- start screen -------------------------------------------------------------------------------------------
 
   async _startTask(task) {
-    if (typeof window.atomworksStudio?.openExample !== 'function' || this.playing) return;
+    if (typeof window.atomworksStudio?.openExample !== 'function' || this.building) return;
     const button = this.els.taskGrid?.querySelector(`[data-example="${task.example}"]`);
     button?.classList.add('loading');
     try {
-      if (task.recipe && await this._playRecipe(task)) return;
+      if (task.recipe && await this._buildRecipe(task)) return;
       await window.atomworksStudio?.openExample(task.example);
       this.showStart = false;
       if (task.then) {
@@ -1185,6 +1200,7 @@ export class DesignPanel {
       const res = await fetch(`https://files.rcsb.org/download/${id}.cif`);
       if (!res.ok) throw new Error(res.status === 404 ? `${id} was not found` : `RCSB returned ${res.status}`);
       const text = await res.text();
+      this._rememberTitle(`PDB ${id}`, text);
       const opened = await window.atomworksStudio?.openFile?.(new File([text], `${id}.cif`, { type: 'chemical/x-mmcif' }));
       if (opened !== false && chains.length) {
         const a = this._inputDoc()?.atoms;
@@ -1206,134 +1222,103 @@ export class DesignPanel {
     }
   }
 
-  // ---- examples, built step by step ---------------------------------------------------------------------------
+  // ---- examples, built from their PDB entries ----------------------------------------------------------------
 
   /**
-   * Build `task` from its PDB entry with the card's own controls, each step shown: the piece's popup opens, its fields
-   * fill in, Apply. Skip runs the rest without pauses. Resolves false if the entry could not be fetched (nothing is
-   * changed then), true once built.
+   * Build `task` from its PDB entry with the card's own controls while the start screen stays up, then show it
+   * finished, with no Undo history (an example is a starting point). Resolves false if the entry could not be fetched
+   * (nothing is changed then), true once built.
    */
-  async _playRecipe(task) {
-    const demo = document.getElementById('rfd4p-demo');
-    const stepLine = document.getElementById('rfd4p-demo-step');
-    const skip = document.getElementById('rfd4p-demo-skip');
-    const sleep = (ms) => new Promise((r) => setTimeout(r, this.skipping ? 0 : ms));
+  async _buildRecipe(task) {
     const card = (id) => [...this.els.chainList.querySelectorAll('.rfd4p-chain')]
       .find((c) => c.querySelector('.rfd4p-chain-id')?.textContent === id);
-    const focus = async (node, ms = 450) => {
-      node?.classList.add('rfd4p-demo-focus');
-      await sleep(ms);
-      node?.classList.remove('rfd4p-demo-focus');
-    };
+    const subs = (chain) => [...(card(chain)?.querySelectorAll('.rfd4p-sub') ?? [])];
+    const isNew = (sub) => sub.querySelector('.rfd4p-sub-status')?.textContent === 'new';
     const idle = async () => {
       await this.applying;
       this.applying = null;
       for (let i = 0; i < 600 && this.busy; i += 1) await new Promise((r) => setTimeout(r, 50));
     };
-    const click = async (node) => { await focus(node); node.click(); await idle(); };
-    const fill = async (pop, label, value, event = 'input') => {
+    const open = (sub) => { sub.querySelector('.rfd4p-sub-open').click(); return this.piecePop; };
+    const fill = (pop, label, value, event = 'input') => {
       const field = pop.querySelector(`[aria-label="${label}"]`);
       if (!field) return;
-      await focus(field, 250);
       field.value = String(value);
       field.dispatchEvent(new Event(event));
-      if (event === 'input') field.dispatchEvent(new Event('change'));
-      await sleep(250);
     };
-    const subs = (chain) => [...(card(chain)?.querySelectorAll('.rfd4p-sub') ?? [])];
-    const isNew = (sub) => sub.querySelector('.rfd4p-sub-status')?.textContent === 'new';
-    const say = (k, text) => { stepLine.textContent = `${k + 1}/${task.recipe.length} · ${text}`; };
+    const apply = async (pop) => {
+      [...pop.querySelectorAll('button')].find((b) => b.textContent === 'Apply').click();
+      await idle();
+      const note = pop.hidden ? '' : pop.querySelector('.rfd4p-pop-note')?.textContent;
+      if (note) throw new Error(note);
+    };
+    const click = async (node) => { node.click(); await idle(); };
 
-    this.playing = true;
-    this.skipping = false;
-    skip.onclick = () => { this.skipping = true; };
+    this.building = true;
+    document.body.classList.add('rfd4p-building');
     let fetched = false;
     try {
-      for (const [k, step] of task.recipe.entries()) {
+      for (const step of task.recipe) {
         if (step.fetch) {
-          say(k, `Fetch ${step.fetch}`);
-          this.els.pdbId.value = step.fetch;
           if (!await this._fetchPdb(step.fetch)) return false;
           fetched = true;
-          demo.hidden = false;
-          this.els.design.classList.add('rfd4p-playing');
-          await sleep(600);
         } else if (step.piece) {
           const s = step.set;
-          say(k, `Chain ${step.piece}: ${[
-            s.from != null ? `${step.piece}${s.from}–${s.to}` : '',
-            s.structure ? `structure ${{ rigid: 'fixed, can move', sidechain: 'side chains only' }[s.structure] ?? s.structure}` : '',
-            s.sequence ? `sequence ${s.sequence}` : '', s.position ? `position ${s.position}` : '',
-            s.length ? `length ${s.length[0]}–${s.length[1]}` : '',
-            s.hotspots ? `hotspots ${s.hotspots}` : '', s.keepOnly ? `keep only ${s.keepOnly}` : '',
-          ].filter(Boolean).join(', ')}`);
           const sub = subs(step.piece).find((x) => {
             const m = /(\d+)(?:–(\d+))?/.exec(x.querySelector('.rfd4p-sub-name')?.textContent ?? '');
             return !isNew(x) && m && step.at >= Number(m[1]) && step.at <= Number(m[2] ?? m[1]);
           });
           if (!sub) throw new Error(`chain ${step.piece} has no residue ${step.at}`);
-          await focus(sub);
-          sub.querySelector('.rfd4p-sub-open').click();
-          await sleep(300);
-          const pop = this.piecePop;
-          if (s.from != null) { await fill(pop, 'First residue', s.from); await fill(pop, 'Last residue', s.to); }
-          if (s.structure) await fill(pop, 'Structure', s.structure, 'change');
-          if (s.sequence) await fill(pop, 'Sequence', s.sequence, 'change');
-          if (s.position) await fill(pop, 'Position in chain', s.position, 'change');
-          if (s.length) { await fill(pop, 'Fewest residues', s.length[0]); await fill(pop, 'Most residues', s.length[1]); }
-          if (s.hotspots) await fill(pop, 'Hotspots', s.hotspots);
-          if (s.keepOnly) await fill(pop, 'Keep only these residues', s.keepOnly);
-          await click([...pop.querySelectorAll('button')].find((b) => b.textContent === 'Apply'));
-          const note = pop.hidden ? '' : pop.querySelector('.rfd4p-pop-note')?.textContent;
-          if (note) throw new Error(note);
+          const pop = open(sub);
+          if (s.from != null) { fill(pop, 'First residue', s.from); fill(pop, 'Last residue', s.to); }
+          if (s.structure) fill(pop, 'Structure', s.structure, 'change');
+          if (s.sequence) fill(pop, 'Sequence', s.sequence, 'change');
+          if (s.position) fill(pop, 'Position in chain', s.position, 'change');
+          if (s.length) { fill(pop, 'Fewest residues', s.length[0]); fill(pop, 'Most residues', s.length[1]); }
+          if (s.hotspots) fill(pop, 'Hotspots', s.hotspots);
+          if (s.keepOnly) fill(pop, 'Keep only these residues', s.keepOnly);
+          await apply(pop);
         } else if (step.removeNew) {
-          say(k, `Chain ${step.removeNew}: remove the residues not kept`);
           for (let sub = subs(step.removeNew).find(isNew); sub; sub = subs(step.removeNew).find(isNew)) {
             await click(sub.querySelector('.rfd4p-x'));
           }
         } else if (step.addSeq) {
-          say(k, '+ seq: a new chain to design');
           await click(this.els.addSeq);
         } else if (step.newLength) {
-          const [lo, hi] = step.newLength;
-          say(k, `New residues: length ${lo === hi ? lo : `${lo}–${hi}`}`);
           const chains = step.chain ? [card(step.chain)] : [...this.els.chainList.querySelectorAll('.rfd4p-chain')].reverse();
           const sub = chains.flatMap((c) => [...(c?.querySelectorAll('.rfd4p-sub') ?? [])]).find(isNew);
-          await focus(sub);
-          sub.querySelector('.rfd4p-sub-open').click();
-          await sleep(300);
-          await fill(this.piecePop, 'Fewest new residues', lo);
-          await fill(this.piecePop, 'Most new residues', hi);
-          await click([...this.piecePop.querySelectorAll('button')].find((b) => b.textContent === 'Apply'));
+          const pop = open(sub);
+          fill(pop, 'Fewest new residues', step.newLength[0]);
+          fill(pop, 'Most new residues', step.newLength[1]);
+          await apply(pop);
         } else if (step.ligand) {
-          say(k, `${step.ligand}: pose ${step.pose}`);
           const sub = [...this.els.chainList.querySelectorAll('.rfd4p-sub')].find((x) => x.querySelector('.rfd4p-sub-name')?.textContent === step.ligand);
-          await focus(sub);
-          sub.querySelector('.rfd4p-sub-open').click();
-          await sleep(300);
-          await fill(this.piecePop, 'Pose', step.pose, 'change');
-          await click([...this.piecePop.querySelectorAll('button')].find((b) => b.textContent === 'Apply'));
+          const pop = open(sub);
+          fill(pop, 'Pose', step.pose, 'change');
+          await apply(pop);
         } else if (step.partial) {
-          say(k, 'Start from the input structure');
           const box = document.getElementById('partial-diffusion');
-          await focus(box.closest('label') ?? box);
           box.checked = true;
           box.dispatchEvent(new Event('change'));
           await idle();
         }
-        await sleep(500);
+      }
+      // An example is a starting point: no Undo back through how it was built.
+      const doc = this._inputDoc();
+      if (doc) {
+        doc.undoStack = [];
+        await window.atomworksStudio?.openSession?.(this.app.inputSessionId);
       }
       return true;
     } catch (err) {
       console.warn('Example set-up stopped:', err);
-      this.lastError = `The example stopped at step ${stepLine.textContent}: ${String(err?.message ?? err)}`;
+      this.lastError = `The ${task.title} example could not be set up: ${String(err?.message ?? err)}`;
       return fetched;
     } finally {
-      this.playing = false;
-      this.skipping = false;
+      this.building = false;
+      document.body.classList.remove('rfd4p-building');
       this._closePop();
-      demo.hidden = true;
-      this.els.design.classList.remove('rfd4p-playing');
+      this.showStart = false;
       this.render();
     }
   }
