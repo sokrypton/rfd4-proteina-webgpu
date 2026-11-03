@@ -1447,9 +1447,10 @@ export class DesignPanel {
       hot.addEventListener('change', () => { hotTouched = true; });
       const same = (key) => { const v = new Set(hits.map((h) => h.p[key] ?? (key === 'inter' ? '' : 0))); return v.size === 1 ? [...v][0] : 'mixed'; };
       const extra = this._extraFields({ ss: same('ss'), rasa: same('rasa'), inter: same('inter') });
-      rows.push(row('Structure', structure), atomsRow, row('Sequence', sequence), positionRow, lengthRow,
+      // A pick asks little at first: fixed or free, a hotspot, in or out; the finer settings are under More.
+      rows.push(row('Structure', structure), row('Sequence', sequence), lengthRow,
         el('label', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Hotspot' }), hot));
-      more.push(...extra.rows.filter(Boolean));
+      more.push(atomsRow, positionRow, ...extra.rows.filter(Boolean));
       apply = async () => {
         done();
         if (hotTouched && !await this._batch([{ condition: 'hotspot', atom_indices: polymerAtoms, enabled: hot.checked }])) return;
