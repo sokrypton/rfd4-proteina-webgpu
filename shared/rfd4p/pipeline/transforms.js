@@ -1072,6 +1072,8 @@ export function centerAndFeaturizeCentroid(atoms) {
     }
   }
   const shift = count > 0 ? [sx / count, sy / count, sz / count] : [0, 0, 0];
+  // Kept so a design aligned onto the (centred) conditioned coordinates can be put back in the input's frame.
+  Object.defineProperty(atoms, 'center_shift', { value: shift, enumerable: false, writable: true, configurable: true });
 
   atoms.coord_to_be_noised = new Array(n);
   for (let i = 0; i < n; i++) {

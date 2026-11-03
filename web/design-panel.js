@@ -1141,7 +1141,14 @@ export class DesignPanel {
     const atoms = (shown ?? this._inputDoc())?.atoms;
     const hot = atoms?.annotations?.condition_hotspot_1_atom;
     const residues = new Map();
-    if (hot) {
+    // A run in progress shows live frames over the input, numbered as the job is (past any new residues).
+    const live = this.app.liveHotspotKeys;
+    if (live && (!shown || shown === this._inputDoc())) {
+      for (const key of live) {
+        const [chain, residue] = key.split('|');
+        residues.set(`${chain}|${residue}`, { chain, residue: Number(residue) });
+      }
+    } else if (hot) {
       for (let i = 0; i < atoms.nAtoms; i += 1) {
         // The viewer numbers residues as the document's CIF writes auth_seq_id (a fetched entry keeps its authors'
         // numbering there), not by res_id: 5O45's A40 is author residue 56.

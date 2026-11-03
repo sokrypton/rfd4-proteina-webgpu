@@ -107,6 +107,9 @@ function extractFixedTokenAnchorsNm(batch, n) {
     }
   }
   if (anchorByToken.size < 3) return null;
+  // Conditioned coordinates are centred in the batch; frames are shown where the input was loaded.
+  const [sx, sy, sz] = (atoms.center_shift ?? [0, 0, 0]).map((v) => v / 10.0);
+  for (const info of anchorByToken.values()) { info.xNm += sx; info.yNm += sy; info.zNm += sz; }
   const tokenIndices = new Int32Array(anchorByToken.size);
   const fixedCoordsNm = new Float32Array(anchorByToken.size * 3);
   let k = 0;
@@ -1388,6 +1391,9 @@ class Rfd4pStudioApp {
         const sampleSeed = baseSeed + sampleIdx;
         const { batch, n, atoms } = sampleIdx === 0 ? firstBatchRes : this._buildCurrentBatch(sampleSeed);
         liveSequence.hotspots = hotspotResidueKeys(atoms);
+        // Live frames number residues as the job does (res_id, past any new residues), not as the input is shown.
+        this.liveHotspotKeys = liveSequence.hotspots;
+        this.designPanel?.showHotspots();
         const tokens = extractTokenMetadata(batch);
         const fixedAnchors = extractFixedTokenAnchorsNm(batch, n);
         const allTokenIndices = Int32Array.from({ length: n }, (_, idx) => idx);
@@ -1616,6 +1622,8 @@ class Rfd4pStudioApp {
       if (this.activeAbortController === abortController) liveSequence.stop();
       if (this.activeAbortController === abortController) {
         this.activeAbortController = null;
+        this.liveHotspotKeys = null;
+        this.designPanel?.showHotspots();
       }
       this.els.predictBtn.textContent = 'Generate design';
       this.els.predictBtn.classList.remove('secondary');

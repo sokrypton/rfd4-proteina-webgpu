@@ -1136,6 +1136,16 @@ export function processSampleToAtoms({
 
   // Align generated coordinates onto the input frame (`align_atom_array_to_input_frame`)
   alignAtomsToInputFrame(outAtoms, cwiCoords, anchorIndices);
+  // The conditioned coordinates were centred for the model (`centerAndFeaturizeCentroid`): undo that, so a design
+  // sits on its input (a binder on its target as the target was loaded).
+  const shift = inputAtoms?.center_shift;
+  if (anchorIndices.length && shift && shift.some((v) => v !== 0)) {
+    for (const a of outAtoms) {
+      a.x = Math.fround(a.x + shift[0]);
+      a.y = Math.fround(a.y + shift[1]);
+      a.z = Math.fround(a.z + shift[2]);
+    }
+  }
 
   return {
     atoms: outAtoms,
