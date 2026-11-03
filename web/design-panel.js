@@ -169,7 +169,6 @@ export class DesignPanel {
       addPdb: $('rfd4p-add-pdb'),
       addLig: $('rfd4p-add-lig'),
       undo: $('rfd4p-undo'),
-      contig: $('rfd4p-contig'),
       warnings: $('rfd4p-warnings'),
       runSettings: $('rfd4p-run-settings'),
       advanced: $('rfd4p-advanced'),
@@ -525,7 +524,6 @@ export class DesignPanel {
     els.undo.disabled = document.getElementById('undo')?.disabled ?? true;
 
     els.chainList.replaceChildren(...this._sourceGroups(spec.chains).map((g) => this._groupBlock(g, viewingDesign)));
-    els.contig.textContent = spec.contig || '—';
 
     const warnings = this.lastError ? [this.lastError, ...spec.warnings] : [...spec.warnings];
     if (spec.task.key === 'partial' && spec.chains.some((c) => c.segments.length)) {
