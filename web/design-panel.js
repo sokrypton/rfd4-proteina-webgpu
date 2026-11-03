@@ -790,8 +790,14 @@ export class DesignPanel {
       el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: () => { this.applying = Promise.resolve(apply()); } }));
   }
 
-  /** The rest of a popup, folded: opened by More. */
+  /** The rest of a popup, folded: opened by More. Three rows or fewer are not worth folding, and are shown as they are. */
   _moreFold(...children) {
+    const rows = children.filter(Boolean);
+    if (rows.length <= 3) {
+      const frag = document.createDocumentFragment();
+      frag.append(...rows);
+      return frag;
+    }
     return el('details', { class: 'rfd4p-pop-more' }, el('summary', { text: 'More' }), el('div', { class: 'rfd4p-pop-more-body' }, ...children.filter(Boolean)));
   }
 
@@ -1174,7 +1180,7 @@ export class DesignPanel {
       this._popHead(`Chain ${c.id}, new residues`),
       el('div', { class: 'rfd4p-pop-row', title: 'Each design picks one length from this range' },
         el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, min, el('span', { text: '–' }), max)),
-      // Shape in front (blocks are drawn with it); exposure and the chain's fold under More.
+      // Shape first (blocks are drawn with it), then exposure and the chain's fold.
       extra.rows[0],
       this._moreFold(extra.rows[1], fold.row),
       note,
