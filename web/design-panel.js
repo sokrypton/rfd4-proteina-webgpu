@@ -146,6 +146,9 @@ const el = (tag, attrs = {}, ...children) => {
 /** Hotspots' one colour, wherever they are shown: sequence bar, viewer, chain bar, chip (styles.css `--rfd4p-hotspot`). */
 const HOTSPOT_COLOR = 0xf59e0b;
 
+/** How faded residues the model rebuilds are in the input structure (0 solid, 1 gone). */
+const FREE_TRANSPARENCY = 0.65;
+
 // The three properties of residues, the same in a sub-card's popup and the selection's: each fixed or free (the model
 // decides), and a structure may also be rigid (kept, moving as one body).
 const STRUCTURE_OPTIONS = [['fixed', 'fixed'], ['rigid', 'rigid'], ['designed', 'free']];
@@ -933,7 +936,21 @@ export class DesignPanel {
       'Fixed: these amino acids. Free: the model writes them.');
     const position = select('Position in chain', POSITION_OPTIONS, now.position,
       'Free: the model chooses where in the chain these residues go.');
-    // The ranges typed, clamped to the piece, sorted; null when not understood.
+    // The chain as it was loaded: the ranges may reach past the piece, up to its neighbours, bringing residues back.
+    const src = this._inputDoc()?.sourceResidues?.(c.id) ?? null;
+    const reach = (() => {
+      const k = c.pieces.indexOf(p);
+      const iS = src ? src.findIndex((r) => r.num === p.start) : -1;
+      const iE = src ? src.findLastIndex((r) => r.num === p.end) : -1;
+      if (iS < 0 || iE < 0 || k < 0) return { lo: p.start, hi: p.end, iLo: -1, iHi: -1 };
+      const present = new Set((a ? c.polymerAtomIndices : []).map((i) => Number(a.res_id[i])));
+      let iLo = iS;
+      if (c.pieces[k - 1]?.kind !== 'new') while (iLo > 0 && !present.has(src[iLo - 1].num)) iLo -= 1;
+      let iHi = iE;
+      if (c.pieces[k + 1]?.kind !== 'new') while (iHi < src.length - 1 && !present.has(src[iHi + 1].num)) iHi += 1;
+      return { lo: src[iLo].num, hi: src[iHi].num, iLo, iHi, present };
+    })();
+    // The ranges typed, clamped to what the piece can reach, sorted; null when not understood.
     const ranges = () => {
       const text = residuesText.value.replace(/\s*[-–]\s*/g, '-').trim();
       if (!text) return [[p.start, p.end]];
@@ -943,8 +960,8 @@ export class DesignPanel {
         if (!m) return null;
         const x = Number(m[1]);
         const y = m[2] == null ? x : Number(m[2]);
-        const lo = Math.max(p.start, Math.min(x, y));
-        const hi = Math.min(p.end, Math.max(x, y));
+        const lo = Math.max(reach.lo, Math.min(x, y));
+        const hi = Math.min(reach.hi, Math.max(x, y));
         if (lo <= hi) out.push([lo, hi]);
       }
       return out.length ? out.sort((u, v) => u[0] - v[0]) : null;
@@ -955,7 +972,10 @@ export class DesignPanel {
       const hi = Math.max(...rs.map(([, y]) => y));
       const inRanges = (id) => rs.some(([x, y]) => id >= x && id <= y);
       const atoms = a ? p.atomIndices.filter((i) => inRanges(Number(a.res_id[i]))) : p.atomIndices;
-      return { lo, hi, ranges: rs, atoms, count: a ? new Set(atoms.map((i) => `${a.res_id[i]}${a.ins_code[i]}`)).size : p.count };
+      // Residues past the piece, from lo to hi, come back from the chain as loaded (those in gaps free).
+      const grow = (src ?? []).filter((r) => r.num >= lo && r.num <= hi && (r.num < p.start || r.num > p.end)).map((r) => r.num);
+      const grown = grow.filter(inRanges).length;
+      return { lo, hi, ranges: rs, atoms, grow, count: (a ? new Set(atoms.map((i) => `${a.res_id[i]}${a.ins_code[i]}`)).size : p.count) + grown };
     };
     // Designed residues may change length: a length other than their count makes them new residues.
     const count = span().count;
@@ -983,7 +1003,7 @@ export class DesignPanel {
       positionRow.hidden = free;
       const { ranges: rs, lo, hi } = span();
       lengthRow.hidden = !free || rs.length > 1;
-      restRow.hidden = lo === p.start && hi === p.end;
+      restRow.hidden = lo <= p.start && hi >= p.end;
       betweenRow.hidden = rs.length < 2;
     };
     structure.addEventListener('change', sync);
@@ -1097,6 +1117,17 @@ export class DesignPanel {
         const gone = new Set(endIds);
         if (!await this._mutate('/delete', { atom_indices: atomsOf((id) => gone.has(id)) })) return;
       }
+      // Residues past the piece come back from the chain as loaded, with the popup's settings (free in the gaps).
+      const grow = span().grow;
+      if (grow.length) {
+        if (!await this._mutate('/residues/restore', { chain_id: c.id, res_ids: grow })) return;
+        const inRanges = (id) => rs.some(([x, y]) => id >= x && id <= y);
+        const back = new Set(grow);
+        const kept = atomsOf((id) => back.has(id) && inRanges(id));
+        const loose = atomsOf((id) => back.has(id) && !inRanges(id));
+        const more = [kept.length && { p: { kind: 'kept' }, atoms: kept, want }, loose.length && { p: { kind: 'kept' }, atoms: loose, want: free }].filter(Boolean);
+        if (more.length && !await this._applyPieces(more)) return;
+      }
       // Lengths last: free residues of another length become new residues.
       const bMin = Math.round(Number(betweenMin.value));
       const bMax = Math.round(Number(betweenMax.value));
@@ -1119,6 +1150,7 @@ export class DesignPanel {
     };
 
     const row = (label, ...children) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...children);
+    const crop = src && reach.iLo >= 0 && src.length > 1 ? this._cropBar(c, p, src, reach, residuesText, ranges) : null;
     const positionRow = row('Position', position);
     const restRow = row('Rest', rest);
     const betweenRow = el('div', { class: 'rfd4p-pop-row', title: 'The residues between the ranges are free; a length makes them new residues, each design picking one length' },
@@ -1128,6 +1160,7 @@ export class DesignPanel {
       this._popHead(this._pieceText(c, p)),
       // The ranges first: narrowing them is how a loaded structure is cut to the part that matters.
       row('Residues', el('span', { class: 'rfd4p-pop-inline' }, el('span', { text: c.id }), residuesText)),
+      crop,
       restRow,
       betweenRow,
       row('Structure', structure),
@@ -1239,6 +1272,70 @@ export class DesignPanel {
     edits.push({ condition: 'sequence', atom_indices: atoms, enabled: sequence === 'fixed' });
     edits.push({ condition: 'index', atom_indices: atoms, enabled: position === 'anywhere' });
     return edits;
+  }
+
+  /**
+   * The chain as it was loaded, as a bar: this piece's ranges on it, the chain's other residues muted, and a handle at
+   * each end. Dragging a handle in crops the piece, out brings residues back (up to its neighbours); it edits the
+   * Residues field, so Rest, Between and Apply work as typed.
+   */
+  _cropBar(c, p, src, reach, field, ranges) {
+    const n = src.length;
+    const pct = (k) => `${(k / n) * 100}%`;
+    const first = (num) => src.findIndex((r) => r.num === num);
+    const last = (num) => src.findLastIndex((r) => r.num === num);
+    const track = el('div', { class: 'rfd4p-crop-track' });
+    const bar = el('div', { class: 'rfd4p-crop', title: `Drag the ends to crop, or to bring back residues (${c.id}${src[0].num}–${src.at(-1).num} as loaded)` }, track);
+    const block = (cls, i0, i1) => el('span', { class: cls, style: `left:${pct(i0)};width:${pct(i1 - i0 + 1)}` });
+    const handles = ['lo', 'hi'].map((side) => el('span', { class: `rfd4p-crop-handle rfd4p-crop-${side}`, role: 'slider',
+      'aria-label': side === 'lo' ? 'First residue' : 'Last residue' }));
+    const draw = () => {
+      const rs = ranges() ?? [[p.start, p.end]];
+      const own = new Set(p.atomIndices.length ? src.filter((r) => r.num >= p.start && r.num <= p.end).map((r) => r.num) : []);
+      const parts = [];
+      // The chain's other residues, in runs.
+      let run = null;
+      src.forEach((r, k) => {
+        const other = reach.present?.has(r.num) && !own.has(r.num);
+        if (other) { if (run) run[1] = k; else run = [k, k]; }
+        if ((!other || k === n - 1) && run) { parts.push(block('rfd4p-crop-other', ...run)); run = null; }
+      });
+      for (const [x, y] of rs) parts.push(block('rfd4p-crop-sel', first(x), last(y)));
+      track.replaceChildren(...parts);
+      handles[0].style.left = pct(first(rs[0][0]));
+      handles[1].style.left = pct(last(rs.at(-1)[1]) + 1);
+      handles[0].setAttribute('aria-valuenow', String(rs[0][0]));
+      handles[1].setAttribute('aria-valuenow', String(rs.at(-1)[1]));
+    };
+    const set = (side, k) => {
+      const rs = (ranges() ?? [[p.start, p.end]]).map((r) => r.slice());
+      if (side === 'lo') rs[0][0] = src[Math.max(reach.iLo, Math.min(k, last(rs[0][1])))].num;
+      else rs.at(-1)[1] = src[Math.min(reach.iHi, Math.max(k, first(rs.at(-1)[0])))].num;
+      field.value = rs.map(([x, y]) => (x === y ? `${x}` : `${x}–${y}`)).join(', ');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    handles.forEach((h, j) => {
+      const side = j ? 'hi' : 'lo';
+      h.addEventListener('pointerdown', (ev) => {
+        if (ev.button !== 0) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        try { h.setPointerCapture(ev.pointerId); } catch { /* not an active pointer */ }
+        const move = (e) => {
+          const r = track.getBoundingClientRect();
+          const f = (e.clientX - r.left) / r.width;
+          set(side, side === 'lo' ? Math.round(f * n) : Math.round(f * n) - 1);
+        };
+        const up = () => { h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up); };
+        h.addEventListener('pointermove', move);
+        h.addEventListener('pointerup', up);
+        h.addEventListener('pointercancel', up);
+      });
+    });
+    bar.append(...handles);
+    field.addEventListener('input', draw);
+    draw();
+    return bar;
   }
 
   /**
@@ -1465,9 +1562,26 @@ export class DesignPanel {
         if (hot[i]) residues.set(`${atoms.chain_id[i]}|${residue}`, { chain: String(atoms.chain_id[i]), residue });
       }
     }
+    // Residues the model rebuilds (no atom of theirs held) are faded in the input: what stays is what is solid.
+    const free = new Map();
+    const crd = atoms?.annotations?.condition_coordinate_1_atom;
+    // Not with partial diffusion: then the free residues' coordinates are where the model starts.
+    if (atoms && !live && (!shown || shown === this._inputDoc()) && !this.app.els.partialDiffusion?.checked) {
+      const held = new Set();
+      const key = (i) => `${atoms.chain_id[i]}|${Number(atoms.auth_seq_id?.[i] ?? atoms.res_id[i])}`;
+      // Held in place, or rigid (a body of its own: kept as it is, moved as one).
+      const grp = atoms.annotations?.condition_CoordinateGroup_1_atom;
+      for (let i = 0; i < atoms.nAtoms; i += 1) if (Number.isFinite(crd?.[i]?.[0]) || Number(grp?.[i]) > 0) held.add(key(i));
+      for (let i = 0; i < atoms.nAtoms; i += 1) {
+        const k = key(i);
+        if (held.has(k) || free.has(k) || /^\d+-\d+$/.test(String(atoms.res_name[i]))) continue;
+        free.set(k, { chain: String(atoms.chain_id[i]), residue: Number(atoms.auth_seq_id?.[i] ?? atoms.res_id[i]) });
+      }
+    }
     // Sent on every render rather than once: Studio ignores it until its viewer has started.
     this.hotspotQueue = (this.hotspotQueue ?? Promise.resolve())
       .then(() => window.atomworksStudio.setHighlight('hotspots', residues.size ? [...residues.values()] : null, { color: HOTSPOT_COLOR }))
+      .then(() => window.atomworksStudio.setHighlight('free', free.size ? [...free.values()] : null, { transparency: FREE_TRANSPARENCY }))
       .catch((err) => console.warn('Hotspot highlight failed:', err));
   }
 

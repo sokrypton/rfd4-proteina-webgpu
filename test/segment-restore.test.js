@@ -58,3 +58,31 @@ test('a segment with other neighbours, or never residues, is not restorable', ()
   assert.equal(doc.segmentOrigin(segs[0]), null);
   assert.equal(doc.segmentOrigin(segs[1])?.count, 2);
 });
+
+test('cropped residues come back from the chain as loaded, either end', () => {
+  const doc = open();
+  doc.deleteAtoms(atomsOf(doc, (r) => r <= 3 || r >= 10));
+  assert.deepEqual(numbers(doc), [4, 5, 6, 7, 8, 9]);
+  assert.equal(doc.sourceResidues('A')?.length, 12);
+  const steps = doc.undoStack.length;
+  doc.restoreFromSource('A', [2, 3, 10]);
+  assert.deepEqual(numbers(doc), [2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.ok(peptide(doc, 2, 3) && peptide(doc, 3, 4) && peptide(doc, 9, 10), 'bonded to their neighbours');
+  const held = (i) => Number.isFinite(doc.atoms.annotations.condition_coordinate_1_atom?.[i]?.[0]);
+  assert.ok(atomsOf(doc, (r) => r === 2 || r === 10).every(held), 'as loaded: fixed');
+  assert.equal(doc.undoStack.length, steps + 1);
+});
+
+test('a chain added to another document keeps its source under its new name', () => {
+  const doc = open();
+  const other = open();
+  other.deleteAtoms(atomsOf(other, (r) => r > 6));
+  doc.combine([other]);
+  const chains = [...new Set(Array.from(doc.atoms.chain_id, String))];
+  assert.equal(chains.length, 2);
+  assert.equal(doc.sourceResidues(chains[1])?.length, 12);
+  const b = chains[1];
+  doc.restoreFromSource(b, [7, 8]);
+  const nums = [...new Set(Array.from({ length: doc.atoms.nAtoms }, (_, i) => i).filter((i) => doc.atoms.chain_id[i] === b).map((i) => Number(doc.atoms.res_id[i])))];
+  assert.deepEqual(nums, [1, 2, 3, 4, 5, 6, 7, 8]);
+});
