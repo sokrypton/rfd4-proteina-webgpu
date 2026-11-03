@@ -435,7 +435,11 @@ export class DesignPanel {
     window.addEventListener('atomworks-studio', (ev) => {
       if (ev.detail?.type !== 'selection') return;
       this.selectionCount = ev.detail?.count ?? 0;
-      queueMicrotask(() => this._renderPop());
+      queueMicrotask(() => {
+        // A row's own pick has its popup open already.
+        if (this.cardPicking) { this.cardPicking = false; this.pop.hidden = true; return; }
+        this._renderPop();
+      });
     });
     // Starting from the input diversifies what is designed; with nothing designed yet, that is all the protein.
     document.getElementById('partial-diffusion')?.addEventListener('change', (ev) => {
@@ -652,12 +656,28 @@ export class DesignPanel {
 
   _pieceCard(c, p, readonly, remove) {
     return this._card(this._pieceText(c, p), this._status(p), `rfd4p-sub-${p.kind === 'kept' ? 'kept' : 'designed'}`, readonly,
-      (anchor) => this._openPop(anchor, () => (p.kind === 'new' ? this._newPop(c, p) : this._piecePop(c, p))), remove);
+      (anchor) => {
+        if (p.kind !== 'new') this._selectFromCard(p.atomIndices);
+        this._openPop(anchor, () => (p.kind === 'new' ? this._newPop(c, p) : this._piecePop(c, p)));
+      }, remove);
+  }
+
+  /** A row's residues selected in the viewer and the sequence too, while its popup is open (not the viewer's popup). */
+  _selectFromCard(atoms) {
+    if (typeof window.atomworksStudio?.setSelection !== 'function' || !atoms?.length || this.building) return;
+    this.cardPicking = true;
+    this.cardSelected = true;
+    clearTimeout(this.cardPickTimer);
+    this.cardPickTimer = setTimeout(() => { this.cardPicking = false; }, 400);
+    window.atomworksStudio.setSelection(atoms);
   }
 
   _ligandCard(c, l, readonly, remove) {
     const status = l.pose === 'fixed' ? 'fixed' : l.pose === 'predicted' ? 'free' : `${l.fixedAtoms} of ${l.atoms} atoms fixed`;
-    return this._card(l.name, status, 'rfd4p-sub-ligand', readonly, (anchor) => this._openPop(anchor, () => this._ligandPop(c, l)), remove);
+    return this._card(l.name, status, 'rfd4p-sub-ligand', readonly, (anchor) => {
+      this._selectFromCard(l.atomIndices);
+      this._openPop(anchor, () => this._ligandPop(c, l));
+    }, remove);
   }
 
   /** Where a chain's coordinates come from, as the page knows it; null for chains made here (+ seq, + lig). */
@@ -715,6 +735,11 @@ export class DesignPanel {
 
   _closePop() {
     if (this.piecePop) this.piecePop.hidden = true;
+    // A row's residues were selected only while its popup was open.
+    if (this.cardSelected) {
+      this.cardSelected = false;
+      if (!this.building) window.atomworksStudio?.setSelection?.([]);
+    }
   }
 
   _popHead(title) {
@@ -726,6 +751,54 @@ export class DesignPanel {
       el('span', { class: 'rfd4p-pop-spacer' }),
       el('button', { type: 'button', class: 'secondary compact', text: 'Cancel', onclick: () => this._closePop() }),
       el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: () => { this.applying = Promise.resolve(apply()); } }));
+  }
+
+  /**
+   * The quick row of a residue popup: Hotspot, Fixed, Designed (and Remove for a viewer or sequence pick), each done at
+   * once; the details are under More. `hits` are the pieces touched ({p, atoms, now}); ligands alone get a pose.
+   */
+  _quickRow({ hits = [], hotAtoms = [], ligandAtoms = [], removeAtoms = null, done }) {
+    const a = this._inputDoc()?.atoms;
+    const ann = a?.annotations ?? {};
+    const btn = (text, on, fn, title = '') => el('button', {
+      type: 'button', class: `secondary compact${on ? ' rfd4p-on' : ''}`, text, title, 'aria-pressed': String(Boolean(on)),
+      onclick: async () => { done(); this.applying = Promise.resolve(fn()); await this.applying; },
+    });
+    const items = [];
+    if (hotAtoms.length) {
+      const allHot = hotAtoms.every((i) => ann.condition_hotspot_1_atom?.[i]);
+      items.push(btn('Hotspot', allHot, () => this._batch([{ condition: 'hotspot', atom_indices: hotAtoms, enabled: !allHot }]),
+        allHot ? 'Hotspots now: click to unmark' : 'Residues a binder should touch'));
+    }
+    if (hits.length) {
+      const is = (h, want) => h.now.structure === want.structure && h.now.sequence === want.sequence && h.now.atoms === 'all' && h.now.position === 'fixed';
+      const fixed = { structure: 'fixed', atoms: 'all', sequence: 'fixed', position: 'fixed' };
+      const designed = { structure: 'designed', atoms: 'all', sequence: 'designed', position: 'fixed' };
+      const set = (want) => () => {
+        const parts = hits.filter((h) => !is(h, want)).map((h) => ({ p: h.p, atoms: h.atoms, want }));
+        return parts.length ? this._applyPieces(parts) : true;
+      };
+      items.push(btn('Fixed', hits.every((h) => is(h, fixed)), set(fixed), 'Kept as they are: structure and sequence'));
+      items.push(btn('Designed', hits.every((h) => is(h, designed)), set(designed), 'The model builds them, same length'));
+    } else if (ligandAtoms.length) {
+      const crd = ann.condition_coordinate_1_atom;
+      const held = ligandAtoms.filter((i) => Array.isArray(crd?.[i]) && Number.isFinite(crd[i][0])).length;
+      const pose = (fix) => () => this._batch([{ condition: 'coordinate', atom_indices: ligandAtoms, enabled: fix }]);
+      items.push(btn('Fixed', held === ligandAtoms.length, pose(true), 'Kept where it is'));
+      items.push(btn('Free', held === 0, pose(false), 'The model places it'));
+    }
+    if (removeAtoms?.length) {
+      items.push(el('button', {
+        type: 'button', class: 'danger compact', text: 'Remove',
+        onclick: () => { done(); void this._mutate('/delete', { atom_indices: removeAtoms }); },
+      }));
+    }
+    return el('div', { class: 'rfd4p-pop-quick' }, ...items);
+  }
+
+  /** The rest of a popup, folded: opened by More. */
+  _moreFold(...children) {
+    return el('details', { class: 'rfd4p-pop-more' }, el('summary', { text: 'More' }), el('div', { class: 'rfd4p-pop-more-body' }, ...children.filter(Boolean)));
   }
 
   /** Existing residues: which of them, then three properties (structure, sequence, position), each fixed or designed. */
@@ -881,18 +954,20 @@ export class DesignPanel {
     const positionRow = row('Position', position);
     sync();
     return [
-      this._popHead(`Chain ${c.id}`),
-      row('Residues', el('span', { class: 'rfd4p-pop-inline', title: 'Narrow the range to change only some of these residues' },
-        el('span', { text: c.id }), from, el('span', { text: '–' }), to)),
-      row('Structure', structure),
-      atomsRow,
-      row('Sequence', sequence),
-      positionRow,
-      lengthRow,
-      row('Hotspots', hot),
-      row('Keep only', keepOnly),
-      note,
-      this._popActions(apply),
+      this._popHead(this._pieceText(c, p)),
+      this._quickRow({ hits: [{ p, atoms: p.atomIndices, now }], hotAtoms: p.atomIndices, done: () => this._closePop() }),
+      this._moreFold(
+        row('Residues', el('span', { class: 'rfd4p-pop-inline', title: 'Narrow the range to change only some of these residues' },
+          el('span', { text: c.id }), from, el('span', { text: '–' }), to)),
+        row('Structure', structure),
+        atomsRow,
+        row('Sequence', sequence),
+        positionRow,
+        lengthRow,
+        row('Hotspots', hot),
+        row('Keep only', keepOnly),
+        note,
+        this._popActions(apply)),
     ];
   }
 
@@ -1244,9 +1319,9 @@ export class DesignPanel {
     const row = (label, ...children) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...children);
     const rows = [];
     const title = [parts.join(', '), ligNames.join(', ')].filter(Boolean).join(' · ');
-    rows.push(el('div', { class: 'rfd4p-pop-title' },
+    const head = el('div', { class: 'rfd4p-pop-title' },
       el('strong', { text: title || `${sel.length} atoms` }),
-      nRes ? el('span', { class: 'muted', text: `${nRes} residue${nRes === 1 ? '' : 's'}` }) : null));
+      nRes ? el('span', { class: 'muted', text: `${nRes} residue${nRes === 1 ? '' : 's'}` }) : null);
     const done = () => { pop.hidden = true; };
     let apply = async () => {};
     let keepOnly = null;
@@ -1342,15 +1417,13 @@ export class DesignPanel {
       };
     }
     rows.push(el('div', { class: 'rfd4p-pop-actions' },
-      el('button', {
-        type: 'button', class: 'danger compact', text: 'Delete',
-        onclick: () => { done(); void this._mutate('/delete', { atom_indices: residues }); },
-      }),
       keepOnly,
       el('span', { class: 'rfd4p-pop-spacer' }),
       el('button', { type: 'button', class: 'secondary compact', text: 'Cancel', onclick: () => document.getElementById('clear-selection')?.click() }),
       el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: () => { this.applying = Promise.resolve(apply()); } })));
-    pop.replaceChildren(...rows);
+    pop.replaceChildren(head,
+      this._quickRow({ hits, hotAtoms: polymerAtoms, ligandAtoms, removeAtoms: residues, done }),
+      this._moreFold(...rows));
     pop.hidden = false;
     // Next to the pointer that made the selection, kept on screen.
     const p = this.lastPointer ?? (() => {
