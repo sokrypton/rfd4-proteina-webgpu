@@ -120,3 +120,38 @@ test('partialTemplates: a mostly held chain is templated on its held residues, a
   assert.deepEqual(partialTemplates(design.map((a) => ({ ...a, crd: [0, 0, 0] })), ['H']), []);
 });
 
+
+test('a refold is scored as upstream\'s pass criteria read it', async () => {
+  const { polymerChains, refoldMetrics, passes, criteriaKind, rankKey } = await import('../web/refold-view.js');
+  const atom = (k, chain, res, het = false) => `${het ? 'HETATM' : 'ATOM  '}${String(k).padStart(5)}  CA  ALA ${chain}${String(res).padStart(4)}    `
+    + '   0.000   0.000   0.000  1.00  0.00           C';
+  // binder B (2 residues) on target A (3 residues), a ligand after
+  const pdb = [atom(1, 'B', 1), atom(2, 'B', 2), atom(3, 'A', 1), atom(4, 'A', 2), atom(5, 'A', 3), atom(6, 'L', 1, true)].join('\n');
+  assert.deepEqual(polymerChains(pdb), [{ letter: 'B', residues: 2 }, { letter: 'A', residues: 3 }]);
+  const n = 6;
+  const pae = new Float32Array(n * n).fill(20);
+  pae[0 * n + 3] = 1.2; // binder residue 1 to target residue 2
+  pae[4 * n + 1] = 0.9; // target residue 3 to binder residue 2
+  pae[1 * n + 5] = 0.1; // to the ligand: not an interface between chains of protein
+  const result = {
+    rmsd: 0.8, comparable: true,
+    deviations: [{ chain: 'B', distance: 1 }, { chain: 'B', distance: 3 }, { chain: 'A', distance: 9 }],
+    confidence: { meanPlddt: 90, ptm: 0.8, iptm: 0.7, chainPtm: { 1: 0.85, 2: 0.9 }, predictedAlignedError: pae },
+  };
+  const m = refoldMetrics(result, ['B'], pdb);
+  assert.equal(m.minIpae.toFixed(2), '0.90');
+  assert.equal(m.placedRmsd.toFixed(3), Math.sqrt(5).toFixed(3));
+  assert.equal(m.chainPtm, 0.85);
+  assert.equal(passes(m, 'binder'), true, 'min iPAE 0.9, pTM 0.85, placed 2.24 Å: all within');
+  assert.equal(passes({ ...m, placedRmsd: 3.0 }, 'binder'), false, 'a binder that moved on its target fails');
+  assert.equal(passes(m, 'antibody'), false, 'antibodies are held to 2.0 Å');
+  assert.equal(passes({ ...m, minIpae: NaN }, 'binder'), null, 'a missing number is no verdict');
+  assert.equal(criteriaKind('binder'), 'binder');
+  assert.equal(criteriaKind('unconditional', { designedAll: true }), 'monomer');
+  assert.equal(criteriaKind('motif', { designedAll: true }), null);
+  assert.deepEqual(rankKey('antibody'), { key: 'minIpae', dir: 1 });
+  // a monomer has no interface
+  const mono = refoldMetrics({ rmsd: 1.1, deviations: [], confidence: { predictedAlignedError: new Float32Array(4) } }, ['A'], atom(1, 'A', 1) + '\n' + atom(2, 'A', 2));
+  assert.ok(Number.isNaN(mono.minIpae));
+  assert.equal(passes(mono, 'monomer'), true);
+});

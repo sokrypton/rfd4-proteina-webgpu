@@ -230,3 +230,111 @@ export function describeRefold(model, result, chains, partial = []) {
   for (const p of partial) parts.push(`chain ${p.chain} templated on ${p.residues.length}/${p.of} kept residues`);
   return `${name} refold: ${parts.join(' · ') || 'done'}`;
 }
+
+const WATER = new Set(['HOH', 'WAT', 'DOD']);
+
+/**
+ * The polymer chains of a PDB in file order, each with its residue count, as LocalFold reads them for a refold
+ * (`chainsOf`, `foldInputFromPdb`): a chain is a polymer if it has any ATOM record, water left out. A refold's tokens
+ * are these residues first, one each, in this order, then the ligands.
+ * @returns {{letter: string, residues: number}[]}
+ */
+export function polymerChains(pdb) {
+  const chains = new Map();
+  let previous = null;
+  for (const line of String(pdb ?? '').split('\n')) {
+    if (!line.startsWith('ATOM  ') && !line.startsWith('HETATM')) continue;
+    if (WATER.has(line.slice(17, 20).trim())) continue;
+    const letter = line[21];
+    if (!chains.has(letter)) chains.set(letter, { letter, polymer: false, residues: 0 });
+    const chain = chains.get(letter);
+    if (line.startsWith('ATOM  ')) chain.polymer = true;
+    const key = line.slice(21, 27);
+    if (key !== previous) { chain.residues += 1; previous = key; }
+  }
+  return [...chains.values()].filter((c) => c.polymer).map(({ letter, residues }) => ({ letter, residues }));
+}
+
+/**
+ * A refold's numbers as upstream's pass criteria read them (`configs/metrics/pass_criteria`):
+ * - `rmsd`: the designed chains' shape, fitted on themselves (`refolded_backbone_rmsd`)
+ * - `placedRmsd`: the designed chains after fitting the refold on everything else, so where a binder sits on its
+ *   target counts (`refolded_target_aligned_binder_rmsd`); the refold's per-residue `deviations` are measured so
+ * - `chainPtm`: the designed chain's own pTM (`ptm_coi`), the lowest when several were designed
+ * - `minIpae`: the lowest predicted aligned error between a designed residue and any other chain's (`min_ipae_coi`)
+ * - `plddt`, `ptm`, `iptm`: the refold model's confidence
+ * NaN where a number does not apply (no interface, no confidence head).
+ */
+export function refoldMetrics(result, designed, designPdb) {
+  const c = result?.confidence ?? {};
+  const mine = new Set(designed ?? []);
+  const dev = (result?.deviations ?? []).filter((d) => mine.has(d.chain) && Number.isFinite(d.distance));
+  const placedRmsd = dev.length ? Math.sqrt(dev.reduce((s, d) => s + d.distance ** 2, 0) / dev.length) : NaN;
+  const chains = polymerChains(designPdb);
+  const tokenChain = chains.flatMap((ch) => new Array(ch.residues).fill(ch.letter));
+  // chainPtm is keyed by the fold's chain number: polymers first, in this order, from 1.
+  const ptms = chains.map((ch, k) => (mine.has(ch.letter) ? Number(c.chainPtm?.[k + 1]) : NaN)).filter(Number.isFinite);
+  let minIpae = NaN;
+  const pae = c.predictedAlignedError;
+  const n = pae ? Math.round(Math.sqrt(pae.length)) : 0;
+  if (n && n * n === pae.length && tokenChain.length <= n && chains.some((ch) => !mine.has(ch.letter))) {
+    let best = Infinity;
+    for (let i = 0; i < tokenChain.length; i += 1) {
+      if (!mine.has(tokenChain[i])) continue;
+      for (let j = 0; j < tokenChain.length; j += 1) {
+        if (mine.has(tokenChain[j])) continue;
+        best = Math.min(best, pae[i * n + j], pae[j * n + i]);
+      }
+    }
+    if (Number.isFinite(best)) minIpae = best;
+  }
+  return {
+    rmsd: result?.comparable === false ? NaN : Number(result?.rmsd ?? NaN),
+    placedRmsd,
+    plddt: Number(c.meanPlddt ?? NaN),
+    ptm: Number(c.ptm ?? NaN),
+    iptm: Number(c.iptm ?? NaN),
+    chainPtm: ptms.length ? Math.min(...ptms) : NaN,
+    minIpae,
+  };
+}
+
+/**
+ * Upstream's pass criteria for the jobs whose every number a refold here measures. Motif, enzyme and small-molecule
+ * criteria also need motif and ligand RMSDs this page does not compute, so those jobs show numbers but no verdict.
+ */
+export const PASS_CRITERIA = {
+  // unconditional: refolded backbone RMSD ≤ 1.5 Å
+  monomer: [{ key: 'rmsd', max: 1.5 }],
+  // ppi: pTM of the binder ≥ 80, min iPAE ≤ 1.5, binder RMSD with the target aligned ≤ 2.5 Å
+  binder: [{ key: 'chainPtm', min: 0.8 }, { key: 'minIpae', max: 1.5 }, { key: 'placedRmsd', max: 2.5 }],
+  // antibody: min iPAE ≤ 2.0, binder RMSD with the target aligned ≤ 2.0 Å
+  antibody: [{ key: 'minIpae', max: 2.0 }, { key: 'placedRmsd', max: 2.0 }],
+};
+
+/** Which criteria a job is judged by: its task, and whether everything the refold folds was designed. */
+export function criteriaKind(taskKey, { designedAll = false, hasLigand = false } = {}) {
+  if (taskKey === 'binder') return 'binder';
+  if (taskKey === 'antibody') return 'antibody';
+  if (designedAll && !hasLigand && !['motif', 'enzyme', 'sm_binder'].includes(taskKey)) return 'monomer';
+  return null;
+}
+
+/** Whether `metrics` meet the criteria of `kind`: true, false, or null (no criteria, or a number missing). */
+export function passes(metrics, kind) {
+  const rules = PASS_CRITERIA[kind];
+  if (!rules || !metrics) return null;
+  for (const { key, min, max } of rules) {
+    const v = metrics[key];
+    if (!Number.isFinite(v)) return null;
+    if ((min != null && v < min) || (max != null && v > max)) return false;
+  }
+  return true;
+}
+
+/** The number a job's designs are best ranked by, and which way: upstream's first criterion. */
+export function rankKey(kind) {
+  if (kind === 'binder' || kind === 'antibody') return { key: 'minIpae', dir: 1 };
+  if (kind === 'monomer') return { key: 'rmsd', dir: 1 };
+  return { key: 'plddt', dir: -1 };
+}

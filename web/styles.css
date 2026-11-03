@@ -1014,3 +1014,45 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 }
 .rfd4p-piece-pop .rfd4p-pop-x:hover { color: var(--text, #f1f1f2); }
 .rfd4p-starting #design-results, .rfd4p-starting #generation-status { display: none; }
+
+/* The Designs table (web/app.js _renderDesigns): one row a design, its refold's numbers, sortable by column. */
+.rfd4p-results-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.rfd4p-results-head > strong { font-size: 12.5px; }
+.rfd4p-results-head .rfd4p-refold-row { flex: 0 1 auto; }
+.rfd4p-results-head .rfd4p-refold-model { width: 116px; flex: none; }
+.rfd4p-designs { display: grid; gap: 1px; font-size: 11.5px; }
+.rfd4p-design-head,
+.rfd4p-design-row { display: grid; align-items: center; column-gap: 4px; padding: 0 4px; }
+.rfd4p-design-head { color: var(--text-muted, #b1b3b9); font-size: 10.5px; }
+#rfd4p-studio-card .rfd4p-design-sort {
+  min-height: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: right; cursor: pointer;
+}
+#rfd4p-studio-card .rfd4p-design-sort.is-sorted { color: var(--text, #ededef); }
+.rfd4p-design-row {
+  position: relative; min-height: 26px; margin: 0; border: 1px solid transparent; border-radius: 4px; cursor: pointer;
+}
+.rfd4p-design-row:hover { background: var(--surface-hover, rgba(255, 255, 255, 0.05)); }
+/* Selected: the outline every view uses for a selection. */
+.rfd4p-design-row:has(input:checked) { border-color: var(--text, #ededef); }
+.rfd4p-design-row input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.rfd4p-design-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.rfd4p-design-mark { color: var(--success, #45b99a); font-weight: 700; }
+.rfd4p-design-num { text-align: right; font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; }
+.rfd4p-design-state { color: var(--text-muted, #b1b3b9); text-align: right; font-style: italic; }
+.rfd4p-design-fail .rfd4p-design-name,
+.rfd4p-design-fail .rfd4p-design-num { opacity: 0.45; }
+.rfd4p-design-actions { display: flex; justify-content: flex-end; gap: 2px; }
+#rfd4p-studio-card .rfd4p-design-act {
+  min-height: 0; padding: 0 3px; border: 0; background: none; color: var(--text-muted, #b1b3b9); font-size: 12px; cursor: pointer;
+}
+#rfd4p-studio-card .rfd4p-design-act:hover:not(:disabled) { color: var(--text, #ededef); }
+.rfd4p-run > summary { margin: 4px 0 2px; font-size: 11px; color: var(--text-muted, #b1b3b9); cursor: pointer; }
+.rfd4p-designs-busy .rfd4p-design-row,
+.rfd4p-designs-busy .rfd4p-design-sort { pointer-events: none; opacity: 0.6; }
+
+/* A run's progress fills its button (Stop, while it runs). */
+#rfd4p-studio-card .rfd4p-generate-btn.rfd4p-running {
+  background: linear-gradient(90deg, var(--accent-soft, #26354c) var(--rfd4p-progress, 0%),
+    var(--surface-recessed, #191a1c) var(--rfd4p-progress, 0%));
+  font-variant-numeric: tabular-nums;
+}

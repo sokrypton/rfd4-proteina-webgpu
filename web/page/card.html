@@ -109,23 +109,29 @@
             </button>
             </div>
 
+            <div id="generation-status" class="rfd4p-status-box" hidden>
+                <p id="rfd4p-status-message" class="inline-feedback muted" aria-live="polite"></p>
+                <div id="rfd4p-model-load" class="rfd4p-model-load" hidden>
+                    <span id="rfd4p-model-load-text"></span>
+                </div>
+                <progress id="rfd4p-progress" class="rfd4p-progress" max="1" value="0" data-state="idle" hidden></progress>
+            </div>
+
+            <!-- Every design of the runs on this input, one row each with its refold's numbers (web/app.js _renderDesigns). -->
             <div id="design-results" class="rfd4p-results-box" hidden>
-                <fieldset class="representation-mode rfd4p-view-group" aria-label="View">
-                    <legend>View</legend>
-                    <div id="design-view-radios" class="rfd4p-view-radios" role="radiogroup" aria-label="View"></div>
-                </fieldset>
-                <div id="rfd4p-refold" class="rfd4p-refold" hidden>
-                    <div class="rfd4p-refold-row">
-                        <label class="rfd4p-refold-label" for="rfd4p-refold-model">Refold with</label>
-                        <select id="rfd4p-refold-model" class="rfd4p-refold-model">
+                <div class="rfd4p-results-head">
+                    <strong>Designs</strong>
+                    <div id="rfd4p-refold" class="rfd4p-refold-row" hidden>
+                        <select id="rfd4p-refold-model" class="rfd4p-refold-model" aria-label="Refold with">
                             <option value="af3" selected>AlphaFold 3</option>
                             <option value="openbind0">OpenBind-0</option>
                         </select>
                         <button id="rfd4p-refold-btn" class="secondary compact" type="button"
-                                title="Fold this design's sequence again with a structure prediction model and overlay the result">Refold</button>
+                                title="Fold each design's sequence again with a structure prediction model and score it">Refold all</button>
                     </div>
-                    <p id="rfd4p-refold-result" class="rfd4p-refold-result" aria-live="polite" hidden></p>
                 </div>
+                <div id="design-view-radios" class="rfd4p-designs" role="radiogroup" aria-label="Designs"></div>
+                <p id="rfd4p-refold-result" class="rfd4p-refold-result" aria-live="polite" hidden></p>
                 <dialog id="rfd4p-refold-terms" class="rfd4p-refold-terms" aria-labelledby="rfd4p-refold-terms-title">
                     <form method="dialog">
                         <h2 id="rfd4p-refold-terms-title">AlphaFold 3 model parameters</h2>
@@ -145,17 +151,8 @@
                     </form>
                 </dialog>
                 <div class="button-row" id="downloads" hidden>
-                    <button id="download-cif-btn" class="secondary compact" type="button" hidden>Download CIF</button>
-                    <button id="download-all-btn" class="secondary compact" type="button" title="Input, every design with its trajectory, every refold, and a summary">Save results (.zip)</button>
+                    <button id="download-all-btn" class="secondary compact" type="button" title="Input, every design with its trajectory, every refold, and a summary table">Save all (.zip)</button>
                 </div>
-            </div>
-
-            <div id="generation-status" class="rfd4p-status-box" hidden>
-                <p id="rfd4p-status-message" class="inline-feedback muted" aria-live="polite"></p>
-                <div id="rfd4p-model-load" class="rfd4p-model-load" hidden>
-                    <span id="rfd4p-model-load-text"></span>
-                </div>
-                <progress id="rfd4p-progress" class="rfd4p-progress" max="1" value="0" data-state="idle" hidden></progress>
             </div>
 
             <label class="checkbox rfd4p-advanced-toggle" title="Show AtomWorks Studio's full editor: conditions, bonds, analysis, measurements, query bar">

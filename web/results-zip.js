@@ -35,9 +35,13 @@ function refoldSummary(r) {
     model: r.model,
     model_name: REFOLD_MODELS[r.model] ?? r.model,
     rmsd_designed_chain: round(r.rmsd, 3),
+    rmsd_on_target: round(r.metrics?.placedRmsd, 3),
     plddt: round(c.meanPlddt, 2),
     ptm: round(c.ptm, 3),
     iptm: round(c.iptm, 3),
+    designed_chain_ptm: round(r.metrics?.chainPtm, 3),
+    min_ipae: round(r.metrics?.minIpae, 3),
+    passes: r.pass ?? null,
     templated_chains: r.templated ?? [],
     partial_templates: (r.partial ?? []).map((p) => ({ chain: p.chain, residues: p.residues })),
     description: r.text ?? null,
@@ -100,15 +104,17 @@ export function resultsFiles({ input, designs, generatedAt = new Date().toISOStr
     if (refolds.length === 0) rows.push(base);
     for (const r of refolds) {
       rows.push({
-        ...base, refold_model: r.model, rmsd_designed_chain: r.rmsd_designed_chain, plddt: r.plddt, ptm: r.ptm,
-        iptm: r.iptm, templated_chains: r.templated_chains,
+        ...base, refold_model: r.model, rmsd_designed_chain: r.rmsd_designed_chain, rmsd_on_target: r.rmsd_on_target,
+        plddt: r.plddt, ptm: r.ptm, iptm: r.iptm, designed_chain_ptm: r.designed_chain_ptm, min_ipae: r.min_ipae,
+        passes: r.passes, templated_chains: r.templated_chains,
         partial_templates: r.partial_templates.map((p) => `${p.chain}:${p.residues}`),
       });
     }
   }
   files.push({ name: 'summary.json', text: `${JSON.stringify(summary, null, 2)}\n` });
   const columns = ['design', 'seed', 'steps_run', 'designed_chains', 'sequences', 'refold_model', 'rmsd_designed_chain',
-    'plddt', 'ptm', 'iptm', 'templated_chains', 'partial_templates'];
+    'rmsd_on_target', 'plddt', 'ptm', 'iptm', 'designed_chain_ptm', 'min_ipae', 'passes', 'templated_chains',
+    'partial_templates'];
   files.push({
     name: 'summary.csv',
     text: `${[columns.join(','), ...rows.map((r) => columns.map((c) => csvCell(r[c])).join(','))].join('\n')}\n`,
@@ -129,10 +135,14 @@ function readme({ hasInput, usesAf3, page, generatedAt }) {
     'design-N-refold-<model>.cif   a refold of design N\'s sequence, in the design\'s frame;',
     '                              the B-factor column is the model\'s pLDDT',
     'summary.json / summary.csv    per design: seed, steps, designed chains, sequences; per refold: model,',
-    '                              RMSD of the designed chain, pLDDT, pTM, ipTM, templated chains',
+    '                              RMSDs, pLDDT, pTM, ipTM, min iPAE, whether it passes, templated chains',
     '',
-    'The refold RMSD compares the designed chain\'s shape after fitting it on itself; it does not measure where a',
-    'binder sits on its target. ipTM is the refold model\'s own confidence in the interface.',
+    'rmsd_designed_chain compares the designed chain\'s shape, fitted on itself. rmsd_on_target fits the refold on',
+    'every other chain first, so where a binder sits on its target counts. min_ipae is the lowest predicted aligned',
+    'error between a designed residue and another chain\'s. passes applies the model\'s own pass criteria',
+    '(RFD4-Proteina configs/metrics/pass_criteria): monomers RMSD <= 1.5 A; binders designed-chain pTM >= 0.80,',
+    'min iPAE <= 1.5, RMSD on target <= 2.5 A; antibodies min iPAE <= 2.0, RMSD on target <= 2.0 A. Empty where',
+    'no criteria apply (motifs, enzymes and small-molecule binders also need motif and ligand RMSDs not computed).',
   ];
   if (usesAf3) {
     lines.push('', 'AlphaFold 3 refolds were made with Google DeepMind\'s AlphaFold 3 parameters, which are for',
