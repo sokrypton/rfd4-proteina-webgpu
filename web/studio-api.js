@@ -1463,6 +1463,7 @@ export class StudioDoc {
     const max = Math.max(min, Math.round(Number(maximum)) || min);
     const gaps = [];
     const drop = [];
+    const runs = [];
     for (const chain of new Set(sel.map((i) => String(a.chain_id[i])))) {
       const residues = this._chainResidues(chain);
       let inRun = false;
@@ -1472,20 +1473,99 @@ export class StudioDoc {
           return;
         }
         drop.push(...r.atoms);
-        if (inRun) return;
+        if (inRun) {
+          runs.at(-1).atoms.push(...r.atoms);
+          return;
+        }
         inRun = true;
         const prev = residues.slice(0, k).reverse().find((x) => !keys.has(x.key));
         const next = residues.slice(k + 1).find((x) => !keys.has(x.key));
+        runs.push({ chain, prev: prev?.key ?? null, next: next?.key ?? null, atoms: [...r.atoms] });
         gaps.push(prev ? { chain, resId: prev.resId, before: false, min, max }
           : next ? { chain, resId: next.resId, before: true, min, max }
           : { chain, resId: null, min, max });
       });
     }
     if (!drop.length) throw new Error('select polymer residues to replace');
+    // Each run's residues are remembered (this page only), so the new residues can be turned back into them.
+    const origins = runs.map((run) => ({ chain: run.chain, prev: run.prev, next: run.next, atoms: this._sliceAtoms(run.atoms) }));
     return this.compound(() => {
       this.deleteAtoms(drop);
       this._insertGapSegments(gaps);
+      (this.segmentOrigins ??= []).push(...origins);
       return { changed: true, message: `Replaced ${keys.size} residues with ${gaps.length} new-residue segment${gaps.length === 1 ? '' : 's'}.` };
+    });
+  }
+
+  /** A copy of atoms `keep` (conditions, bonds and restraints among them included), as their own atom set. */
+  _sliceAtoms(keep) {
+    const part = Object.create(StudioDoc.prototype);
+    part.atoms = cloneAtoms(this.atoms);
+    part.undoStack = [];
+    part._compound = true;
+    const kept = new Set(keep);
+    part.deleteAtoms(Array.from({ length: part.atoms.nAtoms }, (_, i) => i).filter((i) => !kept.has(i)));
+    return part.atoms;
+  }
+
+  /** The residues new-residue segment `atomIndex` replaced, while this page remembers them and they still fit there. */
+  _segmentOrigin(atomIndex) {
+    const a = this.atoms;
+    if (!this.segmentOrigins?.length || !this._isSegmentAtom(atomIndex)) return null;
+    const chain = String(a.chain_id[atomIndex]);
+    const residues = this._chainResidues(chain, { segments: true });
+    const k = residues.findIndex((r) => r.segment && r.atoms[0] === atomIndex);
+    const near = (r) => (!r ? null : r.segment ? undefined : r.key);
+    const prev = near(residues[k - 1]);
+    const next = near(residues[k + 1]);
+    const taken = new Set(residues.filter((r) => !r.segment).map((r) => r.key));
+    for (let o = this.segmentOrigins.length - 1; o >= 0; o -= 1) {
+      const origin = this.segmentOrigins[o];
+      if (origin.chain !== chain || origin.prev !== prev || origin.next !== next) continue;
+      const b = origin.atoms;
+      const keys = [...new Set(Array.from({ length: b.nAtoms }, (_, i) => `${chain}:${b.res_id[i]}:${b.ins_code[i]}`))];
+      if (keys.some((key) => taken.has(key))) continue;
+      return { origin, keys, count: keys.length };
+    }
+    return null;
+  }
+
+  /** How many residues segment `atomIndex` replaced, and their keys ("A:41:"), or null when they are not known. */
+  segmentOrigin(atomIndex) {
+    const found = this._segmentOrigin(atomIndex);
+    return found ? { count: found.count, keys: found.keys } : null;
+  }
+
+  /**
+   * Turn new-residue segment `atomIndex` back into the residues it replaced, in its place, with the conditions they
+   * had and their coordinates (so partial diffusion can start from them again). One undo step.
+   */
+  restoreSegment(atomIndex) {
+    const found = this._segmentOrigin(atomIndex);
+    if (!found) throw new Error('these new residues did not replace residues this page remembers');
+    const chain = String(this.atoms.chain_id[atomIndex]);
+    return this.compound(() => {
+      const before = this.atoms.nAtoms;
+      const part = { atoms: cloneAtoms(found.origin.atoms) };
+      // A chain id of its own, or `combine` would rename it.
+      const temp = `__res${Date.now().toString(36)}`;
+      for (let i = 0; i < part.atoms.nAtoms; i += 1) part.atoms.chain_id[i] = temp;
+      this.combine([part]);
+      const a = this.atoms;
+      for (let i = before; i < a.nAtoms; i += 1) a.chain_id[i] = chain;
+      if (a.cathText) for (let j = 0; a.cathText.length < a.nAtoms; j += 1) a.cathText.push(part.atoms.cathText?.[j] ?? 'x.x.x.x');
+      // The residues where the segment was, the segment last (then removed).
+      const order = [];
+      for (let i = 0; i < before; i += 1) {
+        if (i === atomIndex) for (let j = before; j < a.nAtoms; j += 1) order.push(j);
+        else order.push(i);
+      }
+      order.push(atomIndex);
+      this._permuteAtoms(order);
+      this.deleteAtoms([a.nAtoms - 1]);
+      this._relinkChain(chain);
+      computeIdAndEntityAnnotations(this.atoms);
+      return { changed: true, message: `Brought back ${found.count} residue${found.count === 1 ? '' : 's'} to chain ${chain}.` };
     });
   }
 
@@ -3397,6 +3477,10 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
       }
       if (subpath === '/charges' && method === 'POST') {
         const editResult = doc.setCharge(body.atom_indices || [], { value: body.value, delta: body.delta });
+        return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
+      }
+      if (subpath === '/segments/restore' && method === 'POST') {
+        const editResult = doc.restoreSegment(body.atom_index);
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
       if (subpath === '/residues/insert' && method === 'POST') {

@@ -926,6 +926,16 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
 .rfd4p-pop-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .rfd4p-pop-label { flex: none; width: 64px; color: var(--text-muted, #b1b3b9); font-size: 11px; }
 .rfd4p-pop-inline { display: inline-flex; align-items: center; gap: 4px; }
+.rfd4p-pop-was {
+  border: 0;
+  padding: 0 2px;
+  background: none;
+  color: var(--text-muted, #9a9aa3);
+  font-size: 11px;
+  cursor: pointer;
+}
+.rfd4p-pop-was:hover { color: var(--text, #f1f1f2); text-decoration: underline; }
+.rfd4p-warning-fix { display: block; margin-top: 6px; }
 .rfd4p-piece-pop input[type="number"] { width: 58px; height: 24px; padding: 0 4px; font-size: 11.5px; }
 .rfd4p-pop-text { flex: 1; min-width: 120px; height: 24px; padding: 0 6px; font: 11.5px var(--font-mono, monospace); }
 .rfd4p-pop-note { margin: 0; font-size: 11px; color: var(--warning, #ffcb6b); }

@@ -568,10 +568,17 @@ export class DesignPanel {
     els.chainList.replaceChildren(...this._sourceGroups(spec.chains).map((g) => this._groupBlock(g, viewingDesign)));
 
     const warnings = this.lastError ? [this.lastError, ...spec.warnings] : [...spec.warnings];
+    const notes = warnings.map((w) => el('p', { class: 'rfd4p-warning', text: w }));
     if (spec.task.key === 'partial' && spec.chains.some((c) => c.segments.length)) {
-      warnings.push('Partial diffusion needs every residue defined; this input has new-residue segments.');
+      // New residues that replaced residues can be those residues again, free in place, which partial diffusion takes.
+      const doc = this._inputDoc();
+      let known = false;
+      for (let i = 0; i < doc.atoms.nAtoms && !known; i += 1) known = Boolean(doc.segmentOrigin?.(i));
+      notes.push(el('p', { class: 'rfd4p-warning' }, 'Partial diffusion needs every residue defined; this input has new residues.',
+        known && !viewingDesign ? el('button', { type: 'button', class: 'secondary compact rfd4p-warning-fix',
+          onclick: () => void this._restoreAll(), text: 'Back to the residues they replaced' }) : null));
     }
-    els.warnings.replaceChildren(...warnings.map((w) => el('p', { class: 'rfd4p-warning', text: w })));
+    els.warnings.replaceChildren(...notes);
 
     this.showHotspots();
 
@@ -1234,10 +1241,21 @@ export class DesignPanel {
     return edits;
   }
 
-  /** New residues: how many, or remove them. */
+  /**
+   * New residues: how many, or remove them. New residues that replaced residues (a free piece given another length)
+   * turn back into them, with their coordinates, at their old count or with a fixed Structure or Sequence.
+   */
   _newPop(c, p) {
     const min = el('input', { type: 'number', min: 1, max: 1000, value: p.min, 'aria-label': 'Fewest new residues' });
     const max = el('input', { type: 'number', min: 1, max: 1000, value: p.max, 'aria-label': 'Most new residues' });
+    const origin = this._inputDoc()?.segmentOrigin?.(p.atomIndex) ?? null;
+    const select = (label, options, title) => {
+      const s = el('select', { 'aria-label': label, title });
+      for (const [v, text] of options) s.append(el('option', { value: v, text, selected: v === 'designed' }));
+      return s;
+    };
+    const structure = origin && select('Structure', STRUCTURE_OPTIONS, 'Fixed or rigid: the residues these replaced, back in place');
+    const sequence = origin && select('Sequence', SEQUENCE_OPTIONS, 'Fixed: the residues these replaced, back with their amino acids');
     // New residues can be asked a shape and an exposure: each of them takes it when the job is built.
     const extra = this._extraFields({ ss: p.ss, rasa: p.rasa }, { interaction: false });
     const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
@@ -1248,22 +1266,56 @@ export class DesignPanel {
       const hi = Math.max(lo, Math.round(Number(max.value)) || p.max);
       if (!await fold.apply()) return false;
       this._closePop();
+      const want = origin && { structure: structure.value, atoms: 'all', sequence: sequence.value, position: 'fixed' };
+      if (origin && (want.structure !== 'designed' || want.sequence !== 'designed' || (lo === origin.count && hi === origin.count))) {
+        const back = await this._restoreSegment(c.id, p.atomIndex);
+        if (!back) return false;
+        const edits = extra.edits(back);
+        if (edits.length && !await this._batch(edits)) return false;
+        const free = want.structure === 'designed' && want.sequence === 'designed';
+        return free || this._applyPieces([{ p: { kind: 'kept' }, atoms: back, want }]);
+      }
       // Atom indices may have moved if the fold was set: re-read this block's.
       const now = this._spec()?.chains.find((x) => x.id === c.id)?.pieces.find((x) => x.kind === 'new' && x.atomIndex === p.atomIndex) ?? p;
       const edits = extra.edits(now.atomIndices);
       if (edits.length && !await this._batch(edits)) return false;
       return lo !== p.min || hi !== p.max ? this._mutate('/segments/range', { atom_index: p.atomIndex, minimum: lo, maximum: hi }) : true;
     };
+    const row = (label, ...children) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...children);
+    // The old count, one click away: set back to it, the residues come back in place.
+    const was = origin && el('button', { type: 'button', class: 'rfd4p-pop-was', text: `was ${origin.count}`,
+      title: 'The residues these replaced, back in place, free', onclick: () => { min.value = origin.count; max.value = origin.count; } });
     return [
       this._popHead(`Chain ${c.id}, new residues`),
       el('div', { class: 'rfd4p-pop-row', title: 'Each design picks one length from this range' },
-        el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, min, el('span', { text: '–' }), max)),
+        el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, min, el('span', { text: '–' }), max, was)),
+      origin && row('Structure', structure),
+      origin && row('Sequence', sequence),
       // Shape first (blocks are drawn with it), then exposure and the chain's fold.
       extra.rows[0],
       this._moreFold(extra.rows[1], fold.row),
       note,
       this._popActions(apply),
-    ];
+    ].filter(Boolean);
+  }
+
+  /** New residues back into the residues they replaced; their atoms after, or null. */
+  async _restoreSegment(chainId, atomIndex) {
+    const keys = this._inputDoc()?.segmentOrigin?.(atomIndex)?.keys;
+    if (!keys || !await this._mutate('/segments/restore', { atom_index: atomIndex })) return null;
+    const a = this._inputDoc().atoms;
+    const want = new Set(keys);
+    const atoms = [];
+    for (let i = 0; i < a.nAtoms; i += 1) if (want.has(`${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}`)) atoms.push(i);
+    return atoms;
+  }
+
+  /** Every remembered segment back into its residues (partial diffusion's fix), last first so indices hold. */
+  async _restoreAll() {
+    const doc = this._inputDoc();
+    const segs = [];
+    for (let i = 0; i < (doc?.atoms.nAtoms ?? 0); i += 1) if (doc.segmentOrigin?.(i)) segs.push(i);
+    for (const i of segs.reverse()) if (!await this._restoreSegment(String(doc.atoms.chain_id[i]), i)) return;
   }
 
   /** A ligand: where it goes, or another molecule in its place. */
