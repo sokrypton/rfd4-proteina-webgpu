@@ -1051,9 +1051,9 @@ export class DesignPanel {
       row('Sequence', sequence),
       positionRow,
       lengthRow,
+      row('Hotspots', hot),
       this._moreFold(
         ...extra.rows,
-        row('Hotspots', hot),
         row('Keep only', keepOnly)),
       note,
       this._popActions(apply),
