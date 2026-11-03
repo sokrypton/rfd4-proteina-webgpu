@@ -891,9 +891,16 @@ export class DesignPanel {
     }
     const heavy = (i) => String(a.element?.[i] ?? '').toUpperCase() !== 'H';
     const bb = new Set(['N', 'CA', 'C', 'O', 'OXT']);
-    const side = atoms.filter((i) => heavy(i) && !bb.has(String(a.atom_name[i])));
-    if (side.length) return side;
-    return atoms.filter((i) => String(a.atom_name[i]) === 'CA');
+    // Each residue's side chain, or its CA where it has none (a glycine).
+    const byRes = new Map();
+    for (const i of atoms) {
+      const k = `${a.chain_id[i]}|${a.res_id[i]}|${a.ins_code?.[i] ?? ''}`;
+      byRes.set(k, [...(byRes.get(k) ?? []), i]);
+    }
+    return [...byRes.values()].flatMap((res) => {
+      const side = res.filter((i) => heavy(i) && !bb.has(String(a.atom_name[i])));
+      return side.length ? side : res.filter((i) => String(a.atom_name[i]) === 'CA');
+    });
   }
 
   /** Existing residues: which of them, then three properties (structure, sequence, position), each fixed or designed. */

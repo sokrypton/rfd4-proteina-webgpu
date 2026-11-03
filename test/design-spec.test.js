@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { parseCifToAtomArray } from '../shared/rfd4p/pipeline/cif.js';
-import { designSpec, formatResidueList, parseResidueList } from '../web/design-spec.js';
+import { designSpec, formatResidueList, heldAtomsOf, parseResidueList } from '../web/design-spec.js';
 import { StudioDoc } from '../web/studio-api.js';
 
 const exampleCif = (file) => readFileSync(new URL(`../web/studio/examples/${file}`, import.meta.url), 'utf8');
@@ -185,4 +185,13 @@ test('typed residue lists parse and format both ways', () => {
   assert.equal(formatResidueList('A', [117, 56, 115, 116]), 'A56, A115–117');
   const again = parseResidueList(formatResidueList('A', [56, 115, 116, 117])).residues.map((r) => r.resId);
   assert.deepEqual(again, [56, 115, 116, 117]);
+});
+
+test('held atoms of a residue placed anywhere are read against all its atoms, not only those with coordinates', () => {
+  const asp = ['N', 'CA', 'C', 'O', 'CB', 'CG', 'OD1', 'OD2'];
+  // Placed anywhere, only the held atoms keep coordinates.
+  assert.equal(heldAtomsOf({ unindexed: true, allHeavyNames: asp, heavyNames: ['CG', 'OD1'], heldNames: ['CG', 'OD1'] }), 'CG, OD1');
+  assert.equal(heldAtomsOf({ unindexed: true, allHeavyNames: asp, heavyNames: ['N', 'CA', 'C', 'O'], heldNames: ['N', 'CA', 'C', 'O'] }), 'backbone');
+  // In place, atoms without coordinates (unresolved) are not counted.
+  assert.equal(heldAtomsOf({ unindexed: false, allHeavyNames: asp, heavyNames: ['N', 'CA', 'C', 'O'], heldNames: ['N', 'CA', 'C', 'O'] }), 'all');
 });

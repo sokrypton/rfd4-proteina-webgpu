@@ -96,8 +96,9 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
         hotspots: 0,
         atoms: 0,
         atomIndices: [],
-        // Atom names: heavy atoms with coordinates, those held (absolute or rigid), and hotspot atoms.
+        // Atom names: heavy atoms with coordinates, all heavy atoms, those held (absolute or rigid), and hotspot atoms.
         heavyNames: [],
+        allHeavyNames: [],
         heldNames: [],
         hotNames: [],
         allHot: true,
@@ -119,6 +120,7 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
     res.atomIndices.push(i);
     const atomName = String(atoms.atom_name[i]);
     const heavy = String(atoms.element?.[i] ?? '').toUpperCase() !== 'H';
+    if (heavy) res.allHeavyNames.push(atomName);
     if (hasCrd(atoms.coord?.[i])) {
       res.resolved = true;
       if (heavy) res.heavyNames.push(atomName);
@@ -297,7 +299,8 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
 export function heldAtomsOf(r) {
   const held = new Set(r.heldNames);
   if (!held.size) return null;
-  const heavy = r.heavyNames.length ? r.heavyNames : r.heldNames;
+  // A residue placed anywhere keeps only its held atoms' coordinates, so it is read against all of its atoms.
+  const heavy = r.unindexed && r.allHeavyNames?.length ? r.allHeavyNames : r.heavyNames.length ? r.heavyNames : r.heldNames;
   if (heavy.every((n) => held.has(n))) return 'all';
   const isBb = (n) => BACKBONE_ATOMS.has(n) || n === 'OXT';
   const bb = heavy.filter(isBb);
@@ -344,7 +347,19 @@ function chainPieces(residues, segmentWhere) {
     const src = splitSource(r.source);
     // A glycine has no side chain to hold, so "side chains only" leaves it with its amino acid alone: it belongs to
     // the side-chain run it sits in rather than splitting it.
-    if (run?.keep === 'sidechain' && p.keep === 'sequence' && r.resName === 'GLY') p.keep = 'sidechain';
+    if (run?.keep === 'sidechain' && p.kind === 'kept' && ['sequence', 'all'].includes(p.keep) && p.anywhere === run.anywhere
+      && r.heavyNames.every((n) => BACKBONE_ATOMS.has(n) || n === 'OXT')) {
+      p.keep = 'sidechain';
+      p.atoms = run.atoms;
+    }
+    // A residue missing some of the atoms a run names (a glycine's CB) holds the rest of them: it belongs to the run.
+    if (run?.kind === 'kept' && p.kind === 'kept' && run.keep === p.keep && run.anywhere === p.anywhere
+      && typeof run.atoms === 'string' && !['all', 'backbone', 'sidechain'].includes(run.atoms) && run.atoms !== p.atoms) {
+      const names = run.atoms.split(', ');
+      const have = new Set(r.unindexed ? r.allHeavyNames : r.heavyNames);
+      const want = names.filter((n) => have.has(n));
+      if (want.length && want.length === r.heldNames.length && want.every((n) => r.heldNames.includes(n))) p.atoms = run.atoms;
+    }
     // Likewise a glycine holding its backbone ("all" of it) belongs to a backbone-only run.
     if (run?.atoms === 'backbone' && p.atoms === 'all' && r.heavyNames.every((n) => BACKBONE_ATOMS.has(n) || n === 'OXT')) {
       p.atoms = 'backbone';
