@@ -6,7 +6,7 @@
  * Every edit goes through Studio's own mutate path (`window.atomworksStudio?.applyEdit`), so Undo, the viewer and the
  * `atomworks-studio` "changed" event behave exactly as for edits made in the Studio panels.
  */
-import { designSpec, formatResidueList, parseResidueList } from './design-spec.js';
+import { INTERACTIONS, designSpec, formatResidueList, parseResidueList } from './design-spec.js';
 import { createStudioDocWithCcd, getSharedStudioStore, handleStudioApiRequest } from './studio-api.js';
 import { isCcdCode, ligandCifFromCcd } from './ligand-ccd.js';
 import { fetchCcdComponents } from '../shared/rfd4p/pipeline/ccd.js';
@@ -144,6 +144,16 @@ const STRUCTURE_OPTIONS = [['fixed', 'fixed'], ['rigid', 'fixed, can move'], ['d
 const ATOM_OPTIONS = [['all', 'all'], ['backbone', 'backbone'], ['sidechain', 'side chains'], ['named', 'named']];
 const SEQUENCE_OPTIONS = [['fixed', 'fixed'], ['designed', 'designed']];
 const POSITION_OPTIONS = [['fixed', 'fixed'], ['anywhere', 'anywhere']];
+// What else can be asked of residues: their secondary structure, how exposed they are, an interaction to make.
+const SHAPE_OPTIONS = [['0', 'any'], ['1', 'helix'], ['2', 'strand'], ['3', 'loop']];
+const EXPOSURE_OPTIONS = [['0', 'any'], ['1', 'buried'], ['2', 'intermediate'], ['3', 'exposed']];
+const INTERACTION_OPTIONS = [
+  ['', 'none'], ['hbond:1', 'H-bond donor'], ['hbond:2', 'H-bond acceptor'], ['hbond:3', 'H-bond donor or acceptor'],
+  ['saltbridge:1', 'salt bridge, positive'], ['saltbridge:2', 'salt bridge, negative'], ['pistack:1', 'π-stacking'],
+  ['pication:1', 'π-cation, aromatic'], ['pication:2', 'π-cation, cation'], ['hydrophobic:1', 'hydrophobic'],
+  ['metal_coord:2', 'metal-coordinating'],
+];
+const CONDITION_KEY = { hbond: 'hbond', saltbridge: 'saltbridge', pistack: 'pistack', pication: 'pication', hydrophobic: 'hydrophobic', metal_coord: 'metal_coord' };
 
 export class DesignPanel {
   /** @param {object} app the `Rfd4pStudioApp` (input session, partial-diffusion controls, run state) */
@@ -603,7 +613,8 @@ export class DesignPanel {
     }
     const gutter = el('div', { class: 'rfd4p-chain-gutter' },
       el('button', {
-        type: 'button', class: 'rfd4p-chain-id', text: c.id, disabled: readonly, title: `Chain ${c.id}: name and order`,
+        type: 'button', class: 'rfd4p-chain-id', text: c.id, disabled: readonly,
+        title: `Chain ${c.id}${c.fold ? ` · fold ${c.fold.replace(/(\.x)+$/, '')}` : ''}: name, order and fold`,
         onclick: (ev) => this._openPop(ev.currentTarget, () => this._chainPop(c)),
       }),
       many ? remove(`Remove chain ${c.id}`, c.atomIndices) : null);
@@ -629,7 +640,8 @@ export class DesignPanel {
 
   /** What a piece row says after its residues: what is kept, in a few words. */
   _status(p) {
-    if (p.kind === 'new') return 'new';
+    const word = (options, v) => (v ? options.find(([k]) => k === String(v))?.[1] ?? '' : '');
+    if (p.kind === 'new') return ['new', word(SHAPE_OPTIONS, p.ss), word(EXPOSURE_OPTIONS, p.rasa)].filter(Boolean).join(' · ');
     const { structure, atoms, names, sequence, position } = this._properties(p);
     // The popup's words: both fixed reads "fixed", both designed "designed", otherwise which one is fixed; part of the
     // atoms says which.
@@ -638,7 +650,7 @@ export class DesignPanel {
       : structure === 'rigid' ? (part ? `${part} fixed, can move` : 'fixed, can move')
         : structure === 'fixed' && sequence === 'fixed' ? (part ? `${part} fixed` : 'fixed')
           : structure === 'fixed' ? 'structure fixed' : 'sequence fixed';
-    return [what, position === 'anywhere' ? 'anywhere' : '',
+    return [what, position === 'anywhere' ? 'anywhere' : '', word(SHAPE_OPTIONS, p.ss), word(EXPOSURE_OPTIONS, p.rasa), word(INTERACTION_OPTIONS, p.inter),
       p.hotspots.length ? `${p.hotspots.length} hotspot${p.hotspots.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
   }
 
@@ -720,7 +732,7 @@ export class DesignPanel {
     }
     const pop = this.piecePop;
     this.pop.hidden = true;
-    pop.replaceChildren(...build());
+    pop.replaceChildren(...build().filter(Boolean));
     pop.hidden = false;
     const r = anchor.getBoundingClientRect();
     const card = anchor.closest('#rfd4p-studio-card')?.getBoundingClientRect() ?? r;
@@ -801,6 +813,61 @@ export class DesignPanel {
     return el('details', { class: 'rfd4p-pop-more' }, el('summary', { text: 'More' }), el('div', { class: 'rfd4p-pop-more-body' }, ...children.filter(Boolean)));
   }
 
+  /**
+   * Shape (secondary structure), Exposure and Interaction rows, set from `now` ({ss, rasa, inter}, "mixed" where the
+   * residues differ). `edits(residueAtoms, interactionAtoms)` gives the condition edits for what changed.
+   */
+  _extraFields(now, { interaction = true } = {}) {
+    const select = (label, options, value, title) => {
+      const s = el('select', { 'aria-label': label, title });
+      if (value === 'mixed') s.append(el('option', { value: 'mixed', text: 'mixed', selected: true }));
+      for (const [v, text] of options) s.append(el('option', { value: v, text, selected: v === String(value) }));
+      return s;
+    };
+    const shape = select('Shape', SHAPE_OPTIONS, now.ss ?? 0, 'The secondary structure these residues should take');
+    const exposure = select('Exposure', EXPOSURE_OPTIONS, now.rasa ?? 0, 'How buried in the design these residues should be');
+    const inter = select('Interaction', INTERACTION_OPTIONS, now.inter ?? '', 'An interaction their side chains (or the atoms named) should make');
+    const row = (label, field) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), field);
+    return {
+      rows: [row('Shape', shape), row('Exposure', exposure), interaction ? row('Interaction', inter) : null],
+      edits: (atoms, interactionAtoms = atoms) => {
+        const edits = [];
+        if (!atoms.length) return edits;
+        if (shape.value !== 'mixed' && shape.value !== String(now.ss ?? 0)) {
+          const v = Number(shape.value);
+          edits.push({ condition: 'secondary_structure', atom_indices: atoms, enabled: v > 0, value: v, scope: 'residue' });
+        }
+        if (exposure.value !== 'mixed' && exposure.value !== String(now.rasa ?? 0)) {
+          const v = Number(exposure.value);
+          edits.push({ condition: 'rasa', atom_indices: atoms, enabled: v > 0, value: v });
+        }
+        if (interaction && inter.value !== 'mixed' && inter.value !== (now.inter ?? '')) {
+          for (const [key] of INTERACTIONS) edits.push({ condition: CONDITION_KEY[key], atom_indices: atoms, enabled: false });
+          if (inter.value && interactionAtoms.length) {
+            const [key, v] = inter.value.split(':');
+            edits.push({ condition: CONDITION_KEY[key], atom_indices: interactionAtoms, enabled: true, value: Number(v) });
+          }
+        }
+        return edits;
+      },
+    };
+  }
+
+  /** The atoms an interaction is asked of: those named, else the side chains (a glycine's CA). */
+  _interactionAtoms(atoms, which) {
+    const a = this._inputDoc()?.atoms;
+    if (!a) return [];
+    if (Array.isArray(which)) {
+      const names = new Set(which);
+      return atoms.filter((i) => names.has(String(a.atom_name[i]).toUpperCase()));
+    }
+    const heavy = (i) => String(a.element?.[i] ?? '').toUpperCase() !== 'H';
+    const bb = new Set(['N', 'CA', 'C', 'O', 'OXT']);
+    const side = atoms.filter((i) => heavy(i) && !bb.has(String(a.atom_name[i])));
+    if (side.length) return side;
+    return atoms.filter((i) => String(a.atom_name[i]) === 'CA');
+  }
+
   /** Existing residues: which of them, then three properties (structure, sequence, position), each fixed or designed. */
   _piecePop(c, p) {
     const a = this._inputDoc()?.atoms;
@@ -864,6 +931,7 @@ export class DesignPanel {
       placeholder: 'all', 'aria-label': 'Keep only these residues',
       title: 'Type some residues (e.g. A38, A99) to keep only those, in that order; the rest of the chain becomes new residues (a motif)' });
     const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
+    const extra = this._extraFields({ ss: p.ss, rasa: p.rasa, inter: p.inter });
     const residuesIn = (text, inChain) => {
       const { residues, bad } = parseResidueList(text, c.id);
       const mine = residues.filter((r) => r.chain === c.id);
@@ -888,6 +956,10 @@ export class DesignPanel {
         return;
       }
       const hotChanged = formatResidueList(c.id, [...hotspots.want], hotspots.atomsOf) !== formatResidueList(c.id, c.hotspotResIds, c.hotspotAtoms);
+      // Shape, exposure and interaction first: they change no atoms, so the edits after see the same indices.
+      const rangeAtoms = span().atoms;
+      const extraEdits = extra.edits(rangeAtoms, this._interactionAtoms(rangeAtoms, atomsField.value()));
+      if (extraEdits.length && !await this._batch(extraEdits)) return;
       // Re-read after each edit: atom indices move when residues are added or removed.
       const chainNow = () => this._spec()?.chains.find((x) => x.id === c.id);
       const setHotspots = async () => {
@@ -942,7 +1014,7 @@ export class DesignPanel {
       if (changed) {
         // New settings go to the residues in the range only; the rest of the piece stays as it is.
         await this._applyPiece(p, atoms, want);
-      } else if (!whole && !(now.structure === 'designed' && now.sequence === 'designed')) {
+      } else if (!whole && !extraEdits.length && !(now.structure === 'designed' && now.sequence === 'designed')) {
         // Only the range changed: the piece is now those residues, and the ones cut off are designed (same length).
         const inRange = new Set(atoms);
         const rest = p.atomIndices.filter((i) => !inRange.has(i));
@@ -964,6 +1036,7 @@ export class DesignPanel {
         row('Sequence', sequence),
         positionRow,
         lengthRow,
+        ...extra.rows,
         row('Hotspots', hot),
         row('Keep only', keepOnly),
         note,
@@ -1072,16 +1145,21 @@ export class DesignPanel {
   _newPop(c, p) {
     const min = el('input', { type: 'number', min: 1, max: 1000, value: p.min, 'aria-label': 'Fewest new residues' });
     const max = el('input', { type: 'number', min: 1, max: 1000, value: p.max, 'aria-label': 'Most new residues' });
-    const apply = () => {
+    // New residues can be asked a shape and an exposure: each of them takes it when the job is built.
+    const extra = this._extraFields({ ss: p.ss, rasa: p.rasa }, { interaction: false });
+    const apply = async () => {
       const lo = Math.max(1, Math.round(Number(min.value)) || p.min);
       const hi = Math.max(lo, Math.round(Number(max.value)) || p.max);
       this._closePop();
+      const edits = extra.edits(p.atomIndices);
+      if (edits.length && !await this._batch(edits)) return false;
       return lo !== p.min || hi !== p.max ? this._mutate('/segments/range', { atom_index: p.atomIndex, minimum: lo, maximum: hi }) : true;
     };
     return [
       this._popHead(`Chain ${c.id}, new residues`),
       el('div', { class: 'rfd4p-pop-row', title: 'Each design picks one length from this range' },
         el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, min, el('span', { text: '–' }), max)),
+      ...extra.rows,
       this._popActions(apply),
     ];
   }
@@ -1154,8 +1232,18 @@ export class DesignPanel {
       value: c.id, 'aria-label': 'Chain name' });
     const order = el('select', { 'aria-label': 'Chain order', title: 'Where this chain comes in the job' });
     ids.forEach((id, k) => order.append(el('option', { value: String(k), text: String(k + 1), selected: id === c.id })));
+    const fold = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
+      value: (c.fold ?? '').replace(/(\.x)+$/, ''), placeholder: 'any, e.g. 3.30.70', 'aria-label': 'Fold',
+      title: 'A CATH fold for the chain to take: class.architecture.topology(.homology), e.g. 3.30.70 or 1.10' });
     const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
     const apply = async () => {
+      const wantFold = fold.value.trim();
+      if (wantFold && !/^\d+(\.\d+){0,3}$/.test(wantFold)) { note.textContent = 'A fold is numbers with dots, e.g. 3.30.70'; return; }
+      // A new chain's fold is set on its new residues: each takes it when the job is built.
+      const foldAtoms = [...c.polymerAtomIndices, ...c.segments.map((g) => g.atomIndex)];
+      if (wantFold !== (c.fold ?? '').replace(/(\.x)+$/, '') && foldAtoms.length) {
+        if (!await this._batch([{ condition: 'cath_label', atom_indices: foldAtoms, enabled: Boolean(wantFold), value: wantFold, scope: 'residue' }])) return;
+      }
       const next = name.value.trim();
       if (!/^[A-Za-z0-9_]{1,4}$/.test(next)) { note.textContent = 'A chain name is 1–4 letters or digits'; return; }
       if (next !== c.id && ids.includes(next)) { note.textContent = `There is a chain ${next} already`; return; }
@@ -1177,6 +1265,7 @@ export class DesignPanel {
       this._popHead(`Chain ${c.id}`),
       el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Name' }), name),
       el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Order' }), order),
+      c.role !== 'ligand' ? el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Fold' }), fold) : null,
       note,
       this._popActions(apply),
     ];
@@ -1359,11 +1448,16 @@ export class DesignPanel {
       hot.indeterminate = hotN > 0 && hotN < polymerAtoms.length;
       let hotTouched = false;
       hot.addEventListener('change', () => { hotTouched = true; });
-      rows.push(row('Structure', structure), atomsRow, row('Sequence', sequence), positionRow, lengthRow,
+      const same = (key) => { const v = new Set(hits.map((h) => h.p[key] ?? (key === 'inter' ? '' : 0))); return v.size === 1 ? [...v][0] : 'mixed'; };
+      const extra = this._extraFields({ ss: same('ss'), rasa: same('rasa'), inter: same('inter') });
+      rows.push(row('Structure', structure), atomsRow, row('Sequence', sequence), positionRow, lengthRow, ...extra.rows.filter(Boolean),
         el('label', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Hotspot' }), hot));
       apply = async () => {
         done();
         if (hotTouched && !await this._batch([{ condition: 'hotspot', atom_indices: polymerAtoms, enabled: hot.checked }])) return;
+        const which = atomsField.select.value === 'mixed' ? 'all' : atomsField.value();
+        const extraEdits = extra.edits(polymerAtoms, this._interactionAtoms(polymerAtoms, which));
+        if (extraEdits.length && !await this._batch(extraEdits)) return;
         if (!lengthRow.hidden) {
           const min = Math.max(1, Math.round(Number(lenMin.value)) || nRes);
           const max = Math.max(min, Math.round(Number(lenMax.value)) || nRes);

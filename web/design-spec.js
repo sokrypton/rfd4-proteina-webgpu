@@ -6,6 +6,16 @@
 
 const BACKBONE_ATOMS = new Set(['N', 'CA', 'C', 'O']);
 
+/** The atom-level interaction conditions, by the key the design panel names them with. */
+export const INTERACTIONS = [
+  ['hbond', 'condition_hbond_1_atom'],
+  ['saltbridge', 'condition_saltbridge_1_atom'],
+  ['pistack', 'condition_pistack_1_atom'],
+  ['pication', 'condition_pication_1_atom'],
+  ['hydrophobic', 'condition_hydrophobic_1_atom'],
+  ['metal_coord', 'condition_metal-coord_1_atom'],
+];
+
 /** Display names for roles; `detail` is filled in per chain. */
 export const ROLE_LABELS = {
   fixed: 'Fixed',
@@ -47,6 +57,9 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
   const hotspot = ann.condition_hotspot_1_atom;
   const group = ann.condition_CoordinateGroup_1_atom;
   const internal = ann.condition_InternalCoordinate_1_atom;
+  const ssCond = ann['condition_secondary-structure_1_residue'];
+  const rasaCond = ann['condition_rasa-binned_1_atom'];
+  const cath = ann['condition_cath-label_1_residue'] ?? atoms?.cathText;
   // Where a residue came from ("A38"), when a set-up renumbered it.
   const source = ann['annotation_src-component_1_atom'];
   const segMin = ann.annotation_expsegmin_1_residue;
@@ -88,6 +101,12 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
         heldNames: [],
         hotNames: [],
         allHot: true,
+        // Asked of the model: secondary structure (1 helix, 2 strand, 3 loop), solvent exposure (1 buried, 2
+        // intermediate, 3 exposed) and an interaction its atoms should make ("hbond:2"), when set.
+        ss: 0,
+        rasa: 0,
+        inter: '',
+        fold: '',
       };
       if (res.segment && !(res.segment.min > 0)) {
         const m = /^(\d+)-(\d+)$/.exec(res.resName);
@@ -110,6 +129,16 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
     }
     if (heavy && (hasCrd(crd?.[i]) || Number(group?.[i]) > 0 || hasCrd(internal?.[i]))) res.heldNames.push(atomName);
     if (hotspot?.[i]) { if (heavy) res.hotNames.push(atomName); } else if (heavy && hasCrd(atoms.coord?.[i])) res.allHot = false;
+    if (Number(ssCond?.[i]) > 0) res.ss = Number(ssCond[i]);
+    if (Number(rasaCond?.[i]) > 0) res.rasa = Number(rasaCond[i]);
+    if (!res.inter) {
+      for (const [key, col] of INTERACTIONS) {
+        const v = ann[col]?.[i];
+        if (v === true || Number(v) > 0) { res.inter = `${key}:${v === true ? 1 : Number(v)}`; break; }
+      }
+    }
+    const fold = String(cath?.[i] ?? '');
+    if (fold && !/^x(\.x)*$/.test(fold) && fold !== '.') res.fold = fold;
     const s = seqCond?.[i];
     if (s != null && s !== '<M>' && s !== '.' && s !== '' && s !== '?') res.seqFixed = true;
     if (indexCond && indexCond[i] === false) res.unindexed = true;
@@ -211,6 +240,8 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
       })),
       lengthMin,
       lengthMax,
+      // The fold asked of the chain (CATH, "3.30.70.x"), if any.
+      fold: chain.residues.find((r) => r.kind && r.fold)?.fold ?? '',
       contig: pieces.join('/'),
       pieces: chainPieces(chain.residues, segmentWhere),
       hotspotResIds: polymer.filter((r) => r.hotspots > 0).map((r) => r.resId),
@@ -307,7 +338,7 @@ function chainPieces(residues, segmentWhere) {
     if (p.kind === 'new') {
       run = null;
       out.push({ kind: 'new', min: r.segment.min, max: r.segment.max, atomIndex: r.segment.atomIndex,
-        where: segmentWhere.get(r.segment.atomIndex) ?? '', count: 0, atomIndices: r.atomIndices, hotspots: [] });
+        where: segmentWhere.get(r.segment.atomIndex) ?? '', count: 0, atomIndices: r.atomIndices, hotspots: [], ss: r.ss, rasa: r.rasa, inter: r.inter });
       continue;
     }
     const src = splitSource(r.source);
@@ -319,7 +350,9 @@ function chainPieces(residues, segmentWhere) {
       p.atoms = 'backbone';
       if (p.keep === 'all' && run.keep === 'backbone') p.keep = 'backbone';
     }
+    Object.assign(p, { ss: r.ss, rasa: r.rasa, inter: r.inter });
     const sameRun = run && run.kind === p.kind && run.keep === p.keep && run.anywhere === p.anywhere && run.atoms === p.atoms
+      && run.ss === p.ss && run.rasa === p.rasa && run.inter === p.inter
       && r.resId === run.end + 1
       && (!run.src && !src || (run.src && src && src[0] === run.src[0] && src[1] === run.srcEnd + 1));
     if (sameRun) {
