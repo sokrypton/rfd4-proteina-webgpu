@@ -765,18 +765,22 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
    hotspots filled amber, as in the viewer. The advanced editor keeps Studio's own per-condition marks. */
 :root { --rfd4p-hotspot: #f59e0b; }
 
-body:not(.rfd4p-advanced) .sequence-token.condition-coordinate:not(.selected) { border-color: transparent; }
+body:not(.rfd4p-advanced) .sequence-token.condition-coordinate:not(.selected):not(:hover) { border-color: transparent; }
 
-body:not(.rfd4p-advanced) button.sequence-token:not(.condition-coordinate):not(.condition-sequence):not(.selected):not(.sequence-segment) {
+body:not(.rfd4p-advanced) button.sequence-token:not(.condition-coordinate):not(.condition-sequence):not(.sequence-segment) {
   color: var(--accent, #82aaff);
 }
 
-body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
+body:not(.rfd4p-advanced) .sequence-token.condition-hotspot {
   color: #1a1206;
   background: var(--rfd4p-hotspot);
-  border-color: var(--rfd4p-hotspot);
   font-weight: 700;
 }
+body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected):not(.partially-selected):not(:hover) { border-color: var(--rfd4p-hotspot); }
+
+/* Selection is one outline in the text colour everywhere: the viewer, the sequence bar, and a sub-card holding
+   selected residues; hovering is the same outline, fainter. Accent stays "free", amber "hotspot". */
+#rfd4p-studio-card .rfd4p-sub.rfd4p-sub-selected { border-color: var(--text, #ededef); box-shadow: inset 0 0 0 1px var(--text, #ededef); }
 
 .rfd4p-partial-setting {
   display: grid;
@@ -946,7 +950,7 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
 }
 .rfd4p-crop-track > span { position: absolute; top: 0; bottom: 0; }
 .rfd4p-crop-other { background: var(--text-muted, #9a9aa3); opacity: 0.35; }
-.rfd4p-crop-sel { background: var(--accent, #6d9eff); }
+.rfd4p-crop-sel { background: var(--text, #ededef); opacity: 0.55; }
 .rfd4p-crop-handle {
   position: absolute; top: 0; width: 8px; height: 18px; margin-left: -4px; border-radius: 3px; cursor: ew-resize;
   background: var(--text, #f1f1f2); box-shadow: 0 0 0 1px var(--bg, #161618);

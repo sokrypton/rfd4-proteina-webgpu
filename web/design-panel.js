@@ -478,6 +478,7 @@ export class DesignPanel {
       if (ev.detail?.type !== 'selection') return;
       this.selectionCount = ev.detail?.count ?? 0;
       queueMicrotask(() => {
+        this._markSelected();
         // A row's own pick has its popup open already.
         if (this.cardPicking) { this.cardPicking = false; this.pop.hidden = true; return; }
         this._renderPop();
@@ -572,6 +573,7 @@ export class DesignPanel {
     els.undo.disabled = document.getElementById('undo')?.disabled ?? true;
 
     els.chainList.replaceChildren(...this._sourceGroups(spec.chains).map((g) => this._groupBlock(g, viewingDesign)));
+    this._markSelected();
 
     const warnings = this.lastError ? [this.lastError, ...spec.warnings] : [...spec.warnings];
     const notes = warnings.map((w) => el('p', { class: 'rfd4p-warning', text: w }));
@@ -702,8 +704,8 @@ export class DesignPanel {
   }
 
   /** A sub-card: name and status (opens its popup), then its ×. */
-  _card(name, status, kindClass, readonly, onOpen, remove) {
-    return el('div', { class: `rfd4p-sub ${kindClass}` },
+  _card(name, status, kindClass, readonly, onOpen, remove, atoms = null) {
+    const card = el('div', { class: `rfd4p-sub ${kindClass}` },
       el('button', {
         type: 'button', class: 'rfd4p-sub-open', disabled: readonly, 'aria-haspopup': 'dialog',
         onclick: (ev) => onOpen(ev.currentTarget),
@@ -711,6 +713,17 @@ export class DesignPanel {
       el('span', { class: 'rfd4p-sub-name', text: name }),
       el('span', { class: 'rfd4p-sub-status', text: status })),
       remove);
+    // Its atoms, so the card can show which sub-cards hold selected residues (`_markSelected`).
+    card.rfd4pAtoms = atoms;
+    return card;
+  }
+
+  /** Outline the sub-cards holding selected residues, as the viewer and the sequence bar outline them. */
+  _markSelected() {
+    const sel = new Set(this._viewingDesign() ? [] : window.atomworksStudio?.getSelection?.() ?? []);
+    for (const card of this.els.chainList?.querySelectorAll('.rfd4p-sub') ?? []) {
+      card.classList.toggle('rfd4p-sub-selected', Boolean(sel.size && card.rfd4pAtoms?.some((i) => sel.has(i))));
+    }
   }
 
   _pieceCard(c, p, readonly, remove) {
@@ -718,7 +731,7 @@ export class DesignPanel {
       (anchor) => {
         if (p.kind !== 'new') this._selectFromCard(p.atomIndices);
         this._openPop(anchor, () => (p.kind === 'new' ? this._newPop(c, p) : this._piecePop(c, p)));
-      }, remove);
+      }, remove, p.atomIndices);
   }
 
   /** A row's residues selected in the viewer and the sequence too, while its popup is open (not the viewer's popup). */
@@ -773,7 +786,7 @@ export class DesignPanel {
     return this._card(l.name, status, 'rfd4p-sub-ligand', readonly, (anchor) => {
       this._selectFromCard(l.atomIndices);
       this._openPop(anchor, () => this._ligandPop(c, l));
-    }, remove);
+    }, remove, l.atomIndices);
   }
 
   /** Where a chain's coordinates come from, as the page knows it; null for chains made here (+ seq, + lig). */
