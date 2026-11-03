@@ -969,3 +969,21 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 .rfd4p-pop-quick .rfd4p-on { border-color: var(--accent, #82aaff); color: var(--accent, #82aaff); }
 .rfd4p-pop-more > summary { cursor: pointer; color: var(--text-muted, #b1b3b9); font-size: 11.5px; }
 .rfd4p-pop-more-body { display: grid; gap: 8px; padding-top: 8px; }
+
+/* A popup's ×, top right of its title. */
+.rfd4p-pop-title { align-items: center; }
+.rfd4p-pop-title .muted { margin-right: auto; }
+.rfd4p-pop-title strong + .rfd4p-pop-x { margin-left: auto; }
+#rfd4p-studio-card .rfd4p-pop-x,
+.rfd4p-piece-pop .rfd4p-pop-x {
+  flex: none;
+  min-height: 0;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, #b1b3b9);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.rfd4p-piece-pop .rfd4p-pop-x:hover { color: var(--text, #f1f1f2); }

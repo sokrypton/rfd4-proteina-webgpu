@@ -754,14 +754,17 @@ export class DesignPanel {
     }
   }
 
-  _popHead(title) {
-    return el('div', { class: 'rfd4p-pop-title' }, el('strong', { text: title }));
+  /** A popup's title, and its × (top right) to close it. */
+  _popHead(title, close = () => this._closePop(), detail = null) {
+    return el('div', { class: 'rfd4p-pop-title' },
+      el('strong', { text: title }),
+      detail ? el('span', { class: 'muted', text: detail }) : null,
+      el('button', { type: 'button', class: 'rfd4p-pop-x', 'aria-label': 'Close', title: 'Close', text: '×', onclick: close }));
   }
 
   _popActions(apply) {
     return el('div', { class: 'rfd4p-pop-actions' },
       el('span', { class: 'rfd4p-pop-spacer' }),
-      el('button', { type: 'button', class: 'secondary compact', text: 'Cancel', onclick: () => this._closePop() }),
       el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: () => { this.applying = Promise.resolve(apply()); } }));
   }
 
@@ -1408,9 +1411,9 @@ export class DesignPanel {
     const row = (label, ...children) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...children);
     const rows = [];
     const title = [parts.join(', '), ligNames.join(', ')].filter(Boolean).join(' · ');
-    const head = el('div', { class: 'rfd4p-pop-title' },
-      el('strong', { text: title || `${sel.length} atoms` }),
-      nRes ? el('span', { class: 'muted', text: `${nRes} residue${nRes === 1 ? '' : 's'}` }) : null);
+    // Its × closes it and lets go of the selection.
+    const head = this._popHead(title || `${sel.length} atoms`, () => document.getElementById('clear-selection')?.click(),
+      nRes ? `${nRes} residue${nRes === 1 ? '' : 's'}` : null);
     const done = () => { pop.hidden = true; };
     let apply = async () => {};
     let keepOnly = null;
@@ -1513,7 +1516,6 @@ export class DesignPanel {
     rows.push(el('div', { class: 'rfd4p-pop-actions' },
       keepOnly,
       el('span', { class: 'rfd4p-pop-spacer' }),
-      el('button', { type: 'button', class: 'secondary compact', text: 'Cancel', onclick: () => document.getElementById('clear-selection')?.click() }),
       el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: () => { this.applying = Promise.resolve(apply()); } })));
     pop.replaceChildren(head,
       this._quickRow({ hits, hotAtoms: polymerAtoms, ligandAtoms, removeAtoms: residues, done }),
