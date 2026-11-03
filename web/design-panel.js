@@ -1043,14 +1043,15 @@ export class DesignPanel {
     sync();
     return [
       this._popHead(this._pieceText(c, p)),
+      // The range first: narrowing it is how a loaded structure gets its fixed regions.
+      row('Residues', el('span', { class: 'rfd4p-pop-inline', title: 'Narrow the range to change only some of these residues' },
+        el('span', { text: c.id }), from, el('span', { text: '–' }), to)),
       row('Structure', structure),
       atomsRow,
       row('Sequence', sequence),
+      positionRow,
       lengthRow,
       this._moreFold(
-        row('Residues', el('span', { class: 'rfd4p-pop-inline', title: 'Narrow the range to change only some of these residues' },
-          el('span', { text: c.id }), from, el('span', { text: '–' }), to)),
-        positionRow,
         ...extra.rows,
         row('Hotspots', hot),
         row('Keep only', keepOnly)),
@@ -1446,9 +1447,9 @@ export class DesignPanel {
       hot.addEventListener('change', () => { hotTouched = true; });
       const same = (key) => { const v = new Set(hits.map((h) => h.p[key] ?? (key === 'inter' ? '' : 0))); return v.size === 1 ? [...v][0] : 'mixed'; };
       const extra = this._extraFields({ ss: same('ss'), rasa: same('rasa'), inter: same('inter') });
-      rows.push(row('Structure', structure), atomsRow, row('Sequence', sequence), lengthRow,
+      rows.push(row('Structure', structure), atomsRow, row('Sequence', sequence), positionRow, lengthRow,
         el('label', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Hotspot' }), hot));
-      more.push(positionRow, ...extra.rows.filter(Boolean));
+      more.push(...extra.rows.filter(Boolean));
       apply = async () => {
         done();
         if (hotTouched && !await this._batch([{ condition: 'hotspot', atom_indices: polymerAtoms, enabled: hot.checked }])) return;
