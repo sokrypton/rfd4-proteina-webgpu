@@ -55,13 +55,6 @@
                 <label for="samples-input" class="rfd4p-designs-field">Designs
                     <input type="number" id="samples-input" value="1" min="1" max="8" step="1" />
                 </label>
-                <fieldset class="representation-mode rfd4p-thinking-group" id="thinking-radio-group" aria-label="Thinking">
-                    <legend title="Extra recycling passes: slower, sometimes better designs">Thinking</legend>
-                    <label><input type="radio" name="thinking-radio" value="none" checked />none</label>
-                    <label><input type="radio" name="thinking-radio" value="low" />low</label>
-                    <label><input type="radio" name="thinking-radio" value="medium" />med</label>
-                    <label><input type="radio" name="thinking-radio" value="high" />high</label>
-                </fieldset>
             </div>
             <div class="rfd4p-seed-row">
                 <label for="seed-input" title="Same seed and settings give the same design. A new random seed is drawn after each run unless you type one.">Seed
@@ -81,6 +74,13 @@
             <details class="rfd4p-sampling-details" id="sampling-accordion">
                 <summary>More settings</summary>
                 <div class="rfd4p-sampling-body">
+                    <fieldset class="representation-mode rfd4p-thinking-group" id="thinking-radio-group" aria-label="Thinking">
+                        <legend title="Extra recycling passes: slower, sometimes better designs">Thinking</legend>
+                        <label><input type="radio" name="thinking-radio" value="none" checked />none</label>
+                        <label><input type="radio" name="thinking-radio" value="low" />low</label>
+                        <label><input type="radio" name="thinking-radio" value="medium" />med</label>
+                        <label><input type="radio" name="thinking-radio" value="high" />high</label>
+                    </fieldset>
                     <p class="rfd4p-sampling-note">Lower K = higher temperature and more variation. Defaults give stronger low-temperature sampling.</p>
                     <label for="backbone-k">
                         <span class="rfd4p-slider-head">
