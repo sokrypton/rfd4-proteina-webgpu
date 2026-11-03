@@ -116,8 +116,7 @@ const TASKS = [
     example: 'inverse_folding', title: 'Redesign a sequence', desc: 'New sequence for a fixed backbone (PDB 2KL8)', then: 'sequence',
     recipe: [
       { fetch: '2KL8' },
-      { piece: 'A', at: 82, set: { from: 80, to: 85, structure: 'designed', sequence: 'designed' } },
-      { removePiece: 'A', at: 82 },
+      { piece: 'A', at: 10, set: { from: 1, to: 79, rest: 'removed' } },
       { piece: 'A', at: 10, set: { sequence: 'designed' } },
     ],
   },
@@ -125,8 +124,7 @@ const TASKS = [
     example: 'partial_diffusion', title: 'Diversify a structure', desc: 'Variants close to a starting fold (PDB 2KL8)',
     recipe: [
       { fetch: '2KL8' },
-      { piece: 'A', at: 82, set: { from: 80, to: 85, structure: 'designed', sequence: 'designed' } },
-      { removePiece: 'A', at: 82 },
+      { piece: 'A', at: 10, set: { from: 1, to: 79, rest: 'removed' } },
       { partial: true },
     ],
   },
@@ -901,9 +899,14 @@ export class DesignPanel {
   /** Existing residues: which of them, then three properties (structure, sequence, position), each fixed or designed. */
   _piecePop(c, p) {
     const a = this._inputDoc()?.atoms;
-    const num = (value, label) => el('input', { type: 'number', min: p.start, max: p.end, value, 'aria-label': label });
-    const from = num(p.start, 'First residue');
-    const to = num(p.end, 'Last residue');
+    // Which residues: one range or several ("1–40, 60–115"). Those outside go as Rest says; gaps between are free.
+    const whole = `${p.start}–${p.end}`;
+    const residuesText = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
+      value: whole, 'aria-label': 'Residues', title: 'One range or several, e.g. 1–40, 60–115' });
+    const rest = el('select', { 'aria-label': 'Rest', title: 'What happens to the residues of this piece outside the ranges' });
+    for (const [v, text] of [['removed', 'removed'], ['designed', 'free'], ['unchanged', 'unchanged']]) rest.append(el('option', { value: v, text }));
+    const betweenMin = el('input', { type: 'number', min: 1, max: 1000, placeholder: 'as is', 'aria-label': 'Fewest between' });
+    const betweenMax = el('input', { type: 'number', min: 1, max: 1000, placeholder: 'as is', 'aria-label': 'Most between' });
     const now = this._properties(p);
     const select = (label, options, value, title) => {
       const s = el('select', { 'aria-label': label, title });
@@ -916,11 +919,29 @@ export class DesignPanel {
       'Fixed: these amino acids. Free: the model writes them.');
     const position = select('Position in chain', POSITION_OPTIONS, now.position,
       'Free: the model chooses where in the chain these residues go.');
+    // The ranges typed, clamped to the piece, sorted; null when not understood.
+    const ranges = () => {
+      const text = residuesText.value.replace(/\s*[-–]\s*/g, '-').trim();
+      if (!text) return [[p.start, p.end]];
+      const out = [];
+      for (const tok of text.split(/[\s,;]+/).filter(Boolean)) {
+        const m = /^(?:[A-Za-z_]+)?(-?\d+)(?:-(-?\d+))?$/.exec(tok);
+        if (!m) return null;
+        const x = Number(m[1]);
+        const y = m[2] == null ? x : Number(m[2]);
+        const lo = Math.max(p.start, Math.min(x, y));
+        const hi = Math.min(p.end, Math.max(x, y));
+        if (lo <= hi) out.push([lo, hi]);
+      }
+      return out.length ? out.sort((u, v) => u[0] - v[0]) : null;
+    };
     const span = () => {
-      const lo = Math.max(p.start, Math.min(p.end, Math.round(Number(from.value)) || p.start));
-      const hi = Math.max(lo, Math.min(p.end, Math.round(Number(to.value)) || p.end));
-      const atoms = a ? p.atomIndices.filter((i) => Number(a.res_id[i]) >= lo && Number(a.res_id[i]) <= hi) : p.atomIndices;
-      return { lo, hi, atoms, count: a ? new Set(atoms.map((i) => `${a.res_id[i]}${a.ins_code[i]}`)).size : p.count };
+      const rs = ranges() ?? [[p.start, p.end]];
+      const lo = rs[0][0];
+      const hi = Math.max(...rs.map(([, y]) => y));
+      const inRanges = (id) => rs.some(([x, y]) => id >= x && id <= y);
+      const atoms = a ? p.atomIndices.filter((i) => inRanges(Number(a.res_id[i]))) : p.atomIndices;
+      return { lo, hi, ranges: rs, atoms, count: a ? new Set(atoms.map((i) => `${a.res_id[i]}${a.ins_code[i]}`)).size : p.count };
     };
     // Designed residues may change length: a length other than their count makes them new residues.
     const count = span().count;
@@ -928,12 +949,10 @@ export class DesignPanel {
     const lenMax = el('input', { type: 'number', min: 1, max: 1000, value: count, 'aria-label': 'Most residues' });
     let lenTouched = false;
     for (const input of [lenMin, lenMax]) input.addEventListener('input', () => { lenTouched = true; });
-    for (const input of [from, to]) {
-      input.addEventListener('input', () => {
-        if (lenTouched) return;
-        lenMin.value = lenMax.value = String(span().count);
-      });
-    }
+    residuesText.addEventListener('input', () => {
+      if (!lenTouched) lenMin.value = lenMax.value = String(span().count);
+      sync();
+    });
     const lengthRow = el('div', { class: 'rfd4p-pop-row', title: 'Each design picks one length from this range' },
       el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, lenMin, el('span', { text: '–' }), lenMax));
     const atomsField = this._atomsField(now.atoms, now.names);
@@ -948,7 +967,10 @@ export class DesignPanel {
       const free = structure.value === 'designed' && sequence.value === 'designed';
       if (free) position.value = 'fixed';
       positionRow.hidden = free;
-      lengthRow.hidden = !free;
+      const { ranges: rs, lo, hi } = span();
+      lengthRow.hidden = !free || rs.length > 1;
+      restRow.hidden = lo === p.start && hi === p.end;
+      betweenRow.hidden = rs.length < 2;
     };
     structure.addEventListener('change', sync);
     sequence.addEventListener('change', sync);
@@ -978,6 +1000,7 @@ export class DesignPanel {
     };
 
     const apply = async () => {
+      if (!ranges()) { note.textContent = 'Residues as ranges, e.g. 1–40, 60–115'; return; }
       // Hotspots are the chain's, whichever of its pieces the popup was opened from.
       const hotspots = residuesIn(hot.value, c.polymerAtomIndices);
       if (hotspots.bad.length || hotspots.missing.length) {
@@ -1026,40 +1049,73 @@ export class DesignPanel {
       }
       this._closePop();
       if (!await setHotspots()) return;
-      const { lo, hi, atoms, count: n } = span();
+      const { lo, hi, ranges: rs, atoms, count: n } = span();
       const want = { structure: structure.value, atoms: atomsField.value(), sequence: sequence.value, position: position.value };
-      if (!lengthRow.hidden && lenTouched) {
-        const min = Math.max(1, Math.round(Number(lenMin.value)) || n);
-        const max = Math.max(min, Math.round(Number(lenMax.value)) || n);
-        if (min !== n || max !== n) {
-          await this._mutate('/segments/replace', { atom_indices: atoms, minimum: min, maximum: max });
-          return;
-        }
-      }
-      const whole = lo === p.start && hi === p.end;
+      const free = { structure: 'designed', sequence: 'designed', position: 'fixed' };
+      // Residues by number, re-read after each edit (atom indices move when residues are removed or replaced).
+      const ids = (i) => Number(a.res_id[i]);
+      const gapIds = rs.slice(1).map(([x], k) => [rs[k][1] + 1, x - 1]).filter(([x, y]) => x <= y);
+      const endIds = [...new Set(p.atomIndices.map(ids).filter((id) => id < lo || id > hi))];
+      const atomsOf = (test) => {
+        const doc = this._inputDoc()?.atoms;
+        return (chainNow()?.polymerAtomIndices ?? []).filter((i) => !/^\d+-\d+$/.test(String(doc.res_name[i])) && test(Number(doc.res_id[i])));
+      };
+      const inGap = (id) => gapIds.some(([x, y]) => id >= x && id <= y);
       const atomsNow = now.atoms === 'named' ? this._atomNames(now.names).join(',') : now.atoms;
       const atomsWant = Array.isArray(want.atoms) ? want.atoms.join(',') : want.atoms;
       const changed = want.structure !== now.structure || want.sequence !== now.sequence || want.position !== now.position
         || (want.structure !== 'designed' && atomsWant !== atomsNow);
-      if (changed) {
-        // New settings go to the residues in the range only; the rest of the piece stays as it is.
-        await this._applyPiece(p, atoms, want);
-      } else if (!whole && !extraEdits.length && !(now.structure === 'designed' && now.sequence === 'designed')) {
-        // Only the range changed: the piece is now those residues, and the ones cut off are designed (same length).
-        const inRange = new Set(atoms);
-        const rest = p.atomIndices.filter((i) => !inRange.has(i));
-        if (rest.length) await this._applyPiece(p, rest, { structure: 'designed', sequence: 'designed', position: 'fixed' });
+      // One edit for the settings: the ranges take the popup's, gaps between them are free, and so is the rest when
+      // asked; residues already free stay as they are.
+      const parts = [];
+      if (changed) parts.push({ p, atoms, want });
+      const nowFree = now.structure === 'designed' && now.sequence === 'designed';
+      if (!nowFree) {
+        const gaps = p.atomIndices.filter((i) => inGap(ids(i)));
+        if (gaps.length) parts.push({ p, atoms: gaps, want: free });
+        if (rest.value === 'designed') {
+          const ends = p.atomIndices.filter((i) => ids(i) < lo || ids(i) > hi);
+          if (ends.length) parts.push({ p, atoms: ends, want: free });
+        }
+      }
+      if (parts.length && !await this._applyPieces(parts)) return;
+      if (rest.value === 'removed' && endIds.length) {
+        const gone = new Set(endIds);
+        if (!await this._mutate('/delete', { atom_indices: atomsOf((id) => gone.has(id)) })) return;
+      }
+      // Lengths last: free residues of another length become new residues.
+      const bMin = Math.round(Number(betweenMin.value));
+      const bMax = Math.round(Number(betweenMax.value));
+      if (!betweenRow.hidden && (bMin > 0 || bMax > 0)) {
+        const lo2 = Math.max(1, bMin || bMax);
+        const hi2 = Math.max(lo2, bMax || bMin);
+        for (const [x, y] of [...gapIds].reverse()) {
+          const gap = atomsOf((id) => id >= x && id <= y);
+          if (gap.length && !await this._mutate('/segments/replace', { atom_indices: gap, minimum: lo2, maximum: hi2 })) return;
+        }
+      }
+      if (!lengthRow.hidden && lenTouched) {
+        const min = Math.max(1, Math.round(Number(lenMin.value)) || n);
+        const max = Math.max(min, Math.round(Number(lenMax.value)) || n);
+        if (min !== n || max !== n) {
+          const [x, y] = rs[0];
+          await this._mutate('/segments/replace', { atom_indices: atomsOf((id) => id >= x && id <= y), minimum: min, maximum: max });
+        }
       }
     };
 
     const row = (label, ...children) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...children);
     const positionRow = row('Position', position);
+    const restRow = row('Rest', rest);
+    const betweenRow = el('div', { class: 'rfd4p-pop-row', title: 'The residues between the ranges are free; a length makes them new residues, each design picking one length' },
+      el('span', { class: 'rfd4p-pop-label', text: 'Between' }), el('span', { class: 'rfd4p-pop-inline' }, betweenMin, el('span', { text: '–' }), betweenMax));
     sync();
     return [
       this._popHead(this._pieceText(c, p)),
-      // The range first: narrowing it is how a loaded structure gets its fixed regions.
-      row('Residues', el('span', { class: 'rfd4p-pop-inline', title: 'Narrow the range to change only some of these residues' },
-        el('span', { text: c.id }), from, el('span', { text: '–' }), to)),
+      // The ranges first: narrowing them is how a loaded structure is cut to the part that matters.
+      row('Residues', el('span', { class: 'rfd4p-pop-inline' }, el('span', { text: c.id }), residuesText)),
+      restRow,
+      betweenRow,
       row('Structure', structure),
       atomsRow,
       row('Sequence', sequence),
@@ -1818,7 +1874,7 @@ export class DesignPanel {
             continue;
           }
           const pop = open(sub);
-          if (s.from != null) { fill(pop, 'First residue', s.from); fill(pop, 'Last residue', s.to); }
+          if (s.from != null) { fill(pop, 'Residues', `${s.from}-${s.to}`); fill(pop, 'Rest', s.rest ?? 'unchanged', 'change'); }
           if (s.structure) fill(pop, 'Structure', s.structure, 'change');
           if (s.atoms) {
             const named = !ATOM_OPTIONS.some(([v]) => v === s.atoms);
