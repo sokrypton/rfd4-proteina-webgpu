@@ -625,60 +625,6 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   text-align: left;
 }
 
-/* Selection popup (web/design-panel.js _renderPop) */
-.rfd4p-pop {
-  position: fixed;
-  z-index: 50;
-  display: grid;
-  gap: 6px;
-  width: 300px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-strong, #50535a);
-  border-radius: 6px;
-  background: var(--surface-card, #26272b);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
-  font-size: 11.5px;
-}
-
-.rfd4p-pop[hidden] {
-  display: none;
-}
-
-.rfd4p-pop-head {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  column-gap: 8px;
-}
-
-.rfd4p-pop-head strong {
-  font: 600 12px var(--font-mono, monospace);
-  overflow-wrap: anywhere;
-}
-
-.rfd4p-pop-head .muted {
-  grid-column: 1;
-  font-size: 11px;
-}
-
-.rfd4p-pop-close {
-  grid-row: 1 / span 2;
-  grid-column: 2;
-}
-
-.rfd4p-pop-close {
-  min-height: 0;
-  padding: 0 6px;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted, #b1b3b9);
-  font-size: 15px;
-  line-height: 1;
-}
-
-.rfd4p-pop-close:hover {
-  color: var(--text, #f1f1f2);
-}
-
 .rfd4p-pop-row {
   display: flex;
   flex-wrap: wrap;
