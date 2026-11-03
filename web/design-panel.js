@@ -482,7 +482,12 @@ export class DesignPanel {
     window.addEventListener('atomworks-studio', (ev) => {
       if (ev.detail?.type !== 'selection') return;
       this.selectionCount = ev.detail?.count ?? 0;
-      queueMicrotask(() => this._renderPop());
+      queueMicrotask(() => {
+        this._markStrips();
+        // A pick on the strip has its own popup; the viewer's is for picks in the viewer and the sequence.
+        if (this.stripPicking) { this.stripPicking = false; this.pop.hidden = true; return; }
+        this._renderPop();
+      });
     });
     // Starting from the input diversifies what is designed; with nothing designed yet, that is all the protein.
     document.getElementById('partial-diffusion')?.addEventListener('change', (ev) => {
@@ -571,6 +576,7 @@ export class DesignPanel {
     els.undo.disabled = document.getElementById('undo')?.disabled ?? true;
 
     els.chainList.replaceChildren(...this._sourceGroups(spec.chains).map((g) => this._groupBlock(g, viewingDesign)));
+    this._markStrips();
     els.contig.textContent = spec.contig || '—';
 
     const warnings = this.lastError ? [this.lastError, ...spec.warnings] : [...spec.warnings];
@@ -711,6 +717,8 @@ export class DesignPanel {
       return el('span', { class: `rfd4p-cell ${p ? `rfd4p-cell-${p.state}` : 'rfd4p-cell-out'}${p?.hot ? ' rfd4p-cell-hot' : ''}` });
     });
     const strip = el('div', { class: 'rfd4p-strip', 'aria-label': `Chain ${c.id} residues: drag to pick some` }, ...cells);
+    // Which atoms each cell is, so the viewer's and the sequence's selection shows here too (`_markStrips`).
+    strip.cellAtoms = list.map((r) => present.get(r.num)?.atoms ?? []);
     const at = (ev) => {
       const r = strip.getBoundingClientRect();
       return Math.max(0, Math.min(list.length - 1, Math.floor(((ev.clientX - r.left) / r.width) * list.length)));
@@ -737,9 +745,27 @@ export class DesignPanel {
       const lo = Math.min(drag.start, drag.end);
       const hi = Math.max(drag.start, drag.end);
       drag = null;
+      // The residues picked here are selected in the viewer and the sequence too.
+      const atoms = list.slice(lo, hi + 1).flatMap((r) => present.get(r.num)?.atoms ?? []);
+      if (typeof window.atomworksStudio?.setSelection === 'function') {
+        this.stripPicking = true;
+        window.atomworksStudio.setSelection(atoms);
+      }
+      show(lo, hi);
       this._openPop(strip, () => this._stripPop(c, data, list.slice(lo, hi + 1)));
     });
     return strip;
+  }
+
+  /** Outline on every strip the residues selected in the viewer or the sequence (cells with no atoms keep a strip pick's outline). */
+  _markStrips() {
+    const sel = new Set(window.atomworksStudio?.getSelection?.() ?? []);
+    for (const strip of this.els.chainList?.querySelectorAll('.rfd4p-strip') ?? []) {
+      strip.cellAtoms?.forEach((atoms, k) => {
+        if (!atoms.length) return;
+        strip.children[k]?.classList.toggle('rfd4p-cell-sel', atoms.some((i) => sel.has(i)));
+      });
+    }
   }
 
   /** What picked residues of the strip become: fixed, designed, hotspots, or out of the job. */
