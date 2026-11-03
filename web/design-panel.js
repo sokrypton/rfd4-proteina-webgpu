@@ -148,26 +148,28 @@ const el = (tag, attrs = {}, ...children) => {
 /** Hotspots' one colour, wherever they are shown: sequence bar, viewer, chain bar, chip (styles.css `--rfd4p-hotspot`). */
 const HOTSPOT_COLOR = 0xf59e0b;
 
-// The three properties of residues, the same in a sub-card's popup and the selection's.
-const STRUCTURE_OPTIONS = [['fixed', 'fixed'], ['rigid', 'fixed, can move'], ['designed', 'designed']];
+// The three properties of residues, the same in a sub-card's popup and the selection's: each fixed or free (the model
+// decides), and a structure may also be rigid (kept, moving as one body).
+const STRUCTURE_OPTIONS = [['fixed', 'fixed'], ['rigid', 'rigid'], ['designed', 'free']];
 // Which atoms a fixed structure holds; "named" takes atom names typed beside it (CG, OD1).
 const ATOM_OPTIONS = [['all', 'all'], ['backbone', 'backbone'], ['sidechain', 'side chains'], ['named', 'named']];
-const SEQUENCE_OPTIONS = [['fixed', 'fixed'], ['designed', 'designed']];
-const POSITION_OPTIONS = [['fixed', 'fixed'], ['anywhere', 'anywhere']];
-// What else can be asked of residues: their secondary structure, how exposed they are, an interaction to make.
-const SHAPE_OPTIONS = [['0', 'any'], ['1', 'helix'], ['2', 'strand'], ['3', 'loop']];
-const EXPOSURE_OPTIONS = [['0', 'any'], ['1', 'buried'], ['2', 'intermediate'], ['3', 'exposed']];
+const SEQUENCE_OPTIONS = [['fixed', 'fixed'], ['designed', 'free']];
+const POSITION_OPTIONS = [['fixed', 'fixed'], ['anywhere', 'free']];
+// What else can be asked of residues: their secondary structure, how exposed they are, an interaction to make. Every
+// list ends with "free", the model decides, as the three properties do.
+const SHAPE_OPTIONS = [['1', 'helix'], ['2', 'strand'], ['3', 'loop'], ['0', 'free']];
+const EXPOSURE_OPTIONS = [['1', 'buried'], ['2', 'intermediate'], ['3', 'exposed'], ['0', 'free']];
 const INTERACTION_OPTIONS = [
-  ['', 'none'], ['hbond:1', 'H-bond donor'], ['hbond:2', 'H-bond acceptor'], ['hbond:3', 'H-bond donor or acceptor'],
+  ['hbond:1', 'H-bond donor'], ['hbond:2', 'H-bond acceptor'], ['hbond:3', 'H-bond donor or acceptor'],
   ['saltbridge:1', 'salt bridge, positive'], ['saltbridge:2', 'salt bridge, negative'], ['pistack:1', 'π-stacking'],
   ['pication:1', 'π-cation, aromatic'], ['pication:2', 'π-cation, cation'], ['hydrophobic:1', 'hydrophobic'],
-  ['metal_coord:2', 'metal-coordinating'],
+  ['metal_coord:2', 'metal-coordinating'], ['', 'free'],
 ];
 // Folds a chain can be asked for, by name (CATH class, architecture, topology); "other" takes any code.
 const FOLD_OPTIONS = [
-  ['', 'any'], ['1', 'mainly α'], ['2', 'mainly β'], ['3', 'α/β'],
+  ['1', 'mainly α'], ['2', 'mainly β'], ['3', 'α/β'],
   ['1.10', 'helix bundle (orthogonal)'], ['1.20', 'up-down helix bundle'], ['2.40', 'β-barrel'], ['2.60', 'β-sandwich'],
-  ['3.30.70', 'ferredoxin-like'], ['3.40.50', 'Rossmann-like'], ['3.20.20', 'TIM barrel'], ['other', 'other code'],
+  ['3.30.70', 'ferredoxin-like'], ['3.40.50', 'Rossmann-like'], ['3.20.20', 'TIM barrel'], ['other', 'other code'], ['', 'free'],
 ];
 const CONDITION_KEY = { hbond: 'hbond', saltbridge: 'saltbridge', pistack: 'pistack', pication: 'pication', hydrophobic: 'hydrophobic', metal_coord: 'metal_coord' };
 
@@ -663,14 +665,14 @@ export class DesignPanel {
     // "new" last, so it lines up down a chain of blocks ("helix · new", "loop · new").
     if (p.kind === 'new') return [word(SHAPE_OPTIONS, p.ss), word(EXPOSURE_OPTIONS, p.rasa), 'new'].filter(Boolean).join(' · ');
     const { structure, atoms, names, sequence, position } = this._properties(p);
-    // The popup's words: both fixed reads "fixed", both designed "designed", otherwise which one is fixed; part of the
-    // atoms says which.
+    // The popup's words: both fixed reads "fixed", both free "free", otherwise which one is fixed; part of the atoms
+    // says which.
     const part = atoms === 'backbone' ? 'backbone' : atoms === 'sidechain' ? 'side chains' : atoms === 'named' ? names : '';
-    const what = structure === 'designed' && sequence === 'designed' ? 'designed'
-      : structure === 'rigid' ? (part ? `${part} fixed, can move` : 'fixed, can move')
+    const what = structure === 'designed' && sequence === 'designed' ? 'free'
+      : structure === 'rigid' ? (part ? `${part} rigid` : 'rigid')
         : structure === 'fixed' && sequence === 'fixed' ? (part ? `${part} fixed` : 'fixed')
           : structure === 'fixed' ? 'structure fixed' : 'sequence fixed';
-    return [what, position === 'anywhere' ? 'anywhere' : '', word(SHAPE_OPTIONS, p.ss), word(EXPOSURE_OPTIONS, p.rasa), word(INTERACTION_OPTIONS, p.inter),
+    return [what, position === 'anywhere' ? 'position free' : '', word(SHAPE_OPTIONS, p.ss), word(EXPOSURE_OPTIONS, p.rasa), word(INTERACTION_OPTIONS, p.inter),
       p.hotspots.length ? `${p.hotspots.length} hotspot${p.hotspots.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
   }
 
@@ -788,49 +790,6 @@ export class DesignPanel {
       el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: () => { this.applying = Promise.resolve(apply()); } }));
   }
 
-  /**
-   * The quick row of a residue popup: Hotspot, Fixed, Designed (and Remove for a viewer or sequence pick), each done at
-   * once; the details are under More. `hits` are the pieces touched ({p, atoms, now}); ligands alone get a pose.
-   */
-  _quickRow({ hits = [], hotAtoms = [], ligandAtoms = [], removeAtoms = null, done }) {
-    const a = this._inputDoc()?.atoms;
-    const ann = a?.annotations ?? {};
-    const btn = (text, on, fn, title = '') => el('button', {
-      type: 'button', class: `secondary compact${on ? ' rfd4p-on' : ''}`, text, title, 'aria-pressed': String(Boolean(on)),
-      onclick: async () => { done(); this.applying = Promise.resolve(fn()); await this.applying; },
-    });
-    const items = [];
-    if (hotAtoms.length) {
-      const allHot = hotAtoms.every((i) => ann.condition_hotspot_1_atom?.[i]);
-      items.push(btn('Hotspot', allHot, () => this._batch([{ condition: 'hotspot', atom_indices: hotAtoms, enabled: !allHot }]),
-        allHot ? 'Hotspots now: click to unmark' : 'Residues a binder should touch'));
-    }
-    if (hits.length) {
-      const is = (h, want) => h.now.structure === want.structure && h.now.sequence === want.sequence && h.now.atoms === 'all' && h.now.position === 'fixed';
-      const fixed = { structure: 'fixed', atoms: 'all', sequence: 'fixed', position: 'fixed' };
-      const designed = { structure: 'designed', atoms: 'all', sequence: 'designed', position: 'fixed' };
-      const set = (want) => () => {
-        const parts = hits.filter((h) => !is(h, want)).map((h) => ({ p: h.p, atoms: h.atoms, want }));
-        return parts.length ? this._applyPieces(parts) : true;
-      };
-      items.push(btn('Fixed', hits.every((h) => is(h, fixed)), set(fixed), 'Kept as they are: structure and sequence'));
-      items.push(btn('Designed', hits.every((h) => is(h, designed)), set(designed), 'The model builds them, same length'));
-    } else if (ligandAtoms.length) {
-      const crd = ann.condition_coordinate_1_atom;
-      const held = ligandAtoms.filter((i) => Array.isArray(crd?.[i]) && Number.isFinite(crd[i][0])).length;
-      const pose = (fix) => () => this._batch([{ condition: 'coordinate', atom_indices: ligandAtoms, enabled: fix }]);
-      items.push(btn('Fixed', held === ligandAtoms.length, pose(true), 'Kept where it is'));
-      items.push(btn('Free', held === 0, pose(false), 'The model places it'));
-    }
-    if (removeAtoms?.length) {
-      items.push(el('button', {
-        type: 'button', class: 'danger compact', text: 'Remove',
-        onclick: () => { done(); void this._mutate('/delete', { atom_indices: removeAtoms }); },
-      }));
-    }
-    return el('div', { class: 'rfd4p-pop-quick' }, ...items);
-  }
-
   /** The rest of a popup, folded: opened by More. */
   _moreFold(...children) {
     return el('details', { class: 'rfd4p-pop-more' }, el('summary', { text: 'More' }), el('div', { class: 'rfd4p-pop-more-body' }, ...children.filter(Boolean)));
@@ -932,11 +891,11 @@ export class DesignPanel {
       return s;
     };
     const structure = select('Structure', STRUCTURE_OPTIONS,
-      now.structure, 'Fixed: kept where it is. Can move: kept rigid, free to move as a whole (a framework). Designed: the model builds it.');
+      now.structure, 'Fixed: kept where it is. Rigid: kept as it is, moving as one body (a framework). Free: the model builds it.');
     const sequence = select('Sequence', SEQUENCE_OPTIONS, now.sequence,
-      'Fixed: these amino acids. Designed: the model writes them.');
+      'Fixed: these amino acids. Free: the model writes them.');
     const position = select('Position in chain', POSITION_OPTIONS, now.position,
-      'Anywhere: the model chooses where in the chain these residues go.');
+      'Free: the model chooses where in the chain these residues go.');
     const span = () => {
       const lo = Math.max(p.start, Math.min(p.end, Math.round(Number(from.value)) || p.start));
       const hi = Math.max(lo, Math.min(p.end, Math.round(Number(to.value)) || p.end));
@@ -1078,20 +1037,18 @@ export class DesignPanel {
     sync();
     return [
       this._popHead(this._pieceText(c, p)),
-      this._quickRow({ hits: [{ p, atoms: p.atomIndices, now }], hotAtoms: p.atomIndices, done: () => this._closePop() }),
+      row('Structure', structure),
+      atomsRow,
+      row('Sequence', sequence),
+      lengthRow,
       this._moreFold(
         row('Residues', el('span', { class: 'rfd4p-pop-inline', title: 'Narrow the range to change only some of these residues' },
           el('span', { text: c.id }), from, el('span', { text: '–' }), to)),
-        row('Structure', structure),
-        atomsRow,
-        row('Sequence', sequence),
         positionRow,
-        lengthRow,
         ...extra.rows,
         row('Hotspots', hot),
-        row('Keep only', keepOnly),
-        note),
-      // Apply stays in sight: it applies what was changed under More (the quick buttons act at once).
+        row('Keep only', keepOnly)),
+      note,
       this._popActions(apply),
     ];
   }
@@ -1136,7 +1093,7 @@ export class DesignPanel {
     // Internal coordinates are their own edit: clear them before anything else, set them before the rest.
     const off = parts.filter(({ p }) => p.kind === 'kept' && p.keep === 'shape').flatMap(({ atoms }) => atoms);
     if (off.length && !await this._mutate('/internal-coords', { atom_indices: off, enabled: false })) return false;
-    // "Fixed, can move" is one rigid body for the whole job (an antibody's two framework chains, a framework split by
+    // "Rigid" is one rigid body for the whole job (an antibody's two framework chains, a framework split by
     // CDRs): join the rigid group already there. Separate bodies are the Advanced editor's.
     // One rigid body per chain (an antibody's light and heavy frameworks move apart; a framework split by CDRs moves
     // as one), as the bundled examples set them. Only the held atoms join it.
@@ -1217,8 +1174,9 @@ export class DesignPanel {
       this._popHead(`Chain ${c.id}, new residues`),
       el('div', { class: 'rfd4p-pop-row', title: 'Each design picks one length from this range' },
         el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, min, el('span', { text: '–' }), max)),
-      ...extra.rows,
-      fold.row,
+      // Shape in front (blocks are drawn with it); exposure and the chain's fold under More.
+      extra.rows[0],
+      this._moreFold(extra.rows[1], fold.row),
       note,
       this._popActions(apply),
     ];
@@ -1227,7 +1185,7 @@ export class DesignPanel {
   /** A ligand: where it goes, or another molecule in its place. */
   _ligandPop(c, l) {
     const atoms = l.atomIndices;
-    const pose = el('select', { 'aria-label': 'Pose', title: 'Fixed: kept where it is. Free: the model places it.' },
+    const pose = el('select', { 'aria-label': 'Structure', title: 'Fixed: kept where it is. Free: the model places it.' },
       el('option', { value: 'fixed', text: 'fixed', selected: l.pose !== 'predicted' }),
       el('option', { value: 'free', text: 'free', selected: l.pose === 'predicted' }));
     // Which atoms a fixed pose holds: all, or some named (the rest placed by the model).
@@ -1277,7 +1235,7 @@ export class DesignPanel {
     };
     return [
       this._popHead(`Ligand ${l.name}`),
-      el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Pose' }), pose),
+      el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Structure' }), pose),
       atomsRow,
       el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Swap' }), code),
       note,
@@ -1439,13 +1397,13 @@ export class DesignPanel {
     };
     const row = (label, ...children) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...children);
     const rows = [];
+    const more = [];
     const title = [parts.join(', '), ligNames.join(', ')].filter(Boolean).join(' · ');
     // Its × closes it and lets go of the selection.
     const head = this._popHead(title || `${sel.length} atoms`, () => document.getElementById('clear-selection')?.click(),
       nRes ? `${nRes} residue${nRes === 1 ? '' : 's'}` : null);
     const done = () => { pop.hidden = true; };
     let apply = async () => {};
-    let keepOnly = null;
 
     if (hits.length) {
       const structure = select('Structure', STRUCTURE_OPTIONS, common('structure'));
@@ -1482,8 +1440,9 @@ export class DesignPanel {
       hot.addEventListener('change', () => { hotTouched = true; });
       const same = (key) => { const v = new Set(hits.map((h) => h.p[key] ?? (key === 'inter' ? '' : 0))); return v.size === 1 ? [...v][0] : 'mixed'; };
       const extra = this._extraFields({ ss: same('ss'), rasa: same('rasa'), inter: same('inter') });
-      rows.push(row('Structure', structure), atomsRow, row('Sequence', sequence), positionRow, lengthRow, ...extra.rows.filter(Boolean),
+      rows.push(row('Structure', structure), atomsRow, row('Sequence', sequence), lengthRow,
         el('label', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Hotspot' }), hot));
+      more.push(positionRow, ...extra.rows.filter(Boolean));
       apply = async () => {
         done();
         if (hotTouched && !await this._batch([{ condition: 'hotspot', atom_indices: polymerAtoms, enabled: hot.checked }])) return;
@@ -1515,22 +1474,13 @@ export class DesignPanel {
         }
         if (changes.length) await this._applyPieces(changes);
       };
-      keepOnly = el('button', {
-        type: 'button', class: 'secondary compact', text: 'Keep only',
-        title: 'Keep only these residues of their chains; the rest becomes new residues',
-        onclick: async () => {
-          done();
-          await this._runFlow('scaffold', this._spec(), {
-            atoms: polymerAtoms, sidechainsOnly: atomsField.value() === 'sidechain', unindexed: position.value === 'anywhere',
-          });
-        },
-      });
     }
     if (ligandAtoms.length) {
       const nFixed = ligandAtoms.filter(hasCrd).length;
-      const pose = select('Pose', [['fixed', 'fixed'], ['free', 'free']],
+      const pose = select('Structure', [['fixed', 'fixed'], ['free', 'free']],
         nFixed === ligandAtoms.length ? 'fixed' : nFixed === 0 ? 'free' : 'mixed');
-      rows.push(row(ligNames.length === 1 ? ligNames[0] : 'Ligands', pose));
+      // Beside residues, the row names the ligand; alone, it is the ligand's Structure like any other.
+      rows.push(row(!hits.length ? 'Structure' : ligNames.length === 1 ? ligNames[0] : 'Ligands', pose));
       const polymerApply = apply;
       apply = async () => {
         done();
@@ -1542,13 +1492,17 @@ export class DesignPanel {
         await polymerApply();
       };
     }
-    if (keepOnly) rows.push(el('div', { class: 'rfd4p-pop-row' }, keepOnly));
-    pop.replaceChildren(head,
-      this._quickRow({ hits, hotAtoms: polymerAtoms, ligandAtoms, removeAtoms: residues, done }),
-      this._moreFold(...rows),
-      el('div', { class: 'rfd4p-pop-actions' },
-        el('span', { class: 'rfd4p-pop-spacer' }),
-        el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: () => { this.applying = Promise.resolve(apply()); } })));
+    // Unticked, the selection leaves the job (nothing else is applied then).
+    const include = el('input', { type: 'checkbox', checked: true, 'aria-label': 'Include' });
+    rows.push(el('label', { class: 'rfd4p-pop-row', title: 'Untick to take these out of the job' },
+      el('span', { class: 'rfd4p-pop-label', text: 'Include' }), include));
+    const applyEdits = apply;
+    apply = async () => {
+      if (include.checked) return applyEdits();
+      done();
+      return this._mutate('/delete', { atom_indices: residues });
+    };
+    pop.replaceChildren(...[head, ...rows, more.length ? this._moreFold(...more) : null, this._popActions(apply)].filter(Boolean));
     pop.hidden = false;
     // Next to the pointer that made the selection, kept on screen.
     const p = this.lastPointer ?? (() => {
@@ -1872,7 +1826,7 @@ export class DesignPanel {
         } else if (step.ligand) {
           const sub = [...this.els.chainList.querySelectorAll('.rfd4p-sub')].find((x) => x.querySelector('.rfd4p-sub-name')?.textContent === step.ligand);
           const pop = open(sub);
-          fill(pop, 'Pose', step.pose, 'change');
+          fill(pop, 'Structure', step.pose, 'change');
           if (step.atoms) { fill(pop, 'Atoms', 'named', 'change'); fill(pop, 'Atom names', step.atoms); }
           await apply(pop);
         } else if (step.chain && (step.name || step.order)) {

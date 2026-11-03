@@ -1,5 +1,5 @@
 /**
- * A plain structure as fetched: everything fixed, buffer ions dropped; "fixed, can move" joins one rigid group.
+ * A plain structure as fetched: everything fixed, buffer ions dropped; "rigid" joins one rigid group.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,7 +27,7 @@ test('a fetched structure opens fixed, without buffer ions', () => {
   assert.deepEqual(spec.chains[0].pieces.map((p) => [p.kind, p.keep]), [['kept', 'all']]);
 });
 
-test('"fixed, can move" twice is one rigid group when the group is given', () => {
+test('"rigid" twice is one rigid group when the group is given', () => {
   const doc = new StudioDoc(cif, 't', { preset: 'rcsb' });
   const resAtoms = (lo, hi) => Array.from({ length: doc.atoms.nAtoms }, (_, i) => i).filter((i) => doc.atoms.res_id[i] >= lo && doc.atoms.res_id[i] <= hi);
   doc.setInternalCoordinateConditioning(resAtoms(1, 2));
