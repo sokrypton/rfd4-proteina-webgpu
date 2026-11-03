@@ -567,17 +567,24 @@ export class DesignPanel {
     }
   }
 
-  /** Chains by where their coordinates come from, in order of first appearance; chains made here last, uncaptioned. */
+  /**
+   * Chains by where their coordinates come from, in the job's order (as the sequence bar shows them, and as they were
+   * added); chains made here are uncaptioned, in place.
+   */
   _sourceGroups(chains) {
-    const groups = new Map();
-    const made = { label: null, chains: [] };
+    const groups = [];
+    const bySource = new Map();
     for (const c of chains) {
       const label = this._sourceOf(c);
-      if (!label) { made.chains.push(c); continue; }
-      if (!groups.has(label)) groups.set(label, { label, chains: [] });
-      groups.get(label).chains.push(c);
+      let g = label ? bySource.get(label) : groups[groups.length - 1];
+      if (!g || (!label && g.label)) {
+        g = { label, chains: [] };
+        groups.push(g);
+        if (label) bySource.set(label, g);
+      }
+      g.chains.push(c);
     }
-    return [...groups.values(), ...(made.chains.length ? [made] : [])];
+    return groups;
   }
 
   /** A source's caption (click: replace it with another structure), then its chains. */
