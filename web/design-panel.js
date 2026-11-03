@@ -524,6 +524,7 @@ export class DesignPanel {
     });
     // Starting from the input diversifies what is designed; with nothing designed yet, that is all the protein.
     document.getElementById('partial-diffusion')?.addEventListener('change', (ev) => {
+      if (ev.target.checked) document.getElementById('sampling-accordion')?.setAttribute('open', '');
       if (!ev.target.checked) return;
       const doc = this._inputDoc();
       const spec = doc?.atoms ? designSpec(doc.atoms) : null;

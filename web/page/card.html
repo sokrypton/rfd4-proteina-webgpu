@@ -66,16 +66,16 @@
                 <button id="seed-random" type="button" class="secondary compact rfd4p-seed-dice" title="New random seed" aria-label="New random seed">🎲</button>
             </div>
 
-            <div class="rfd4p-partial-setting" title="Partial diffusion: start part of the way from the input structure instead of from noise. About 40% is a good start; higher changes it more. Needs every residue defined, with coordinates.">
-                <label class="checkbox" for="partial-diffusion">
-                    <input type="checkbox" id="partial-diffusion" /> Start from the input structure
-                </label>
-                <input type="range" id="partial-diffusion-percent" class="rfd4p-slider" min="1" max="100" step="1" value="40" disabled aria-label="How far from the input (%)" />
-                <input type="number" id="partial-diffusion-percent-num" class="rfd4p-slider-num" min="1" max="100" step="1" value="40" disabled aria-label="How far from the input (%)" />
-            </div>
             <details class="rfd4p-sampling-details" id="sampling-accordion">
                 <summary>More settings</summary>
                 <div class="rfd4p-sampling-body">
+                    <div class="rfd4p-partial-setting" title="Partial diffusion: start part of the way from the input structure instead of from noise. About 40% is a good start; higher changes it more. Needs every residue defined, with coordinates.">
+                        <label class="checkbox" for="partial-diffusion">
+                            <input type="checkbox" id="partial-diffusion" /> Start from the input structure
+                        </label>
+                        <input type="range" id="partial-diffusion-percent" class="rfd4p-slider" min="1" max="100" step="1" value="40" disabled aria-label="How far from the input (%)" />
+                        <input type="number" id="partial-diffusion-percent-num" class="rfd4p-slider-num" min="1" max="100" step="1" value="40" disabled aria-label="How far from the input (%)" />
+                    </div>
                     <fieldset class="representation-mode rfd4p-thinking-group" id="thinking-radio-group" aria-label="Thinking">
                         <legend title="Extra recycling passes: slower, sometimes better designs">Thinking</legend>
                         <label><input type="radio" name="thinking-radio" value="none" checked />none</label>

@@ -603,6 +603,8 @@ class Rfd4pStudioApp {
     }
     if (partialPercent) partialPercent.disabled = !enabled;
     if (partialPercentNum) partialPercentNum.disabled = !enabled;
+    // It lives under More settings: shown whenever it is turned on, so it is never on out of sight.
+    if (enabled) document.getElementById('sampling-accordion')?.setAttribute('open', '');
   }
 
   _getSelectedThinking() {
