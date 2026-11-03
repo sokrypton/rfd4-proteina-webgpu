@@ -1333,6 +1333,9 @@ export class StudioDoc {
       slots.forEach((slot, k) => { slot.next = byKey.get(want[k]); if (slot.next !== slot) changed = true; });
     }
     if (!changed) return;
+    // Renumbered, each kept residue remembers where it came from ("A38"): the card names it so, as AtomWorks does.
+    const src = this._ensureAnnotationArray('annotation_src-component_1_atom', { default: '' });
+    for (const r of residues) if (!r.segment && !src[r.atoms[0]]) for (const i of r.atoms) src[i] = `${a.chain_id[i]}${a.res_id[i]}`;
     this._permuteAtoms(residues.flatMap((r) => (r.next ?? r).atoms));
     for (const chain of chains) this._renumberChain(chain);
     // The new residues' bonds went with the residues they joined: join each to its new neighbours instead.
