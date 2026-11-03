@@ -17,8 +17,9 @@ const ADVANCED_KEY = 'rfd4p-advanced-editor';
  * Start-screen tasks. Each with a `recipe` is built from its PDB entry with the card's own controls, out of sight
  * (`_buildRecipe`), and shown finished: the set-up a user would make, captioned with its entry. Each matches the bundled
  * Studio example of the same name (`example`, web/studio/examples) model input for model input: the same entries,
- * residues, held atoms, chain names and order (test/example-recipes notes what cannot match). Without a network that
- * bundled example opens instead.
+ * residues, held atoms, chain names and order. The two 2KL8 examples are the exception: the bundled file lacks residues
+ * 8–27 (a bug in it), so they keep the whole protein and drop only the His tag. Without a network that bundled example
+ * opens instead.
  * Steps: `fetch` (ID and chains), `add` (another entry's chains, as + pdb), `piece` (open the piece holding `at`, fill
  * `set`, Apply), `removePiece` (× the piece holding `at`), `removeNew` (× the new residues left in a chain), `addSeq`,
  * `newLength` (the chain's `k`-th new piece), `ligand` (pose, held atoms), `chain` (its popup: `name`, `order` from 1),
@@ -105,20 +106,15 @@ const TASKS = [
     example: 'inverse_folding', title: 'Redesign a sequence', desc: 'New sequence for a fixed backbone (PDB 2KL8)', then: 'sequence',
     recipe: [
       { fetch: '2KL8' },
-      { piece: 'A', at: 10, set: { from: 8, to: 27, structure: 'designed', sequence: 'designed' } },
-      { removePiece: 'A', at: 10 },
       { piece: 'A', at: 82, set: { from: 80, to: 85, structure: 'designed', sequence: 'designed' } },
       { removePiece: 'A', at: 82 },
-      { piece: 'A', at: 5, set: { sequence: 'designed' } },
-      { piece: 'A', at: 30, set: { sequence: 'designed' } },
+      { piece: 'A', at: 10, set: { sequence: 'designed' } },
     ],
   },
   {
     example: 'partial_diffusion', title: 'Diversify a structure', desc: 'Variants close to a starting fold (PDB 2KL8)',
     recipe: [
       { fetch: '2KL8' },
-      { piece: 'A', at: 10, set: { from: 8, to: 27, structure: 'designed', sequence: 'designed' } },
-      { removePiece: 'A', at: 10 },
       { piece: 'A', at: 82, set: { from: 80, to: 85, structure: 'designed', sequence: 'designed' } },
       { removePiece: 'A', at: 82 },
       { partial: true },
