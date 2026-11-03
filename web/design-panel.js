@@ -163,6 +163,12 @@ const INTERACTION_OPTIONS = [
   ['pication:1', 'π-cation, aromatic'], ['pication:2', 'π-cation, cation'], ['hydrophobic:1', 'hydrophobic'],
   ['metal_coord:2', 'metal-coordinating'],
 ];
+// Folds a chain can be asked for, by name (CATH class, architecture, topology); "other" takes any code.
+const FOLD_OPTIONS = [
+  ['', 'any'], ['1', 'mainly α'], ['2', 'mainly β'], ['3', 'α/β'],
+  ['1.10', 'helix bundle (orthogonal)'], ['1.20', 'up-down helix bundle'], ['2.40', 'β-barrel'], ['2.60', 'β-sandwich'],
+  ['3.30.70', 'ferredoxin-like'], ['3.40.50', 'Rossmann-like'], ['3.20.20', 'TIM barrel'], ['other', 'other code'],
+];
 const CONDITION_KEY = { hbond: 'hbond', saltbridge: 'saltbridge', pistack: 'pistack', pication: 'pication', hydrophobic: 'hydrophobic', metal_coord: 'metal_coord' };
 
 export class DesignPanel {
@@ -866,6 +872,34 @@ export class DesignPanel {
     };
   }
 
+  /**
+   * The Fold row for chain `c` (named folds, or a CATH code typed under "other"), and `apply()`, which sets it on the
+   * chain's residues and new residues (each new residue takes it when the job is built). Resolves false on a bad code.
+   */
+  _foldField(c, note) {
+    const now = String(c.fold ?? '').replace(/(\.x)+$/, '');
+    const known = FOLD_OPTIONS.some(([v]) => v && v !== 'other' && v === now);
+    const select = el('select', { 'aria-label': 'Fold', title: 'A fold for the whole chain to take (CATH)' });
+    for (const [v, text] of FOLD_OPTIONS) {
+      select.append(el('option', { value: v, text: v && v !== 'other' ? `${text} (${v})` : text,
+        selected: v === (known ? now : now ? 'other' : '') }));
+    }
+    const code = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
+      value: known ? '' : now, placeholder: 'e.g. 3.30.70', 'aria-label': 'Fold code' });
+    const show = () => { code.hidden = select.value !== 'other'; };
+    select.addEventListener('change', show);
+    show();
+    const row = el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Fold' }), select, code);
+    const apply = async () => {
+      const want = select.value === 'other' ? code.value.trim() : select.value;
+      if (want && !/^\d+(\.\d+){0,3}$/.test(want)) { note.textContent = 'A fold code is numbers with dots, e.g. 3.30.70'; return false; }
+      const atoms = [...c.polymerAtomIndices, ...c.segments.map((g) => g.atomIndex)];
+      if (want === now || !atoms.length) return true;
+      return this._batch([{ condition: 'cath_label', atom_indices: atoms, enabled: Boolean(want), value: want, scope: 'residue' }]);
+    };
+    return { row, apply };
+  }
+
   /** The atoms an interaction is asked of: those named, else the side chains (a glycine's CA). */
   _interactionAtoms(atoms, which) {
     const a = this._inputDoc()?.atoms;
@@ -1161,11 +1195,17 @@ export class DesignPanel {
     const max = el('input', { type: 'number', min: 1, max: 1000, value: p.max, 'aria-label': 'Most new residues' });
     // New residues can be asked a shape and an exposure: each of them takes it when the job is built.
     const extra = this._extraFields({ ss: p.ss, rasa: p.rasa }, { interaction: false });
+    const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
+    // The chain's fold, here too: where a new chain is laid out is where one looks for it.
+    const fold = this._foldField(c, note);
     const apply = async () => {
       const lo = Math.max(1, Math.round(Number(min.value)) || p.min);
       const hi = Math.max(lo, Math.round(Number(max.value)) || p.max);
+      if (!await fold.apply()) return false;
       this._closePop();
-      const edits = extra.edits(p.atomIndices);
+      // Atom indices may have moved if the fold was set: re-read this block's.
+      const now = this._spec()?.chains.find((x) => x.id === c.id)?.pieces.find((x) => x.kind === 'new' && x.atomIndex === p.atomIndex) ?? p;
+      const edits = extra.edits(now.atomIndices);
       if (edits.length && !await this._batch(edits)) return false;
       return lo !== p.min || hi !== p.max ? this._mutate('/segments/range', { atom_index: p.atomIndex, minimum: lo, maximum: hi }) : true;
     };
@@ -1174,6 +1214,8 @@ export class DesignPanel {
       el('div', { class: 'rfd4p-pop-row', title: 'Each design picks one length from this range' },
         el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, min, el('span', { text: '–' }), max)),
       ...extra.rows,
+      fold.row,
+      note,
       this._popActions(apply),
     ];
   }
@@ -1246,18 +1288,10 @@ export class DesignPanel {
       value: c.id, 'aria-label': 'Chain name' });
     const order = el('select', { 'aria-label': 'Chain order', title: 'Where this chain comes in the job' });
     ids.forEach((id, k) => order.append(el('option', { value: String(k), text: String(k + 1), selected: id === c.id })));
-    const fold = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
-      value: (c.fold ?? '').replace(/(\.x)+$/, ''), placeholder: 'any, e.g. 3.30.70', 'aria-label': 'Fold',
-      title: 'A CATH fold for the chain to take: class.architecture.topology(.homology), e.g. 3.30.70 or 1.10' });
     const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
+    const fold = c.role !== 'ligand' ? this._foldField(c, note) : null;
     const apply = async () => {
-      const wantFold = fold.value.trim();
-      if (wantFold && !/^\d+(\.\d+){0,3}$/.test(wantFold)) { note.textContent = 'A fold is numbers with dots, e.g. 3.30.70'; return; }
-      // A new chain's fold is set on its new residues: each takes it when the job is built.
-      const foldAtoms = [...c.polymerAtomIndices, ...c.segments.map((g) => g.atomIndex)];
-      if (wantFold !== (c.fold ?? '').replace(/(\.x)+$/, '') && foldAtoms.length) {
-        if (!await this._batch([{ condition: 'cath_label', atom_indices: foldAtoms, enabled: Boolean(wantFold), value: wantFold, scope: 'residue' }])) return;
-      }
+      if (fold && !await fold.apply()) return;
       const next = name.value.trim();
       if (!/^[A-Za-z0-9_]{1,4}$/.test(next)) { note.textContent = 'A chain name is 1–4 letters or digits'; return; }
       if (next !== c.id && ids.includes(next)) { note.textContent = `There is a chain ${next} already`; return; }
@@ -1279,7 +1313,7 @@ export class DesignPanel {
       this._popHead(`Chain ${c.id}`),
       el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Name' }), name),
       el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Order' }), order),
-      c.role !== 'ligand' ? el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Fold' }), fold) : null,
+      fold?.row,
       note,
       this._popActions(apply),
     ];
