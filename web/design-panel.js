@@ -650,7 +650,8 @@ export class DesignPanel {
   /** What a piece row says after its residues: what is kept, in a few words. */
   _status(p) {
     const word = (options, v) => (v ? options.find(([k]) => k === String(v))?.[1] ?? '' : '');
-    if (p.kind === 'new') return ['new', word(SHAPE_OPTIONS, p.ss), word(EXPOSURE_OPTIONS, p.rasa)].filter(Boolean).join(' · ');
+    // "new" last, so it lines up down a chain of blocks ("helix · new", "loop · new").
+    if (p.kind === 'new') return [word(SHAPE_OPTIONS, p.ss), word(EXPOSURE_OPTIONS, p.rasa), 'new'].filter(Boolean).join(' · ');
     const { structure, atoms, names, sequence, position } = this._properties(p);
     // The popup's words: both fixed reads "fixed", both designed "designed", otherwise which one is fixed; part of the
     // atoms says which.
@@ -1729,7 +1730,7 @@ export class DesignPanel {
     const card = (id) => [...this.els.chainList.querySelectorAll('.rfd4p-chain')]
       .find((c) => c.querySelector('.rfd4p-chain-id')?.textContent === id);
     const subs = (chain) => [...(card(chain)?.querySelectorAll('.rfd4p-sub') ?? [])];
-    const isNew = (sub) => /^new\b/.test(sub.querySelector('.rfd4p-sub-status')?.textContent ?? '');
+    const isNew = (sub) => /\bnew$/.test(sub.querySelector('.rfd4p-sub-status')?.textContent ?? '');
     const idle = async () => {
       await this.applying;
       this.applying = null;
