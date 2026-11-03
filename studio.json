@@ -4,9 +4,9 @@
   "override": {
     "repository": "sokrypton/atomworks-studio",
     "branch": "live-frame-cartoon",
-    "commit": "f7a02ee",
+    "commit": "12c2b78",
     "pullRequest": "https://github.com/RosettaCommons/atomworks-studio/pull/29",
-    "why": "setOverlay({ representation: 'cartoon' }) for the refold overlay (cf8aa98, RosettaCommons/atomworks-studio#29), live frames drawn as cartoon plus ligands (c1e30a8), setHighlight for hotspots (51fe162), and Show/Hide sequence in the viewer toolbar with no dock heading (c8dad76), and setSelection, so the design panel's residue strip selects in the viewer and sequence (a4a2ea9), and residue picking by default with a clicked residue shown alone (d7e72bb), sticks following the selection (7505dee), and closeDocument, so Clear empties the viewer and sequence (204725a), and a chain palette in cool colours only, so hotspots (amber) and the refold (magenta) are never a chain's colour (63a4745), and setHighlight with a transparency, so residues the model rebuilds are faded in the input (f7a02ee)"
+    "why": "setOverlay({ representation: 'cartoon' }) for the refold overlay (cf8aa98, RosettaCommons/atomworks-studio#29), live frames drawn as cartoon plus ligands (c1e30a8), setHighlight for hotspots (51fe162), and Show/Hide sequence in the viewer toolbar with no dock heading (c8dad76), and setSelection, so the design panel's residue strip selects in the viewer and sequence (a4a2ea9), and residue picking by default with a clicked residue shown alone (d7e72bb), sticks following the selection (7505dee), and closeDocument, so Clear empties the viewer and sequence (204725a), and a chain palette in cool colours only, so hotspots (amber) and the refold (magenta) are never a chain's colour (63a4745), and setHighlight with a transparency, so residues the model rebuilds are faded in the input (f7a02ee), and centerOn, so a piece's residues are brought to the middle of the view when its popup opens (12c2b78)"
   },
   "version": "0.0.6",
   "repository": "RosettaCommons/atomworks-studio",

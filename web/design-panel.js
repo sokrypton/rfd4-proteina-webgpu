@@ -148,6 +148,8 @@ const HOTSPOT_COLOR = 0xf59e0b;
 
 /** How faded residues the model rebuilds are in the input structure (0 solid, 1 gone). */
 const FREE_TRANSPARENCY = 0.65;
+/** Residues about to be cut, while a popup's ranges are dragged or typed. */
+const CUT_TRANSPARENCY = 0.92;
 
 // The three properties of residues, the same in a sub-card's popup and the selection's: each fixed or free (the model
 // decides), and a structure may also be rigid (kept, moving as one body).
@@ -720,13 +722,50 @@ export class DesignPanel {
   }
 
   /** A row's residues selected in the viewer and the sequence too, while its popup is open (not the viewer's popup). */
-  _selectFromCard(atoms) {
+  _selectFromCard(atoms, { center = true } = {}) {
     if (typeof window.atomworksStudio?.setSelection !== 'function' || !atoms?.length || this.building) return;
     this.cardPicking = true;
     this.cardSelected = true;
     clearTimeout(this.cardPickTimer);
     this.cardPickTimer = setTimeout(() => { this.cardPicking = false; }, 400);
     window.atomworksStudio.setSelection(atoms);
+    // Brought to the middle of the view (the zoom kept), so the popup's residues are in sight.
+    if (center) window.atomworksStudio.centerOn?.(atoms);
+  }
+
+  /** Residues of `atoms` as the viewer names them (chain and author number: what the document's CIF writes). */
+  _viewerResidues(atoms) {
+    const a = this._inputDoc()?.atoms;
+    const out = new Map();
+    for (const i of atoms ?? []) {
+      const residue = Number(a.auth_seq_id?.[i] ?? a.res_id[i]);
+      out.set(`${a.chain_id[i]}|${residue}`, { chain: String(a.chain_id[i]), residue });
+    }
+    return [...out.values()];
+  }
+
+  /**
+   * While a popup's ranges are edited: residues about to be cut nearly vanish, those about to be freed fade as free
+   * ones do. Latest wins; null clears it.
+   */
+  _previewCut(cut, freed) {
+    this.previewWant = { cut: cut?.length ? this._viewerResidues(cut) : null, freed: freed?.length ? this._viewerResidues(freed) : null };
+    if (this.previewBusy || typeof window.atomworksStudio?.setHighlight !== 'function') return;
+    this.previewBusy = true;
+    void (async () => {
+      try {
+        while (this.previewWant) {
+          const { cut: c, freed: f } = this.previewWant;
+          this.previewWant = null;
+          await window.atomworksStudio.setHighlight('cut', c, { transparency: CUT_TRANSPARENCY });
+          await window.atomworksStudio.setHighlight('freed', f, { transparency: FREE_TRANSPARENCY });
+        }
+      } catch (err) {
+        console.warn('Crop preview failed:', err);
+      } finally {
+        this.previewBusy = false;
+      }
+    })();
   }
 
   _ligandCard(c, l, readonly, remove) {
@@ -830,6 +869,7 @@ export class DesignPanel {
 
   _closePop() {
     if (this.piecePop) this.piecePop.hidden = true;
+    if (this.previewOn) { this.previewOn = false; this._previewCut(null, null); }
     // A row's residues were selected only while its popup was open.
     if (this.cardSelected) {
       this.cardSelected = false;
@@ -1022,10 +1062,27 @@ export class DesignPanel {
     const lenMax = el('input', { type: 'number', min: 1, max: 1000, value: count, 'aria-label': 'Most residues' });
     let lenTouched = false;
     for (const input of [lenMin, lenMax]) input.addEventListener('input', () => { lenTouched = true; });
+    // What the ranges would cut or free, shown in the structure as they are edited.
+    const preview = () => {
+      const rs = ranges();
+      if (!rs || !a) return;
+      const { lo, hi } = span();
+      const inRanges = (id) => rs.some(([x, y]) => id >= x && id <= y);
+      const id = (i) => Number(a.res_id[i]);
+      const ends = rest.value === 'unchanged' ? [] : p.atomIndices.filter((i) => id(i) < lo || id(i) > hi);
+      const gaps = p.atomIndices.filter((i) => id(i) >= lo && id(i) <= hi && !inRanges(id(i)));
+      this.previewOn = true;
+      // The residues kept stay selected; the rest fade (nearly gone if cut).
+      const kept = p.atomIndices.filter((i) => inRanges(id(i)));
+      if (kept.length && this.cardSelected) this._selectFromCard(kept, { center: false });
+      this._previewCut(rest.value === 'removed' ? ends : [], rest.value === 'designed' ? [...ends, ...gaps] : gaps);
+    };
     residuesText.addEventListener('input', () => {
       if (!lenTouched) lenMin.value = lenMax.value = String(span().count);
       sync();
+      preview();
     });
+    rest.addEventListener('change', preview);
     const lengthRow = el('div', { class: 'rfd4p-pop-row', title: 'Each design picks one length from this range' },
       el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, lenMin, el('span', { text: '–' }), lenMax));
     const atomsField = this._atomsField(now.atoms, now.names);
