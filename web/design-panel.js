@@ -7,7 +7,7 @@
  * `atomworks-studio` "changed" event behave exactly as for edits made in the Studio panels.
  */
 import { INTERACTIONS, designSpec, formatResidueList, parseResidueList } from './design-spec.js';
-import { createStudioDocWithCcd, getSharedStudioStore, handleStudioApiRequest } from './studio-api.js';
+import { StudioDoc, createStudioDocWithCcd, getSharedStudioStore, handleStudioApiRequest } from './studio-api.js';
 import { isCcdCode, ligandCifFromCcd } from './ligand-ccd.js';
 import { fetchCcdComponents } from '../shared/rfd4p/pipeline/ccd.js';
 
@@ -20,13 +20,23 @@ const ADVANCED_KEY = 'rfd4p-advanced-editor';
  * residues, held atoms, chain names and order. The two 2KL8 examples are the exception: the bundled file lacks residues
  * 8–27 (a bug in it), so they keep the whole protein and drop only the His tag. Without a network that bundled example
  * opens instead.
- * Steps: `fetch` (ID and chains), `add` (another entry's chains, as + pdb), `piece` (open the piece holding `at`, fill
+ * Steps: `fetch` (ID and chains), `start` (a bundled Studio example instead, no download), `add` (another entry's chains, as + pdb), `piece` (open the piece holding `at`, fill
  * `set`, Apply), `removePiece` (× the piece holding `at`), `removeNew` (× the new residues left in a chain), `addSeq`,
  * `newLength` (the chain's `k`-th new piece), `ligand` (pose, held atoms), `chain` (its popup: `name`, `order` from 1),
+ * `blocks` (a new chain laid out as blocks, [length, shape] each: "+" after the last, then each block's popup),
  * `partial`.
  */
 const TASKS = [
   { example: 'unconditional', title: 'Protein from scratch', desc: 'A new fold of the length you choose' },
+  {
+    // The blocks idea: a ferredoxin-like fold drawn as strands, helices and loops, each its own block of new residues.
+    example: 'blueprint', fallback: 'unconditional', title: 'Blueprint', desc: 'A fold drawn as blocks: β-α-β-β-α-β',
+    recipe: [
+      { start: 'unconditional' },
+      { blocks: [[6, 'strand'], [3, 'loop'], [14, 'helix'], [3, 'loop'], [6, 'strand'], [3, 'loop'],
+        [6, 'strand'], [3, 'loop'], [14, 'helix'], [3, 'loop'], [6, 'strand']] },
+    ],
+  },
   {
     example: 'protein_binder', title: 'Protein binder', desc: 'Bind PD-L1 (PDB 5O45)',
     recipe: [
@@ -592,7 +602,8 @@ export class DesignPanel {
     const pieces = c.pieces;
     const many = pieces.length + c.ligands.length > 1;
     const items = [];
-    // New residues next to new residues would be one piece: a slot only where a new piece is not already.
+    // A slot between any two pieces and at both ends: new residues next to new residues are a block of their own, so
+    // a free chain can be built as blocks of different shapes (a helix, a loop, a strand).
     const slot = (atom, before) => (readonly ? null : el('button', {
       type: 'button', class: 'rfd4p-slot', title: 'New residues here', 'aria-label': 'New residues here',
       onclick: () => void this._mutate('/segments', {
@@ -601,12 +612,10 @@ export class DesignPanel {
     }, el('span', { text: '+' })));
     pieces.forEach((p, k) => {
       const prev = pieces[k - 1];
-      if (p.kind !== 'new' && (!prev || prev.kind !== 'new')) {
-        items.push(prev ? slot(prev.atomIndices[prev.atomIndices.length - 1], false) : slot(p.atomIndices[0], true));
-      }
+      items.push(prev ? slot(prev.atomIndices[prev.atomIndices.length - 1], false) : slot(p.atomIndices[0], true));
       items.push(this._pieceCard(c, p, readonly, remove(many ? 'Remove these residues' : `Remove chain ${c.id}`,
         p.atomIndices)));
-      if (k === pieces.length - 1 && p.kind !== 'new') items.push(slot(p.atomIndices[p.atomIndices.length - 1], false));
+      if (k === pieces.length - 1) items.push(slot(p.atomIndices[p.atomIndices.length - 1], false));
     });
     for (const l of c.ligands) {
       items.push(this._ligandCard(c, l, readonly, remove(many ? `Remove ${l.name}` : `Remove chain ${c.id}`, l.atomIndices)));
@@ -1042,8 +1051,9 @@ export class DesignPanel {
         ...extra.rows,
         row('Hotspots', hot),
         row('Keep only', keepOnly),
-        note,
-        this._popActions(apply)),
+        note),
+      // Apply stays in sight: it applies what was changed under More (the quick buttons act at once).
+      this._popActions(apply),
     ];
   }
 
@@ -1513,13 +1523,13 @@ export class DesignPanel {
         await polymerApply();
       };
     }
-    rows.push(el('div', { class: 'rfd4p-pop-actions' },
-      keepOnly,
-      el('span', { class: 'rfd4p-pop-spacer' }),
-      el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: () => { this.applying = Promise.resolve(apply()); } })));
+    if (keepOnly) rows.push(el('div', { class: 'rfd4p-pop-row' }, keepOnly));
     pop.replaceChildren(head,
       this._quickRow({ hits, hotAtoms: polymerAtoms, ligandAtoms, removeAtoms: residues, done }),
-      this._moreFold(...rows));
+      this._moreFold(...rows),
+      el('div', { class: 'rfd4p-pop-actions' },
+        el('span', { class: 'rfd4p-pop-spacer' }),
+        el('button', { type: 'button', class: 'primary compact', text: 'Apply', onclick: () => { this.applying = Promise.resolve(apply()); } })));
     pop.hidden = false;
     // Next to the pointer that made the selection, kept on screen.
     const p = this.lastPointer ?? (() => {
@@ -1656,7 +1666,7 @@ export class DesignPanel {
     button?.classList.add('loading');
     try {
       if (task.recipe && await this._buildRecipe(task)) return;
-      await window.atomworksStudio?.openExample(task.example);
+      await window.atomworksStudio?.openExample(task.fallback ?? task.example);
       this.showStart = false;
       if (task.then) {
         const spec = this._spec();
@@ -1719,7 +1729,7 @@ export class DesignPanel {
     const card = (id) => [...this.els.chainList.querySelectorAll('.rfd4p-chain')]
       .find((c) => c.querySelector('.rfd4p-chain-id')?.textContent === id);
     const subs = (chain) => [...(card(chain)?.querySelectorAll('.rfd4p-sub') ?? [])];
-    const isNew = (sub) => sub.querySelector('.rfd4p-sub-status')?.textContent === 'new';
+    const isNew = (sub) => /^new\b/.test(sub.querySelector('.rfd4p-sub-status')?.textContent ?? '');
     const idle = async () => {
       await this.applying;
       this.applying = null;
@@ -1767,6 +1777,31 @@ export class DesignPanel {
           getSharedStudioStore().sessions.set(this.buildSession, doc);
           this.render();
           fetched = true;
+        } else if (step.start) {
+          // A bundled example as the starting point (Protein from scratch's 250 new residues): nothing to download.
+          const res = await fetch(new URL(`./studio/examples/${step.start}.cif`, import.meta.url));
+          if (!res.ok) throw new Error(`no bundled example ${step.start}`);
+          const doc = new StudioDoc(await res.text(), step.start, {});
+          this.buildSession = `rfd4p_example_${task.example}_${Date.now().toString(36)}`;
+          getSharedStudioStore().sessions.set(this.buildSession, doc);
+          this.render();
+          fetched = true;
+        } else if (step.blocks) {
+          // One block per entry: "+" after the last block until there are enough, then each block's length and shape.
+          const chainCard = () => [...this.els.chainList.querySelectorAll('.rfd4p-chain')].at(-1);
+          const blocksNow = () => [...chainCard().querySelectorAll('.rfd4p-sub')].filter(isNew);
+          for (let i = 0; i < 100 && blocksNow().length < step.blocks.length; i += 1) {
+            await click([...chainCard().querySelectorAll('.rfd4p-slot')].at(-1));
+          }
+          const shapes = Object.fromEntries(SHAPE_OPTIONS.map(([v, text]) => [text, v]));
+          for (let k = 0; k < step.blocks.length; k += 1) {
+            const [len, shape] = step.blocks[k];
+            const pop = open(blocksNow()[k]);
+            fill(pop, 'Fewest new residues', len);
+            fill(pop, 'Most new residues', len);
+            fill(pop, 'Shape', shapes[shape] ?? '0', 'change');
+            await apply(pop);
+          }
         } else if (step.add) {
           const [id, ...chains] = step.add.split(/\s+/);
           const res = await fetch(`https://files.rcsb.org/download/${id}.cif`);
