@@ -39,7 +39,7 @@
           "./shared/rfd4p/safetensors.js": "./shared/rfd4p/safetensors.js?v=816ee6d627",
           "./shared/rfd4p/vendor/fzstd.js": "./shared/rfd4p/vendor/fzstd.js?v=e6cdba40d4",
           "./web/app.js": "./web/app.js?v=8153ef8d97",
-          "./web/design-panel.js": "./web/design-panel.js?v=5ffa473612",
+          "./web/design-panel.js": "./web/design-panel.js?v=b612f5453c",
           "./web/design-spec.js": "./web/design-spec.js?v=693bf27a92",
           "./web/ligand-ccd.js": "./web/ligand-ccd.js?v=b937ddbebf",
           "./web/localfold.js": "./web/localfold.js?v=8b16694f7b",
@@ -83,16 +83,21 @@
 
             <!-- Start: nothing open yet. Each task opens a ready-made input (web/design-panel.js). -->
             <div id="rfd4p-start" class="rfd4p-start">
-                <p class="rfd4p-lead">What do you want to design?</p>
-                <div id="rfd4p-task-grid" class="rfd4p-task-grid"></div>
-                <p class="rfd4p-lead rfd4p-lead-sub">Or start from your own structure</p>
-                <form id="rfd4p-fetch-form" class="rfd4p-fetch-row">
+                <!-- A new job from its parts, as the design view adds them; or an example below. -->
+                <div class="rfd4p-chain-actions rfd4p-start-actions" role="group" aria-label="Start with">
+                    <button id="rfd4p-start-seq" type="button" class="secondary compact" title="A new chain for the model to design (sequence and structure), 60–100 residues to start">+ seq</button>
+                    <button id="rfd4p-start-pdb" type="button" class="secondary compact" title="Chains from a PDB entry or file, kept as they are (e.g. a target to bind)">+ pdb</button>
+                    <button id="rfd4p-start-lig" type="button" class="secondary compact" title="A small molecule by its PDB code (HEM, ATP, ZN…)">+ lig</button>
+                </div>
+                <form id="rfd4p-fetch-form" class="rfd4p-fetch-row" hidden>
                     <input id="rfd4p-pdb-id" type="text" inputmode="latin" autocomplete="off" spellcheck="false"
                         maxlength="40" placeholder="1QYS or 1J79 A C" aria-label="PDB ID, optionally with chains" />
                     <button id="rfd4p-fetch-btn" type="submit" class="secondary compact">Fetch</button>
                     <button id="rfd4p-open-file" type="button" class="secondary compact">Open file…</button>
                 </form>
                 <p id="rfd4p-fetch-status" class="inline-feedback muted" aria-live="polite"></p>
+                <p class="rfd4p-lead rfd4p-lead-sub">Examples</p>
+                <div id="rfd4p-task-grid" class="rfd4p-task-grid"></div>
                 <button id="rfd4p-back" type="button" class="secondary compact" hidden>← Back to the current design</button>
             </div>
 

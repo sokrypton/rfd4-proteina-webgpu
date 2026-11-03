@@ -200,6 +200,9 @@ export class DesignPanel {
       back: $('rfd4p-back'),
       chainList: $('rfd4p-chain-list'),
       addSeq: $('rfd4p-add-seq'),
+      startSeq: $('rfd4p-start-seq'),
+      startPdb: $('rfd4p-start-pdb'),
+      startLig: $('rfd4p-start-lig'),
       addPdb: $('rfd4p-add-pdb'),
       addLig: $('rfd4p-add-lig'),
       undo: $('rfd4p-undo'),
@@ -429,6 +432,38 @@ export class DesignPanel {
       void this._fetchPdb(els.pdbId.value);
     });
     els.openFile?.addEventListener('click', () => document.getElementById('file-input')?.click());
+    // The start screen's parts start a new job: a free chain, a structure (the form below), or a ligand.
+    els.startSeq?.addEventListener('click', () => void this._startNew(async () => {
+      const res = await fetch(new URL('./studio/examples/unconditional.cif', import.meta.url));
+      if (!res.ok) throw new Error('no empty chain to start from');
+      const doc = new StudioDoc(await res.text(), 'design', {});
+      const seg = doc.atoms.res_name.findIndex((r) => /^\d+-\d+$/.test(String(r)));
+      if (seg >= 0) doc.setSegmentRange(seg, 60, 100);
+      return doc;
+    }));
+    els.startPdb?.addEventListener('click', () => {
+      const form = els.fetchForm;
+      if (!form) return;
+      form.hidden = !form.hidden;
+      if (!form.hidden) els.pdbId?.focus();
+    });
+    els.startLig?.addEventListener('click', () => {
+      this.startLigandForm?.remove();
+      this.startLigandForm = this._ligandCodeForm({
+        label: 'Add a ligand',
+        button: 'Add',
+        onSubmit: (code) => this._startNew(async () => {
+          const want = String(code ?? '').trim().toUpperCase();
+          if (!isCcdCode(want)) throw new Error('type the ligand\'s code in the PDB: 1–5 letters or digits, e.g. HEM');
+          const { blocks } = await fetchCcdComponents([want]);
+          const block = blocks.get(want);
+          if (!block) throw new Error(`the PDB has no ligand called ${want}`);
+          return createStudioDocWithCcd(ligandCifFromCcd(block, { chainId: 'L', center: [0, 0, 0] }).cif, want);
+        }, { rethrow: true }),
+        onCancel: () => { this.startLigandForm?.remove(); this.startLigandForm = null; },
+      });
+      els.startLig.parentElement.after(this.startLigandForm);
+    });
     // Clear empties the viewer and the sequence and shows the start screen; opening anything from it replaces the
     // document, and Back brings back what was shown (the session is kept).
     els.newDoc?.addEventListener('click', () => {
@@ -2022,6 +2057,27 @@ export class DesignPanel {
   }
 
   /** "1QYS", or "1J79 A C E" to open only those chains (as the card names them). */
+  /** A new job from `make` (a document), opened in place of what was shown. */
+  async _startNew(make, { rethrow = false } = {}) {
+    const status = this.els.fetchStatus;
+    try {
+      const doc = await make();
+      doc.undoStack = [];
+      const sid = `rfd4p_new_${Date.now().toString(36)}`;
+      getSharedStudioStore().sessions.set(sid, doc);
+      this.startLigandForm?.remove();
+      this.startLigandForm = null;
+      if (this.els.fetchForm) this.els.fetchForm.hidden = true;
+      const opened = await window.atomworksStudio?.openSession?.(sid);
+      if (opened !== false) this.showStart = false;
+    } catch (err) {
+      if (rethrow) throw err;
+      if (status) status.textContent = String(err?.message ?? err).replace(/^Error:\s*/, '');
+    } finally {
+      this.render();
+    }
+  }
+
   async _fetchPdb(raw) {
     const [id = '', ...chains] = String(raw ?? '').trim().toUpperCase().split(/[\s,;]+/).filter(Boolean);
     const status = this.els.fetchStatus;
