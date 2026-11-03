@@ -422,9 +422,21 @@ export class DesignPanel {
       void this._fetchPdb(els.pdbId.value);
     });
     els.openFile?.addEventListener('click', () => document.getElementById('file-input')?.click());
-    // "New…" shows the start screen over the open document; opening anything from it replaces the document.
-    els.newDoc?.addEventListener('click', () => { this.showStart = true; this.render(); });
-    els.back?.addEventListener('click', () => { this.showStart = false; this.render(); });
+    // Clear empties the viewer and the sequence and shows the start screen; opening anything from it replaces the
+    // document, and Back brings back what was shown (the session is kept).
+    els.newDoc?.addEventListener('click', () => {
+      this.closedSession = this.app.studioSessionId ?? this.app.inputSessionId;
+      this.showStart = true;
+      this.render();
+      void window.atomworksStudio?.closeDocument?.();
+    });
+    els.back?.addEventListener('click', () => {
+      const sid = this.closedSession;
+      this.closedSession = null;
+      this.showStart = false;
+      this.render();
+      if (sid) void window.atomworksStudio?.openSession?.(sid);
+    });
     document.getElementById('file-input')?.addEventListener('change', () => { this.showStart = false; });
     els.addSeq?.addEventListener('click', () => void this._mutate('/segments', {
       minimum: 60, maximum: 100, atom_index: null, before: false, new_chain: true, chain_id: null,
@@ -539,6 +551,8 @@ export class DesignPanel {
     if (els.back) els.back.hidden = !hasDoc;
     if (els.design) els.design.hidden = starting;
     if (els.runSettings) els.runSettings.hidden = starting;
+    // A run's results and status belong to the document, so they go with it.
+    els.start?.closest('#rfd4p-studio-card')?.classList.toggle('rfd4p-starting', starting);
     if (!hasDoc || (starting && !this.building)) return;
 
     const viewingDesign = this._viewingDesign();

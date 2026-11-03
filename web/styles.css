@@ -977,3 +977,4 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
   cursor: pointer;
 }
 .rfd4p-piece-pop .rfd4p-pop-x:hover { color: var(--text, #f1f1f2); }
+.rfd4p-starting #design-results, .rfd4p-starting #generation-status { display: none; }
