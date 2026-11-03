@@ -387,6 +387,9 @@ export class StudioDoc {
       this.atoms = removeResidues(prepared.atoms, BUFFER_IONS);
       this.importNotes = prepared.notes;
       computeIdAndEntityAnnotations(this.atoms);
+      // Prepared (water, additives and other chains gone, the assembly built, all fixed), it is no longer the file:
+      // the file's own text would show the viewer, and give a run, the waters and conditions it no longer has.
+      this.rawCif = null;
     }
     this.atoms.distanceRestraints = this._parseInitialRestraints(this.cifBlock);
     this.atoms.cathText = this._parseInitialCathText(this.cifBlock, this.atoms.nAtoms);
