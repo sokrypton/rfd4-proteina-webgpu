@@ -612,14 +612,6 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   font-size: 11px;
 }
 
-.rfd4p-partial-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin: 0 0 8px;
-  font-size: 11.5px;
-}
 
 
 /* Chain colours (studio-src/src/chain-colors.ts), shared by viewer, sequence bar and design panel. */

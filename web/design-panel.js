@@ -203,8 +203,6 @@ export class DesignPanel {
     this.pop = el('div', { class: 'rfd4p-piece-pop rfd4p-sel-pop', role: 'dialog', 'aria-label': 'Selected residues', hidden: true });
     document.body.append(this.pop);
     this.lastPointer = null;
-    this.partialRow = el('div', { class: 'rfd4p-partial-row', hidden: true });
-    this.els.taskDetail?.after(this.partialRow);
     this._buildAddStructure();
     this._buildTaskGrid();
     this._bind();
@@ -561,7 +559,6 @@ export class DesignPanel {
     }
     els.warnings.replaceChildren(...warnings.map((w) => el('p', { class: 'rfd4p-warning', text: w })));
 
-    this._renderPartial(spec, viewingDesign);
     this.showHotspots();
 
     // Nothing to generate: keep Generate off (a running job keeps its Stop button).
@@ -1371,26 +1368,6 @@ export class DesignPanel {
     this.hotspotQueue = (this.hotspotQueue ?? Promise.resolve())
       .then(() => window.atomworksStudio.setHighlight('hotspots', residues.size ? [...residues.values()] : null, { color: HOTSPOT_COLOR }))
       .catch((err) => console.warn('Hotspot highlight failed:', err));
-  }
-
-  _renderPartial(spec, readonly) {
-    const row = this.partialRow;
-    row.hidden = spec.task.key !== 'partial';
-    if (row.hidden) return;
-    const pct = el('input', {
-      type: 'number', min: 1, max: 100, step: 1, class: 'rfd4p-pct', disabled: readonly,
-      value: Number.parseFloat(this.app.els.partialPercent?.value ?? '70') || 70, 'aria-label': 'Partial diffusion percent',
-    });
-    pct.addEventListener('change', () => {
-      this.app._setPartialDiffusion?.(true, Math.max(1, Math.min(100, Number(pct.value) || 70)));
-      this.render();
-    });
-    row.replaceChildren(
-      el('span', { text: 'Noise added to this structure ' }), pct, el('span', { text: '% (higher = more different)' }),
-      readonly ? null : el('button', {
-        type: 'button', class: 'secondary compact', text: 'Turn off',
-        onclick: () => { this.app._setPartialDiffusion?.(false); this.render(); },
-      }));
   }
 
   // ---- selection popup ----------------------------------------------------------------------------------------
