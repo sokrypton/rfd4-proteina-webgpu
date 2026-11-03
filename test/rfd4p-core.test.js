@@ -151,6 +151,8 @@ test('Flow-matching schedule, recycleDepths, and partial diffusion corruption ma
   assert.equal(dMed60.reduce((a, b) => a + b, 0), 180);
   const dLow60 = recycleDepths('low', 60, 60);
   assert.equal(dLow60.reduce((a, b) => a + b, 0), 120);
+  // `configs/recycle_strategy/high/front_loaded.yaml`: 300 trunk passes.
+  assert.equal(recycleDepths('high', 60, 60).reduce((a, b) => a + b, 0), 300);
   const dPartial30 = recycleDepths('low', 30, 60);
   assert.deepEqual([...dPartial30], [...dLow60.slice(30)]);
 

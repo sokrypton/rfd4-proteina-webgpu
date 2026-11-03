@@ -34,7 +34,7 @@ export const RECYCLE_SCHEDULES = {
   none: [[60, 1]],
   low: [[10, 4], [10, 3], [10, 2], [30, 1]],
   medium: [[5, 6], [10, 5], [5, 4], [10, 3], [20, 2], [10, 1]],
-  high: [[15, 6], [15, 5], [15, 4], [15, 3]],
+  high: [[10, 9], [10, 8], [10, 5], [20, 3], [10, 2]],
 };
 
 /** Expand `[width, depth]` bands into one depth per step (`Proteina.recycle_depths`). */
