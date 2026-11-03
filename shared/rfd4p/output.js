@@ -184,16 +184,23 @@ export function superimposeCoords3D(fixedCoords, mobileCoords) {
   U[1 * 3 + 2] = U[2 * 3 + 0] * U[0 * 3 + 1] - U[0 * 3 + 0] * U[2 * 3 + 1];
   U[2 * 3 + 2] = U[0 * 3 + 0] * U[1 * 3 + 1] - U[1 * 3 + 0] * U[0 * 3 + 1];
 
-  const sign = det3x3(h) >= 0 ? 1 : -1;
+  // A rotation, never a reflection. U's third column is u1 × u2 (det U = +1), so det(R) has the sign of det(V), which
+  // the eigen solver does not fix: decided by det(h) instead, R came out mirrored whenever det(V) was −1, and a design
+  // with nothing held in place, aligned onto a noise frame, was shown as its mirror image (left-handed helices) about
+  // half the time. Build R, and if it reflects, flip the smallest component (Kabsch's d = −1).
   const R = new Float64Array(9);
-  for (let r = 0; r < 3; r += 1) {
-    for (let c = 0; c < 3; c += 1) {
-      R[r * 3 + c] =
-        V[r * 3 + 0] * U[c * 3 + 0] +
-        V[r * 3 + 1] * U[c * 3 + 1] +
-        sign * V[r * 3 + 2] * U[c * 3 + 2];
+  const build = (sign) => {
+    for (let r = 0; r < 3; r += 1) {
+      for (let c = 0; c < 3; c += 1) {
+        R[r * 3 + c] =
+          V[r * 3 + 0] * U[c * 3 + 0] +
+          V[r * 3 + 1] * U[c * 3 + 1] +
+          sign * V[r * 3 + 2] * U[c * 3 + 2];
+      }
     }
-  }
+  };
+  build(1);
+  if (det3x3(R) < 0) build(-1);
 
   const aligned = new Float32Array(n * 3);
   let sqErr = 0;
