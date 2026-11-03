@@ -562,6 +562,13 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
 }
 
 /* Run settings: designs, seed and its dice on one line */
+/* The run (designs, seed, partial diffusion, Generate) set apart from what is being designed. */
+.rfd4p-run-settings {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 2px solid var(--border, #383a3f);
+}
+
 .rfd4p-settings-row {
   display: flex;
   align-items: flex-end;
