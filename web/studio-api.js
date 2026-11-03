@@ -1236,8 +1236,10 @@ export class StudioDoc {
    * +/- `spread`. Unindexed: the motif may sit anywhere, so the chain becomes one segment of `totalMin`-`totalMax`
    * residues (default: the chain's length +/- `spread`) plus the motif residues.
    */
-  scaffoldMotif(indices, { spread = 0.25, sidechainsOnly = false, unindexed = false, totalMin = null, totalMax = null } = {}) {
+  scaffoldMotif(indices, { spread = 0.25, sidechainsOnly = false, unindexed = false, totalMin = null, totalMax = null, ordered = false } = {}) {
     const keep = this.resolveIndices(indices, 'residue');
+    // With `ordered`, the motif residues take the order of `indices` (as typed), each chain renumbered after.
+    const typedOrder = ordered ? [...new Set((Array.isArray(indices) ? indices : []).map((i) => `${this.atoms.chain_id[i]}:${this.atoms.res_id[i]}:${this.atoms.ins_code[i]}`))] : [];
     if (!keep.length) throw new Error('select the motif residues first');
     const a = this.atoms;
     const resKey = (i) => `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}`;
@@ -1296,12 +1298,48 @@ export class StudioDoc {
       this.setCondition('index', keepPolymer, { enabled: unindexed, snapshot: false });
       if (drop.length) this.deleteAtoms(drop);
       this._insertGapSegments(gaps);
+      if (typedOrder.length > 1) this._orderMotif(typedOrder, chains);
       return {
         changed: true,
         message: `Kept ${kept.size} motif residue${kept.size === 1 ? '' : 's'}${unindexed ? ' (placed anywhere)' : ''}; ` +
           `${gaps.length} new-residue segment${gaps.length === 1 ? '' : 's'}.`,
       };
     });
+  }
+
+  /**
+   * After a scaffold: the kept residues of `chains` take the order of `keys` ("A:38:" style), each in the slot of a kept
+   * residue (new-residue segments stay where they are), and the chains are numbered 1, 2, 3… again.
+   */
+  _orderMotif(keys, chains) {
+    const a = this.atoms;
+    const resKey = (i) => `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}`;
+    const starts = getResidueSegments(a);
+    const residues = [];
+    for (let r = 0; r < starts.length - 1; r += 1) {
+      const atoms = [];
+      for (let i = starts[r]; i < starts[r + 1]; i += 1) atoms.push(i);
+      residues.push({ key: resKey(starts[r]), chain: String(a.chain_id[starts[r]]), atoms, segment: this._isSegmentAtom(starts[r]) });
+    }
+    let changed = false;
+    for (const chain of chains) {
+      const slots = residues.filter((r) => r.chain === String(chain) && !r.segment);
+      const want = keys.filter((k) => slots.some((r) => r.key === k));
+      if (want.length !== slots.length) continue;
+      const byKey = new Map(slots.map((r) => [r.key, r]));
+      slots.forEach((slot, k) => { slot.next = byKey.get(want[k]); if (slot.next !== slot) changed = true; });
+    }
+    if (!changed) return;
+    this._permuteAtoms(residues.flatMap((r) => (r.next ?? r).atoms));
+    for (const chain of chains) this._renumberChain(chain);
+    // The new residues' bonds went with the residues they joined: join each to its new neighbours instead.
+    const mine = new Set(chains.map(String));
+    const sentinels = [];
+    for (let i = 0; i < a.nAtoms; i += 1) if (mine.has(String(a.chain_id[i])) && this._isSegmentAtom(i)) sentinels.push(i);
+    const sentinelSet = new Set(sentinels);
+    a.bonds = (a.bonds || []).filter(([u, v]) => !sentinelSet.has(u) && !sentinelSet.has(v));
+    for (const i of sentinels) this._installSentinelBonds(i, a.chain_type?.[i]);
+    computeIdAndEntityAnnotations(a);
   }
 
   /** Replace the selected polymer residues with new residues: one `min`-`max` segment per contiguous run. */
@@ -1703,6 +1741,99 @@ export class StudioDoc {
     }
     computeIdAndEntityAnnotations(a);
     return { changed: true, message: `Deleted ${delSet.size} atoms.` };
+  }
+
+  /** Put the atoms in `order` (every index once): annotations, bonds and restraints follow. */
+  _permuteAtoms(order) {
+    const a = this.atoms;
+    if (order.length !== a.nAtoms) throw new Error('permutation must name every atom once');
+    const oldToNew = new Int32Array(a.nAtoms);
+    order.forEach((oldIndex, k) => { oldToNew[oldIndex] = k; });
+    const pick = (arr) => (Array.isArray(arr) ? order.map((i) => arr[i]) : arr);
+    for (const key of [
+      'hetero', 'element', 'atom_name', 'res_name', 'chain_id', 'label_entity_id',
+      'res_id', 'ins_code', 'auth_seq_id', 'atom_id', 'b_factor', 'occupancy',
+      'charge', 'label_alt_id', 'coord', 'transformation_id', 'is_polymer',
+      'chain_type', 'chem_comp_type', 'atomic_number', 'is_aromatic', 'is_leaving_atom',
+    ]) {
+      a[key] = pick(a[key]);
+    }
+    for (const [k, v] of Object.entries(a.annotations || {})) a.annotations[k] = pick(v);
+    if (a.cathText) a.cathText = pick(a.cathText);
+    a.bonds = (a.bonds || []).map(([u, v, bt]) => [oldToNew[u], oldToNew[v], bt]);
+    a.distanceRestraints = (a.distanceRestraints || [])
+      .map((r) => ({ atom1: oldToNew[r.atom1], atom2: oldToNew[r.atom2], distance: r.distance }));
+  }
+
+  /** Chains in the order given (chains not named keep their place after those named). */
+  reorderChains(chainIds) {
+    const a = this.atoms;
+    const want = (chainIds || []).map(String);
+    const present = [...new Set(a.chain_id.map(String))];
+    const missing = want.filter((c) => !present.includes(c));
+    if (missing.length) throw new Error(`no chain ${missing.join(', ')}`);
+    const sequence = [...want, ...present.filter((c) => !want.includes(c))];
+    const order = [];
+    for (const cid of sequence) for (let i = 0; i < a.nAtoms; i += 1) if (String(a.chain_id[i]) === cid) order.push(i);
+    this.snapshot();
+    this._permuteAtoms(order);
+    computeIdAndEntityAnnotations(a);
+    return { changed: true, message: `Chains in order ${sequence.join(', ')}.` };
+  }
+
+  /**
+   * One chain's residues numbered consecutively in document order, its first residue that is not new residues being 1
+   * (new residues before it count down from 0), as AtomWorks numbers a scaffolded motif.
+   */
+  _renumberChain(chainId) {
+    const resStarts = getResidueSegments(this.atoms);
+    const mine = [];
+    for (let r = 0; r < resStarts.length - 1; r += 1) if (String(this.atoms.chain_id[resStarts[r]]) === String(chainId)) mine.push(r);
+    const firstKept = Math.max(0, mine.findIndex((r) => !this._isSegmentAtom(resStarts[r])));
+    let next = -firstKept;
+    for (const r of mine) {
+      const s = resStarts[r];
+      next += 1;
+      for (let i = s; i < resStarts[r + 1]; i += 1) {
+        this.atoms.res_id[i] = next;
+        this.atoms.auth_seq_id[i] = next;
+        this.atoms.ins_code[i] = '';
+      }
+    }
+  }
+
+  /**
+   * Forget where `indices` are: no coordinates, no occupancy, no coordinate conditions. Atoms in `lead` move to the
+   * front of their residues (in their order), so a residue that keeps only some atoms is read from one of those.
+   */
+  clearCoordinates(indices, lead = []) {
+    const selected = this.resolveIndices(indices, 'atom');
+    if (!selected.length) throw new Error('at least one atom must be selected');
+    this.snapshot();
+    const a = this.atoms;
+    const crd = this._ensureAnnotationArray('condition_coordinate_1_atom', { default: NaN });
+    const grp = this._ensureAnnotationArray('condition_CoordinateGroup_1_atom', { default: -1 });
+    const intCrd = this._ensureAnnotationArray('condition_InternalCoordinate_1_atom', { default: NaN });
+    for (const i of selected) {
+      a.coord[i] = [NaN, NaN, NaN];
+      a.occupancy[i] = 0;
+      crd[i] = [NaN, NaN, NaN];
+      grp[i] = -1;
+      intCrd[i] = [NaN, NaN, NaN];
+    }
+    const first = new Set(lead);
+    if (first.size) {
+      const starts = getResidueSegments(a);
+      const order = [];
+      for (let r = 0; r < starts.length - 1; r += 1) {
+        const atoms = [];
+        for (let i = starts[r]; i < starts[r + 1]; i += 1) atoms.push(i);
+        order.push(...atoms.filter((i) => first.has(i)), ...atoms.filter((i) => !first.has(i)));
+      }
+      this._permuteAtoms(order);
+      computeIdAndEntityAnnotations(a);
+    }
+    return { changed: true, affected_count: selected.length, message: `Cleared the coordinates of ${selected.length} atoms.` };
   }
 
   _renumberChainResidues() {
@@ -3156,6 +3287,14 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
         const editResult = doc.setCharge(body.atom_indices || [], { value: body.value, delta: body.delta });
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
+      if (subpath === '/coordinates/clear' && method === 'POST') {
+        const editResult = doc.clearCoordinates(body.atom_indices || [], body.lead || []);
+        return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
+      }
+      if (subpath === '/chains/order' && method === 'POST') {
+        const editResult = doc.reorderChains(body.chain_ids || []);
+        return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
+      }
       if (subpath === '/chains' && method === 'POST') {
         const editResult = doc.assignChain(body.atom_indices || [], body.chain_id);
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
@@ -3192,7 +3331,7 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
         const editResult = doc.scaffoldMotif(body.atom_indices, {
           spread: body.spread ?? 0.25,
           sidechainsOnly: Boolean(body.sidechains_only),
-          unindexed: Boolean(body.unindexed),
+          unindexed: Boolean(body.unindexed), ordered: Boolean(body.ordered),
           totalMin: body.total_min ?? null,
           totalMax: body.total_max ?? null,
         });

@@ -15,8 +15,11 @@ const memory = new Map();
 /** Components in `resNames` with neither a built-in bond template nor `_chem_comp_bond` rows in `cifBlock`. */
 export function componentsNeedingCcd(resNames, cifBlock) {
   const have = new Set(Object.keys(STD_RESIDUE_BONDS));
+  // A file's own tables count only with formal charges: RCSB entries list their components' atoms without them
+  // (SAM's S+ and O-), which AtomWorks takes from the CCD.
+  const charged = !cifBlock?.chem_comp_atom || cifBlock.chem_comp_atom.charge !== undefined;
   const ccb = rows(cifBlock?.chem_comp_bond);
-  for (let r = 0; r < ccb.n; r += 1) have.add(String(ccb.get('comp_id', r)));
+  if (charged) for (let r = 0; r < ccb.n; r += 1) have.add(String(ccb.get('comp_id', r)));
   const out = new Set();
   for (const name of resNames) {
     if (!name || have.has(name) || /^\d+-\d+$/.test(name) || name === '<M>' || name === 'UNK') continue;

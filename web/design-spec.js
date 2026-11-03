@@ -83,6 +83,11 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
         hotspots: 0,
         atoms: 0,
         atomIndices: [],
+        // Atom names: heavy atoms with coordinates, those held (absolute or rigid), and hotspot atoms.
+        heavyNames: [],
+        heldNames: [],
+        hotNames: [],
+        allHot: true,
       };
       if (res.segment && !(res.segment.min > 0)) {
         const m = /^(\d+)-(\d+)$/.exec(res.resName);
@@ -93,11 +98,18 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
     }
     res.atoms += 1;
     res.atomIndices.push(i);
-    if (hasCrd(atoms.coord?.[i])) res.resolved = true;
+    const atomName = String(atoms.atom_name[i]);
+    const heavy = String(atoms.element?.[i] ?? '').toUpperCase() !== 'H';
+    if (hasCrd(atoms.coord?.[i])) {
+      res.resolved = true;
+      if (heavy) res.heavyNames.push(atomName);
+    }
     if (hasCrd(crd?.[i])) {
       res.crdAtoms += 1;
-      if (BACKBONE_ATOMS.has(String(atoms.atom_name[i]))) res.crdBackbone += 1;
+      if (BACKBONE_ATOMS.has(atomName)) res.crdBackbone += 1;
     }
+    if (heavy && (hasCrd(crd?.[i]) || Number(group?.[i]) > 0 || hasCrd(internal?.[i]))) res.heldNames.push(atomName);
+    if (hotspot?.[i]) { if (heavy) res.hotNames.push(atomName); } else if (heavy && hasCrd(atoms.coord?.[i])) res.allHot = false;
     const s = seqCond?.[i];
     if (s != null && s !== '<M>' && s !== '.' && s !== '' && s !== '?') res.seqFixed = true;
     if (indexCond && indexCond[i] === false) res.unindexed = true;
@@ -193,6 +205,8 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
         pose: r.crdAtoms === 0 ? 'predicted' : r.crdAtoms < r.atoms ? 'partly fixed' : 'fixed',
         atoms: r.atoms,
         fixedAtoms: r.crdAtoms,
+        // The held atoms' names when only some are ("N1, C2, N3, C4").
+        heldNames: r.crdAtoms > 0 && r.crdAtoms < r.atoms ? r.heldNames.join(', ') : '',
         atomIndices: r.atomIndices,
       })),
       lengthMin,
@@ -200,6 +214,8 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
       contig: pieces.join('/'),
       pieces: chainPieces(chain.residues, segmentWhere),
       hotspotResIds: polymer.filter((r) => r.hotspots > 0).map((r) => r.resId),
+      // Hotspot residues marked on some of their atoms only: resId -> those atom names.
+      hotspotAtoms: new Map(polymer.filter((r) => r.hotspots > 0 && !r.allHot).map((r) => [r.resId, r.hotNames])),
       atomIndices: chain.atomIndices,
       polymerAtomIndices: polymer.flatMap((r) => r.atomIndices),
       backboneAtomIndices: polymer.flatMap((r) => r.atomIndices.filter((i) => BACKBONE_ATOMS.has(String(atoms.atom_name[i])))),
@@ -243,14 +259,31 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 7
   };
 }
 
-/** A residue's piece kind ('kept', 'designed', 'new') and, for a kept one, its keep mode. */
+/**
+ * Which of a residue's atoms are held: 'all', 'backbone', 'sidechain', or their names ("CG, OD1"); null for none.
+ * A residue with no side chain (glycine) holding its backbone reads 'all'.
+ */
+export function heldAtomsOf(r) {
+  const held = new Set(r.heldNames);
+  if (!held.size) return null;
+  const heavy = r.heavyNames.length ? r.heavyNames : r.heldNames;
+  if (heavy.every((n) => held.has(n))) return 'all';
+  const isBb = (n) => BACKBONE_ATOMS.has(n) || n === 'OXT';
+  const bb = heavy.filter(isBb);
+  const side = heavy.filter((n) => !isBb(n));
+  if (held.size === bb.length && bb.every((n) => held.has(n))) return 'backbone';
+  if (held.size === side.length && side.every((n) => held.has(n))) return 'sidechain';
+  return heavy.filter((n) => held.has(n)).join(', ');
+}
+
+/** A residue's piece kind ('kept', 'designed', 'new') and, for a kept one, its keep mode and held atoms. */
 function pieceOf(r) {
   if (r.kind === 'segment') return { kind: 'new' };
   let keep = null;
   if (r.relative) keep = 'shape';
   else if (r.crdAtoms > 0) keep = r.crdBackbone === 0 ? 'sidechain' : r.seqFixed ? 'all' : 'backbone';
   else if (r.seqFixed) keep = 'sequence';
-  return keep ? { kind: 'kept', keep, anywhere: r.unindexed } : { kind: 'designed' };
+  return keep ? { kind: 'kept', keep, anywhere: r.unindexed, atoms: heldAtomsOf(r) } : { kind: 'designed' };
 }
 
 /** "A38" -> ["A", 38] */
@@ -281,7 +314,12 @@ function chainPieces(residues, segmentWhere) {
     // A glycine has no side chain to hold, so "side chains only" leaves it with its amino acid alone: it belongs to
     // the side-chain run it sits in rather than splitting it.
     if (run?.keep === 'sidechain' && p.keep === 'sequence' && r.resName === 'GLY') p.keep = 'sidechain';
-    const sameRun = run && run.kind === p.kind && run.keep === p.keep && run.anywhere === p.anywhere
+    // Likewise a glycine holding its backbone ("all" of it) belongs to a backbone-only run.
+    if (run?.atoms === 'backbone' && p.atoms === 'all' && r.heavyNames.every((n) => BACKBONE_ATOMS.has(n) || n === 'OXT')) {
+      p.atoms = 'backbone';
+      if (p.keep === 'all' && run.keep === 'backbone') p.keep = 'backbone';
+    }
+    const sameRun = run && run.kind === p.kind && run.keep === p.keep && run.anywhere === p.anywhere && run.atoms === p.atoms
       && r.resId === run.end + 1
       && (!run.src && !src || (run.src && src && src[0] === run.src[0] && src[1] === run.srcEnd + 1));
     if (sameRun) {
@@ -307,31 +345,44 @@ function chainPieces(residues, segmentWhere) {
 }
 
 /**
- * Residues as typed: "A56, A115-123, B7" (chain letter then number or range; a bare number takes `defaultChain`).
- * Returns `{residues: [{chain, resId}], bad: ['tokens not understood']}`.
+ * Residues as typed: "A56, A115-123, B7" (chain letter then number or range; a bare number takes `defaultChain`), in
+ * the order typed. A residue may name some of its atoms: "A56(CG,OH)". Returns
+ * `{residues: [{chain, resId, atoms?}], bad: ['tokens not understood']}`.
  */
 export function parseResidueList(text, defaultChain = null) {
   const residues = [];
   const bad = [];
-  for (const token of String(text ?? '').split(/[\s,;]+/).filter(Boolean)) {
-    const m = /^([A-Za-z]{1,4})?:?(-?\d+)(?:[-–](-?\d+))?$/.exec(token.replace(/^([A-Za-z]+)(\d)/, '$1:$2'));
+  // Atom lists may hold commas: join their names with "+" so they stay inside one token.
+  const joined = String(text ?? '').replace(/\(([^)]*)\)/g, (_, names) => `(${names.split(/[\s,;+]+/).filter(Boolean).join('+')})`);
+  for (const token of joined.split(/[\s,;]+/).filter(Boolean)) {
+    const m = /^([A-Za-z]{1,4})?:?(-?\d+)(?:[-–](-?\d+))?(?:\(([^()\s]+)\))?$/.exec(token.replace(/^([A-Za-z]+)(\d)/, '$1:$2'));
     const chain = m?.[1] ?? defaultChain;
-    if (!m || !chain) { bad.push(token); continue; }
+    if (!m || !chain) { bad.push(token.replace(/\+/g, ',')); continue; }
     const lo = Number(m[2]);
     const hi = m[3] == null ? lo : Number(m[3]);
-    if (hi < lo || hi - lo > 2000) { bad.push(token); continue; }
-    for (let id = lo; id <= hi; id += 1) residues.push({ chain, resId: id });
+    if (hi < lo || hi - lo > 2000) { bad.push(token.replace(/\+/g, ',')); continue; }
+    const atomNames = m[4] ? m[4].split('+').map((a) => a.toUpperCase()) : null;
+    for (let id = lo; id <= hi; id += 1) residues.push(atomNames ? { chain, resId: id, atoms: atomNames } : { chain, resId: id });
   }
   return { residues, bad };
 }
 
-/** The inverse of parseResidueList for one chain: [56, 115, 116, 117] -> "A56, A115–117". */
-export function formatResidueList(chain, resIds) {
+/**
+ * The inverse of parseResidueList for one chain: [56, 115, 116, 117] -> "A56, A115–117". `atomsOf` (resId -> atom
+ * names) marks residues meant on some atoms only: "A56(CG,OH)".
+ */
+export function formatResidueList(chain, resIds, atomsOf = null) {
   const ids = [...new Set(resIds)].sort((a, b) => a - b);
   const parts = [];
   for (let k = 0; k < ids.length;) {
+    const named = atomsOf?.get(ids[k]);
+    if (named?.length) {
+      parts.push(`${chain}${ids[k]}(${named.join(',')})`);
+      k += 1;
+      continue;
+    }
     let j = k;
-    while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j += 1;
+    while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1 && !atomsOf?.get(ids[j + 1])?.length) j += 1;
     parts.push(j === k ? `${chain}${ids[k]}` : `${chain}${ids[k]}–${ids[j]}`);
     k = j + 1;
   }

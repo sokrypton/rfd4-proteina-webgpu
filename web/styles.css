@@ -982,3 +982,14 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
 
 /* An example being built (`_buildRecipe`) does it out of sight: its popups never show. */
 body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
+
+/* The chain letter opens the chain's popup (name, order): still the coloured chip, pointable. */
+#rfd4p-studio-card button.rfd4p-chain-id {
+  min-height: 0;
+  border: 0;
+  font: 700 12px var(--font-mono, monospace);
+  cursor: pointer;
+}
+#rfd4p-studio-card button.rfd4p-chain-id:hover:not(:disabled),
+#rfd4p-studio-card button.rfd4p-chain-id:focus-visible { outline: 1px solid var(--text, #f1f1f2); outline-offset: 1px; }
+#rfd4p-studio-card button.rfd4p-chain-id:disabled { cursor: default; opacity: 1; }

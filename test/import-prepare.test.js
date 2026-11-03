@@ -107,6 +107,13 @@ test('CCD components are fetched only when needed, merged, and failures are tole
   ].join('\n'));
   // Standard residues, components the file defines, segments and masks are skipped.
   assert.deepEqual(componentsNeedingCcd(['GLY', 'SAM', 'PTH', '5-10', '<M>', 'UNK'], fileBlock), ['PTH']);
+  // An RCSB entry lists its components' atoms without formal charges: those come from the CCD.
+  const rcsbBlock = parseCifBlock([
+    'data_x', 'loop_', '_chem_comp_atom.comp_id', '_chem_comp_atom.atom_id', '_chem_comp_atom.type_symbol', 'SAM N N', '#',
+    'loop_', '_chem_comp_bond.comp_id', '_chem_comp_bond.atom_id_1', '_chem_comp_bond.atom_id_2',
+    '_chem_comp_bond.value_order', 'SAM N CA SING', '#',
+  ].join('\n'));
+  assert.deepEqual(componentsNeedingCcd(['SAM'], rcsbBlock), ['SAM']);
   const ptH = [
     'data_PTH', 'loop_', '_chem_comp_atom.comp_id', '_chem_comp_atom.atom_id', '_chem_comp_atom.type_symbol',
     '_chem_comp_atom.pdbx_aromatic_flag', 'PTH P P N', 'PTH O1P O N', '#',

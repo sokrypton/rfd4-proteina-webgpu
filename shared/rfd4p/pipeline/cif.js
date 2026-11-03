@@ -882,8 +882,11 @@ export function mergeCcdIntoBlock(cifBlock, blocks) {
     const base = catRows(cifBlock[cat]);
     const cols = [...new Set([...base.cols, ...parts.flatMap((p) => p.cols)])];
     const out = Object.fromEntries(cols.map((c) => [c, []]));
-    for (const src of [{ part: base, cat: cifBlock[cat] }, ...parts.map((p) => ({ part: p }))]) {
+    // A component the dictionary supplies replaces the file's own rows for it (which may lack charges).
+    const supplied = new Set(blocks.keys());
+    for (const src of [{ part: base, own: true }, ...parts.map((p) => ({ part: p }))]) {
       for (let r = 0; r < src.part.n; r += 1) {
+        if (src.own && supplied.has(String(src.part.get('comp_id', r)))) continue;
         for (const c of cols) out[c].push(src.part.cols.includes(c) ? String(src.part.get(c, r)) : '?');
       }
     }
@@ -950,11 +953,13 @@ export function parseCifToAtomArray(cifInput, opts = {}) {
     const chgs = block.chem_comp_atom.charge;
     const aroms = block.chem_comp_atom.pdbx_aromatic_flag;
     const leavs = block.chem_comp_atom.pdbx_leaving_atom_flag;
+    // A blank ('?', '.') says nothing: merged dictionary columns leave the file's own rows blank.
+    const known = (v) => v !== undefined && v !== '?' && v !== '.';
     for (let i = 0; i < cids.length; i++) {
       const key = `${cids[i]}:${aids[i]}`;
-      if (chgs) ccaChargeMap.set(key, safeInt(chgs[i], 0));
-      if (aroms) ccaAromMap.set(key, aroms[i] === 'Y');
-      if (leavs) ccaLeavingMap.set(key, leavs[i] === 'Y');
+      if (chgs && known(chgs[i])) ccaChargeMap.set(key, safeInt(chgs[i], 0));
+      if (aroms && known(aroms[i])) ccaAromMap.set(key, aroms[i] === 'Y');
+      if (leavs && known(leavs[i])) ccaLeavingMap.set(key, leavs[i] === 'Y');
     }
   }
 

@@ -15,10 +15,14 @@ const ADVANCED_KEY = 'rfd4p-advanced-editor';
 
 /**
  * Start-screen tasks. Each with a `recipe` is built from its PDB entry with the card's own controls, out of sight
- * (`_buildRecipe`), and shown finished: the set-up a user would make, numbered as the entry is and captioned with it.
- * Without a network the bundled Studio example (`example`, web/studio/examples) opens instead.
- * Steps: `fetch` (ID and chains), `piece` (open the piece holding `at`, fill `set`, Apply), `removeNew` (× the new
- * residues left in a chain), `addSeq`, `newLength` (the chain's `k`-th new piece), `ligand` (pose), `partial`.
+ * (`_buildRecipe`), and shown finished: the set-up a user would make, captioned with its entry. Each matches the bundled
+ * Studio example of the same name (`example`, web/studio/examples) model input for model input: the same entries,
+ * residues, held atoms, chain names and order (test/example-recipes notes what cannot match). Without a network that
+ * bundled example opens instead.
+ * Steps: `fetch` (ID and chains), `add` (another entry's chains, as + pdb), `piece` (open the piece holding `at`, fill
+ * `set`, Apply), `removePiece` (× the piece holding `at`), `removeNew` (× the new residues left in a chain), `addSeq`,
+ * `newLength` (the chain's `k`-th new piece), `ligand` (pose, held atoms), `chain` (its popup: `name`, `order` from 1),
+ * `partial`.
  */
 const TASKS = [
   { example: 'unconditional', title: 'Protein from scratch', desc: 'A new fold of the length you choose' },
@@ -26,7 +30,7 @@ const TASKS = [
     example: 'protein_binder', title: 'Protein binder', desc: 'Bind PD-L1 (PDB 5O45)',
     recipe: [
       { fetch: '5O45 A' },
-      { piece: 'A', at: 10, set: { hotspots: 'A40, A99, A107', keepOnly: 'A1-115' } },
+      { piece: 'A', at: 10, set: { hotspots: 'A40(CG,OH), A99(CG,SD), A107(CD2,OH)', keepOnly: 'A1-115' } },
       { removeNew: 'A' },
       { addSeq: true },
       { newLength: [50, 120] },
@@ -39,60 +43,84 @@ const TASKS = [
       { addSeq: true },
       { newLength: [150, 150] },
       { ligand: 'SAM', pose: 'free' },
+      { chain: 'D_1', name: 'B' },
+      { chain: 'A', order: 1 },
     ],
   },
   {
     example: 'motif_scaffolding', title: 'Motif scaffolding', desc: 'Keep three residues, build the rest (PDB 1QJG)',
     recipe: [
-      { fetch: '1QJG C' },
-      { piece: 'C', at: 10, set: { keepOnly: 'C14, C38, C99' } },
+      { fetch: '1QJG A' },
+      { piece: 'A', at: 10, set: { keepOnly: 'A38, A14, A99' } },
+      { newLength: [10, 20], chain: 'A', k: 0 },
+      { newLength: [15, 30], chain: 'A', k: 1 },
+      { newLength: [15, 30], chain: 'A', k: 2 },
+      { newLength: [10, 20], chain: 'A', k: 3 },
     ],
   },
   {
     example: 'enzyme_design', title: 'Enzyme', desc: 'A catalytic Asp around Zn and orotate (PDB 1J79)',
     recipe: [
       { fetch: '1J79 A C E' },
-      { piece: 'A', at: 10, set: { structure: 'sidechain', position: 'anywhere', keepOnly: 'A250' } },
+      { piece: 'A', at: 10, set: { atoms: 'CG, OD1', position: 'anywhere', keepOnly: 'A250' } },
       { newLength: [180, 180], chain: 'A' },
+      { ligand: 'ORO', pose: 'fixed', atoms: 'N1, C2, N3, C4' },
+      { chain: 'C', name: 'B' },
+      { chain: 'E', name: 'C' },
+      { chain: 'C', order: 2 },
     ],
   },
   {
     example: 'antibody_design', title: 'Antibody loop', desc: 'Redesign CDR H3 against HER2 (PDB 1N8Z)',
     recipe: [
       { fetch: '1N8Z A B C' },
-      { piece: 'A', at: 10, set: { structure: 'rigid', keepOnly: 'A1-107' } },
-      { removeNew: 'A' },
-      { piece: 'B', at: 10, set: { structure: 'rigid', keepOnly: 'B1-120' } },
-      { removeNew: 'B' },
-      { piece: 'B', at: 100, set: { from: 99, to: 109, structure: 'designed', sequence: 'designed' } },
-      { piece: 'C', at: 550, set: { keepOnly: 'C545-580, C591-607', hotspots: 'C557-573, C591-605' } },
-      { removeNew: 'C' },
+      { chain: 'A', name: 'L' },
+      { chain: 'B', name: 'H' },
+      { chain: 'C', name: 'T' },
+      { piece: 'H', at: 10, set: { structure: 'rigid', keepOnly: 'H1-120' } },
+      { removeNew: 'H' },
+      { piece: 'L', at: 10, set: { structure: 'rigid', keepOnly: 'L1-107' } },
+      { removeNew: 'L' },
+      { piece: 'H', at: 100, set: { from: 99, to: 109, structure: 'designed', sequence: 'designed' } },
+      { piece: 'T', at: 550, set: { keepOnly: 'T545-580, T591-607', hotspots: 'T557-573, T591-605' } },
+      { removeNew: 'T' },
     ],
   },
   {
-    example: 'nanobody', title: 'Nanobody (VHH)', desc: 'Design CDRs against PD-L1 (PDB 5JDS)',
+    example: 'nanobody', title: 'Nanobody (VHH)', desc: 'Design CDRs against PD-L1 (PDB 4Z18, 3EAK)',
     recipe: [
-      { fetch: '5JDS' },
-      { piece: 'A', at: 10, set: { structure: 'rigid', keepOnly: 'A3-125' } },
+      { fetch: '4Z18 A' },
+      { piece: 'A', at: 10, set: { atoms: 'backbone', keepOnly: 'A2-114', hotspots: 'A39(CZ), A98(CE), A106(CZ)' } },
       { removeNew: 'A' },
-      { piece: 'B', at: 10, set: { keepOnly: 'B3-115', hotspots: 'B40, B99, B107' } },
-      { removeNew: 'B' },
-      { piece: 'A', at: 100, set: { from: 99, to: 119, structure: 'designed', sequence: 'designed', length: [16, 26] } },
-      { piece: 'A', at: 55, set: { from: 52, to: 61, structure: 'designed', sequence: 'designed', length: [8, 13] } },
-      { piece: 'A', at: 30, set: { from: 28, to: 37, structure: 'designed', sequence: 'designed', length: [8, 13] } },
+      { add: '3EAK B' },
+      { chain: 'B', name: 'H' },
+      { piece: 'H', at: 10, set: { structure: 'rigid', atoms: 'backbone', keepOnly: 'H1-127' } },
+      { removeNew: 'H' },
+      { piece: 'H', at: 30, set: { from: 23, to: 38, structure: 'designed', sequence: 'designed', length: [11, 16] } },
+      { piece: 'H', at: 55, set: { from: 53, to: 62, structure: 'designed', sequence: 'designed', length: [8, 12] } },
+      { piece: 'H', at: 105, set: { from: 100, to: 117, structure: 'designed', sequence: 'designed', length: [8, 22] } },
     ],
   },
   {
     example: 'inverse_folding', title: 'Redesign a sequence', desc: 'New sequence for a fixed backbone (PDB 2KL8)', then: 'sequence',
     recipe: [
       { fetch: '2KL8' },
-      { piece: 'A', at: 10, set: { sequence: 'designed' } },
+      { piece: 'A', at: 10, set: { from: 8, to: 27, structure: 'designed', sequence: 'designed' } },
+      { removePiece: 'A', at: 10 },
+      { piece: 'A', at: 82, set: { from: 80, to: 85, structure: 'designed', sequence: 'designed' } },
+      { removePiece: 'A', at: 82 },
+      { piece: 'A', at: 5, set: { sequence: 'designed' } },
+      { piece: 'A', at: 30, set: { sequence: 'designed' } },
     ],
   },
   {
     example: 'partial_diffusion', title: 'Diversify a structure', desc: 'Variants close to a starting fold (PDB 2KL8)',
     recipe: [
       { fetch: '2KL8' },
+      { piece: 'A', at: 10, set: { from: 8, to: 27, structure: 'designed', sequence: 'designed' } },
+      { removePiece: 'A', at: 10 },
+      { piece: 'A', at: 82, set: { from: 80, to: 85, structure: 'designed', sequence: 'designed' } },
+      { removePiece: 'A', at: 82 },
       { partial: true },
     ],
   },
@@ -115,7 +143,9 @@ const el = (tag, attrs = {}, ...children) => {
 const HOTSPOT_COLOR = 0xf59e0b;
 
 // The three properties of residues, the same in a sub-card's popup and the selection's.
-const STRUCTURE_OPTIONS = [['fixed', 'fixed'], ['rigid', 'fixed, can move'], ['sidechain', 'side chains only'], ['designed', 'designed']];
+const STRUCTURE_OPTIONS = [['fixed', 'fixed'], ['rigid', 'fixed, can move'], ['designed', 'designed']];
+// Which atoms a fixed structure holds; "named" takes atom names typed beside it (CG, OD1).
+const ATOM_OPTIONS = [['all', 'all'], ['backbone', 'backbone'], ['sidechain', 'side chains'], ['named', 'named']];
 const SEQUENCE_OPTIONS = [['fixed', 'fixed'], ['designed', 'designed']];
 const POSITION_OPTIONS = [['fixed', 'fixed'], ['anywhere', 'anywhere']];
 
@@ -237,9 +267,31 @@ export class DesignPanel {
   }
 
   /** Add `chains` (all when empty) of a structure to the job, fixed as they are; first remove the atoms in `replace`. */
+  /**
+   * An entry opened as AtomWorks does (rcsb preset), in its first biological assembly that has all of `chains` (3EAK's
+   * chain B is in assembly 2); the first assembly when no chains are named or none has them all.
+   */
+  async _openEntry(text, name, chains = []) {
+    const wanted = chains.map((c) => String(c).toUpperCase());
+    const has = (doc) => {
+      const present = new Set(Array.from(doc.atoms.chain_id, (c) => String(c).toUpperCase()));
+      return wanted.every((c) => present.has(c));
+    };
+    const first = await createStudioDocWithCcd(text, name, { preset: 'rcsb', assembly: '1' });
+    if (!wanted.length || has(first)) return first;
+    const gen = first.cifBlock?.pdbx_struct_assembly_gen;
+    const raw = gen?.assembly_id ?? gen?.columns?.assembly_id ?? [];
+    const ids = [...new Set((Array.isArray(raw) ? raw : [raw]).map(String))].filter((id) => id !== '1');
+    for (const id of ids) {
+      const doc = await createStudioDocWithCcd(text, name, { preset: 'rcsb', assembly: id });
+      if (has(doc)) return doc;
+    }
+    return first;
+  }
+
   async _addStructure(text, name, chains, replace) {
     const { status } = this.addStructure;
-    const doc = await createStudioDocWithCcd(text, name, { preset: 'rcsb', assembly: '1' });
+    const doc = await this._openEntry(text, name, chains);
     const a = doc.atoms;
     const present = [...new Set(a.chain_id.map(String))];
     const wanted = new Set(chains.map((c) => c.toUpperCase()));
@@ -552,7 +604,10 @@ export class DesignPanel {
       items.push(this._ligandCard(c, l, readonly, remove(many ? `Remove ${l.name}` : `Remove chain ${c.id}`, l.atomIndices)));
     }
     const gutter = el('div', { class: 'rfd4p-chain-gutter' },
-      el('span', { class: 'rfd4p-chain-id', text: c.id }),
+      el('button', {
+        type: 'button', class: 'rfd4p-chain-id', text: c.id, disabled: readonly, title: `Chain ${c.id}: name and order`,
+        onclick: (ev) => this._openPop(ev.currentTarget, () => this._chainPop(c)),
+      }),
       many ? remove(`Remove chain ${c.id}`, c.atomIndices) : null);
     const row = el('div', { class: `rfd4p-chain rfd4p-role-${c.role}` }, gutter, el('div', { class: 'rfd4p-chain-items' }, ...items.filter(Boolean)));
     // The chain's colour, as in the viewer and the sequence bar.
@@ -577,13 +632,14 @@ export class DesignPanel {
   /** What a piece row says after its residues: what is kept, in a few words. */
   _status(p) {
     if (p.kind === 'new') return 'new';
-    const { structure, sequence, position } = this._properties(p);
-    // The popup's words: both fixed reads "fixed", both designed "designed", otherwise which one is fixed.
+    const { structure, atoms, names, sequence, position } = this._properties(p);
+    // The popup's words: both fixed reads "fixed", both designed "designed", otherwise which one is fixed; part of the
+    // atoms says which.
+    const part = atoms === 'backbone' ? 'backbone' : atoms === 'sidechain' ? 'side chains' : atoms === 'named' ? names : '';
     const what = structure === 'designed' && sequence === 'designed' ? 'designed'
-      : structure === 'fixed' && sequence === 'fixed' ? 'fixed'
-        : structure === 'rigid' ? 'fixed, can move'
-          : structure === 'sidechain' ? 'side chains fixed'
-            : structure === 'fixed' ? 'structure fixed' : 'sequence fixed';
+      : structure === 'rigid' ? (part ? `${part} fixed, can move` : 'fixed, can move')
+        : structure === 'fixed' && sequence === 'fixed' ? (part ? `${part} fixed` : 'fixed')
+          : structure === 'fixed' ? 'structure fixed' : 'sequence fixed';
     return [what, position === 'anywhere' ? 'anywhere' : '',
       p.hotspots.length ? `${p.hotspots.length} hotspot${p.hotspots.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
   }
@@ -716,11 +772,15 @@ export class DesignPanel {
     }
     const lengthRow = el('div', { class: 'rfd4p-pop-row', title: 'Each design picks one length from this range' },
       el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, lenMin, el('span', { text: '–' }), lenMax));
-    // Side chains only means those side chains, so their amino acids; a fully designed piece has no position to keep,
+    const atomsField = this._atomsField(now.atoms, now.names);
+    const atomsRow = el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Atoms' }), atomsField.select, atomsField.text);
+    // Side chains held means those side chains, so their amino acids; a fully designed piece has no position to keep,
     // only a length.
     const sync = () => {
-      if (structure.value === 'sidechain') sequence.value = 'fixed';
-      sequence.disabled = structure.value === 'sidechain';
+      const sidechain = atomsField.select.value === 'sidechain' && structure.value !== 'designed';
+      if (sidechain) sequence.value = 'fixed';
+      sequence.disabled = sidechain;
+      atomsRow.hidden = structure.value === 'designed';
       const free = structure.value === 'designed' && sequence.value === 'designed';
       if (free) position.value = 'fixed';
       positionRow.hidden = free;
@@ -728,20 +788,28 @@ export class DesignPanel {
     };
     structure.addEventListener('change', sync);
     sequence.addEventListener('change', sync);
+    atomsField.select.addEventListener('change', sync);
 
     const hot = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
-      value: formatResidueList(c.id, c.hotspotResIds), placeholder: 'none', 'aria-label': 'Hotspots',
-      title: 'Residues of this chain a binder should touch, e.g. A56, A60-62' });
+      value: formatResidueList(c.id, c.hotspotResIds, c.hotspotAtoms), placeholder: 'none', 'aria-label': 'Hotspots',
+      title: 'Residues of this chain a binder should touch, e.g. A56, A60-62, or some of their atoms: A56(CG,OH)' });
     const keepOnly = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
       placeholder: 'all', 'aria-label': 'Keep only these residues',
-      title: 'Type some residues (e.g. A38, A99) to keep only those; the rest of the chain becomes new residues (a motif)' });
+      title: 'Type some residues (e.g. A38, A99) to keep only those, in that order; the rest of the chain becomes new residues (a motif)' });
     const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
     const residuesIn = (text, inChain) => {
       const { residues, bad } = parseResidueList(text, c.id);
-      const want = new Set(residues.filter((r) => r.chain === c.id).map((r) => r.resId));
-      const atoms = a ? inChain.filter((i) => want.has(Number(a.res_id[i]))) : [];
-      const found = new Set(atoms.map((i) => Number(a.res_id[i])));
-      return { want, atoms, bad, missing: [...want].filter((id) => !found.has(id)) };
+      const mine = residues.filter((r) => r.chain === c.id);
+      // In the order typed; a residue may name some of its atoms.
+      const want = new Set(mine.map((r) => r.resId));
+      const atomsOf = new Map(mine.filter((r) => r.atoms).map((r) => [r.resId, r.atoms]));
+      const byRes = new Map();
+      for (const i of (a ? inChain : [])) {
+        const id = Number(a.res_id[i]);
+        if (want.has(id)) byRes.set(id, [...(byRes.get(id) ?? []), i]);
+      }
+      const atoms = [...want].flatMap((id) => byRes.get(id) ?? []);
+      return { want, atomsOf, atoms, bad, missing: [...want].filter((id) => !byRes.has(id)) };
     };
 
     const apply = async () => {
@@ -752,15 +820,16 @@ export class DesignPanel {
           : `Hotspots not in chain ${c.id}: ${formatResidueList(c.id, hotspots.missing)}`;
         return;
       }
-      const hotChanged = formatResidueList(c.id, [...hotspots.want]) !== formatResidueList(c.id, c.hotspotResIds);
+      const hotChanged = formatResidueList(c.id, [...hotspots.want], hotspots.atomsOf) !== formatResidueList(c.id, c.hotspotResIds, c.hotspotAtoms);
       // Re-read after each edit: atom indices move when residues are added or removed.
       const chainNow = () => this._spec()?.chains.find((x) => x.id === c.id);
       const setHotspots = async () => {
         const now = chainNow();
         if (!hotChanged || !now) return true;
-        const ids = this._inputDoc().atoms.res_id;
+        const { res_id: ids, atom_name: names } = this._inputDoc().atoms;
         const edits = [{ condition: 'hotspot', atom_indices: now.polymerAtomIndices, enabled: false }];
-        const on = now.polymerAtomIndices.filter((i) => hotspots.want.has(Number(ids[i])));
+        const on = now.polymerAtomIndices.filter((i) => hotspots.want.has(Number(ids[i]))
+          && (!hotspots.atomsOf.has(Number(ids[i])) || hotspots.atomsOf.get(Number(ids[i])).includes(String(names[i]).toUpperCase())));
         if (on.length) edits.push({ condition: 'hotspot', atom_indices: on, enabled: true });
         return this._batch(edits);
       };
@@ -771,16 +840,17 @@ export class DesignPanel {
           return;
         }
         this._closePop();
-        // The residues kept take this popup's properties: side chains only and anywhere are part of the set-up (an
-        // enzyme's site); "can move" or a designed sequence are set on them after.
+        // The residues kept, in the order typed, take this popup's properties: side chains and anywhere are part of the
+        // set-up (an enzyme's site); "can move", other atoms or a designed sequence are set on them after.
+        const which = atomsField.value();
         await this._runFlow('scaffold', this._spec(), {
-          atoms: only.atoms, sidechainsOnly: structure.value === 'sidechain', unindexed: position.value === 'anywhere',
+          atoms: only.atoms, ordered: true, sidechainsOnly: which === 'sidechain', unindexed: position.value === 'anywhere',
         });
-        if (structure.value === 'rigid' || (structure.value === 'fixed' && sequence.value === 'designed')) {
+        if (structure.value === 'rigid' || sequence.value === 'designed' || Array.isArray(which) || which === 'backbone') {
+          // An ordered motif is renumbered: the kept residues are the chain's non-new residues.
           const now = chainNow();
-          const ids = this._inputDoc().atoms.res_id;
-          const kept = (now?.polymerAtomIndices ?? []).filter((i) => only.want.has(Number(ids[i])));
-          if (kept.length) await this._applyPiece({ kind: 'kept', keep: 'all' }, kept, { structure: structure.value, sequence: sequence.value, position: position.value });
+          const kept = (now?.pieces ?? []).filter((x) => x.kind !== 'new').flatMap((x) => x.atomIndices);
+          if (kept.length) await this._applyPiece({ kind: 'kept', keep: 'all' }, kept, { structure: structure.value, atoms: which, sequence: sequence.value, position: position.value });
         }
         await setHotspots();
         return;
@@ -788,7 +858,7 @@ export class DesignPanel {
       this._closePop();
       if (!await setHotspots()) return;
       const { lo, hi, atoms, count: n } = span();
-      const want = { structure: structure.value, sequence: sequence.value, position: position.value };
+      const want = { structure: structure.value, atoms: atomsField.value(), sequence: sequence.value, position: position.value };
       if (!lengthRow.hidden && lenTouched) {
         const min = Math.max(1, Math.round(Number(lenMin.value)) || n);
         const max = Math.max(min, Math.round(Number(lenMax.value)) || n);
@@ -798,7 +868,10 @@ export class DesignPanel {
         }
       }
       const whole = lo === p.start && hi === p.end;
-      const changed = want.structure !== now.structure || want.sequence !== now.sequence || want.position !== now.position;
+      const atomsNow = now.atoms === 'named' ? this._atomNames(now.names).join(',') : now.atoms;
+      const atomsWant = Array.isArray(want.atoms) ? want.atoms.join(',') : want.atoms;
+      const changed = want.structure !== now.structure || want.sequence !== now.sequence || want.position !== now.position
+        || (want.structure !== 'designed' && atomsWant !== atomsNow);
       if (changed) {
         // New settings go to the residues in the range only; the rest of the piece stays as it is.
         await this._applyPiece(p, atoms, want);
@@ -818,6 +891,7 @@ export class DesignPanel {
       row('Residues', el('span', { class: 'rfd4p-pop-inline', title: 'Narrow the range to change only some of these residues' },
         el('span', { text: c.id }), from, el('span', { text: '–' }), to)),
       row('Structure', structure),
+      atomsRow,
       row('Sequence', sequence),
       positionRow,
       lengthRow,
@@ -830,10 +904,32 @@ export class DesignPanel {
 
   /** A piece's three properties, as the popup and the row name them. */
   _properties(p) {
-    if (p.kind !== 'kept') return { structure: 'designed', sequence: 'designed', position: 'fixed' };
-    const structure = { all: 'fixed', backbone: 'fixed', sidechain: 'sidechain', shape: 'rigid' }[p.keep] ?? 'designed';
+    if (p.kind !== 'kept') return { structure: 'designed', atoms: 'all', names: '', sequence: 'designed', position: 'fixed' };
+    const structure = { all: 'fixed', backbone: 'fixed', sidechain: 'fixed', shape: 'rigid' }[p.keep] ?? 'designed';
     const sequence = p.keep === 'backbone' ? 'designed' : 'fixed';
-    return { structure, sequence, position: p.anywhere ? 'anywhere' : 'fixed' };
+    // Backbone held with a designed sequence is the plain "structure fixed": the side chains change anyway.
+    let atoms = p.atoms ?? 'all';
+    if (sequence === 'designed' && atoms === 'backbone') atoms = 'all';
+    const named = !['all', 'backbone', 'sidechain'].includes(atoms);
+    return { structure, atoms: named ? 'named' : atoms, names: named ? atoms : '', sequence, position: p.anywhere ? 'anywhere' : 'fixed' };
+  }
+
+  /** Atom names typed as "CG, OD1" or "CG OD1". */
+  _atomNames(text) {
+    return String(text ?? '').split(/[\s,;]+/).filter(Boolean).map((n) => n.toUpperCase());
+  }
+
+  /** The Atoms row: a select, and the names it holds when "named". */
+  _atomsField(now = 'all', names = '') {
+    const select = el('select', { 'aria-label': 'Atoms', title: 'Which atoms are held: all of them, the backbone, the side chains, or atoms named here' });
+    if (now === 'mixed') select.append(el('option', { value: 'mixed', text: 'mixed', selected: true }));
+    for (const [v, text] of ATOM_OPTIONS) select.append(el('option', { value: v, text, selected: v === now }));
+    const text = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
+      value: names, placeholder: 'CG, OD1', 'aria-label': 'Atom names' });
+    const show = () => { text.hidden = select.value !== 'named'; };
+    select.addEventListener('change', show);
+    show();
+    return { select, text, value: () => (select.value === 'named' ? this._atomNames(text.value) : select.value) };
   }
 
   /** Set structure / sequence / position on `atoms` (all or part of piece `p`). Rigid holds are internal coordinates. */
@@ -848,20 +944,55 @@ export class DesignPanel {
     if (off.length && !await this._mutate('/internal-coords', { atom_indices: off, enabled: false })) return false;
     // "Fixed, can move" is one rigid body for the whole job (an antibody's two framework chains, a framework split by
     // CDRs): join the rigid group already there. Separate bodies are the Advanced editor's.
-    const on = parts.filter(({ want }) => want.structure === 'rigid').flatMap(({ atoms }) => atoms);
-    if (on.length && !await this._mutate('/internal-coords', { atom_indices: on, enabled: true, group_id: this._rigidGroup() })) return false;
-    return this._batch(parts.flatMap(({ atoms, want }) => this._pieceEdits(atoms, want)));
+    // One rigid body per chain (an antibody's light and heavy frameworks move apart; a framework split by CDRs moves
+    // as one), as the bundled examples set them. Only the held atoms join it.
+    const rigid = parts.filter(({ want }) => want.structure === 'rigid');
+    const chains = [...new Set(rigid.flatMap(({ atoms }) => atoms.map((i) => String(this._inputDoc().atoms.chain_id[i]))))];
+    for (const chain of chains) {
+      const a = this._inputDoc().atoms;
+      const on = rigid.flatMap(({ atoms, want }) => this._heldAtoms(atoms.filter((i) => String(a.chain_id[i]) === chain), want));
+      if (on.length && !await this._mutate('/internal-coords', { atom_indices: on, enabled: true, group_id: this._rigidGroup(chain) })) return false;
+      // No saved targets: the body's shape is read from its coordinates when the job is built, centred and turned at
+      // random, as AtomWorks does for a group without targets (and as the bundled examples are saved).
+      if (on.length && !await this._mutate('/internal-coords/clear-targets', { atom_indices: on })) return false;
+    }
+    if (!await this._batch(parts.flatMap(({ atoms, want }) => this._pieceEdits(atoms, want)))) return false;
+    // A residue placed anywhere keeps only its held atoms' coordinates (an enzyme's catalytic tips): where the rest of
+    // it sits is the model's to choose, as the motif inputs of RFdiffusion benchmarks give it.
+    const loose = parts.filter(({ want }) => want.position === 'anywhere' && want.structure === 'fixed')
+      .flatMap(({ atoms, want }) => { const held = new Set(this._heldAtoms(atoms, want)); return held.size ? atoms.filter((i) => !held.has(i)) : []; });
+    // The held atoms lead their residue then: a token is read from its first atom.
+    const lead = parts.filter(({ want }) => want.position === 'anywhere' && want.structure === 'fixed').flatMap(({ atoms, want }) => this._heldAtoms(atoms, want));
+    return loose.length ? this._mutate('/coordinates/clear', { atom_indices: loose, lead }) : true;
   }
 
-  _pieceEdits(atoms, { structure, sequence, position }) {
-    const backbone = this._backboneOf(atoms);
-    const side = atoms.filter((i) => !backbone.includes(i));
+  /** The atoms of `atoms` a structure setting holds. A fixed structure with a designed sequence holds the backbone. */
+  _heldAtoms(atoms, { structure, atoms: which = 'all', sequence }) {
+    if (structure === 'designed') return [];
+    const a = this._inputDoc()?.atoms;
+    const backbone = new Set(this._backboneOf(atoms));
+    if (Array.isArray(which)) {
+      const names = new Set(which);
+      return atoms.filter((i) => names.has(String(a.atom_name[i]).toUpperCase()));
+    }
+    if (which === 'backbone' || (which === 'all' && sequence === 'designed')) return atoms.filter((i) => backbone.has(i));
+    if (which === 'sidechain') return atoms.filter((i) => !backbone.has(i));
+    return atoms;
+  }
+
+  _pieceEdits(atoms, want) {
+    const { structure, sequence, position } = want;
     const edits = [];
+    const held = this._heldAtoms(atoms, want);
     if (structure !== 'rigid') {
       edits.push({ condition: 'coordinate', atom_indices: atoms, enabled: false });
-      // Fixed with a designed sequence holds the backbone only: the side chains will change.
-      const held = structure === 'fixed' ? (sequence === 'fixed' ? atoms : backbone) : structure === 'sidechain' ? side : [];
       if (held.length) edits.push({ condition: 'coordinate', atom_indices: held, enabled: true });
+    } else {
+      // The rigid body is the held atoms with coordinates (set before this edit); the others are free.
+      const coord = this._inputDoc().atoms.coord;
+      const inBody = new Set(held.filter((i) => coord[i]?.every?.(Number.isFinite)));
+      const free = atoms.filter((i) => !inBody.has(i));
+      if (free.length) edits.push({ condition: 'coordinate', atom_indices: free, enabled: false });
     }
     edits.push({ condition: 'sequence', atom_indices: atoms, enabled: sequence === 'fixed' });
     edits.push({ condition: 'index', atom_indices: atoms, enabled: position === 'anywhere' });
@@ -892,9 +1023,23 @@ export class DesignPanel {
     const pose = el('select', { 'aria-label': 'Pose', title: 'Fixed: kept where it is. Free: the model places it.' },
       el('option', { value: 'fixed', text: 'fixed', selected: l.pose !== 'predicted' }),
       el('option', { value: 'free', text: 'free', selected: l.pose === 'predicted' }));
+    // Which atoms a fixed pose holds: all, or some named (the rest placed by the model).
+    const held = el('select', { 'aria-label': 'Atoms', title: 'Hold all of the ligand, or only the atoms named here' },
+      el('option', { value: 'all', text: 'all', selected: !l.heldNames }),
+      el('option', { value: 'named', text: 'named', selected: Boolean(l.heldNames) }));
+    const names = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
+      value: l.heldNames ?? '', placeholder: 'N1, C2', 'aria-label': 'Atom names' });
     const code = el('input', { type: 'text', class: 'rfd4p-pop-text', maxlength: 5, spellcheck: 'false', autocomplete: 'off',
       placeholder: `another code, e.g. HEM`, 'aria-label': 'Swap for ligand code' });
     const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
+    const atomsRow = el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Atoms' }), held, names);
+    const sync = () => {
+      atomsRow.hidden = pose.value !== 'fixed';
+      names.hidden = held.value !== 'named';
+    };
+    pose.addEventListener('change', sync);
+    held.addEventListener('change', sync);
+    sync();
     const apply = async () => {
       if (code.value.trim()) {
         note.textContent = `Looking up ${code.value.trim().toUpperCase()}…`;
@@ -907,28 +1052,75 @@ export class DesignPanel {
         this._closePop();
         return;
       }
+      const a = this._inputDoc().atoms;
+      const wanted = pose.value !== 'fixed' ? [] : held.value === 'named'
+        ? (() => { const set = new Set(this._atomNames(names.value)); return atoms.filter((i) => set.has(String(a.atom_name[i]).toUpperCase())); })()
+        : atoms;
+      if (pose.value === 'fixed' && !wanted.length) {
+        note.textContent = `No atoms named ${names.value.trim() || 'here'} in ${l.name}`;
+        return;
+      }
       this._closePop();
-      const fix = pose.value === 'fixed';
-      if (fix !== (l.pose === 'fixed')) {
-        void this._batch([{ condition: 'coordinate', atom_indices: atoms, enabled: fix }]);
+      const nowHeld = pose.value === 'fixed' && (held.value === 'named' ? names.value.trim() !== (l.heldNames ?? '') : Boolean(l.heldNames));
+      if (nowHeld || (pose.value === 'fixed') !== (l.pose !== 'predicted')) {
+        const edits = [{ condition: 'coordinate', atom_indices: atoms, enabled: false }];
+        if (wanted.length) edits.push({ condition: 'coordinate', atom_indices: wanted, enabled: true });
+        void this._batch(edits);
       }
     };
     return [
       this._popHead(`Ligand ${l.name}`),
       el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Pose' }), pose),
-      l.pose === 'partly fixed' ? el('p', { class: 'muted', title: 'Set atom by atom in the Advanced editor', text: `${l.fixedAtoms} of ${l.atoms} atoms fixed now` }) : null,
+      atomsRow,
       el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Swap' }), code),
       note,
       this._popActions(apply),
     ].filter(Boolean);
   }
 
-  /** The job's rigid group ("fixed, can move"), if it has one. */
-  _rigidGroup() {
-    const grp = this._inputDoc()?.atoms?.annotations?.condition_CoordinateGroup_1_atom;
-    let id = null;
-    for (const g of grp ?? []) if (g > 0 && (id === null || g < id)) id = g;
-    return id;
+  /** A chain: its name and its place in the job (the order the model reads the chains in). */
+  _chainPop(c) {
+    const ids = (this._spec()?.chains ?? []).map((x) => x.id);
+    const name = el('input', { type: 'text', class: 'rfd4p-pop-text', maxlength: 4, spellcheck: 'false', autocomplete: 'off',
+      value: c.id, 'aria-label': 'Chain name' });
+    const order = el('select', { 'aria-label': 'Chain order', title: 'Where this chain comes in the job' });
+    ids.forEach((id, k) => order.append(el('option', { value: String(k), text: String(k + 1), selected: id === c.id })));
+    const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
+    const apply = async () => {
+      const next = name.value.trim();
+      if (!/^[A-Za-z0-9_]{1,4}$/.test(next)) { note.textContent = 'A chain name is 1–4 letters or digits'; return; }
+      if (next !== c.id && ids.includes(next)) { note.textContent = `There is a chain ${next} already`; return; }
+      this._closePop();
+      if (next !== c.id && !await this._mutate('/chains', { atom_indices: c.atomIndices, chain_id: next })) return;
+      const at = Number(order.value);
+      if (at !== ids.indexOf(c.id)) {
+        const rest = ids.filter((id) => id !== c.id).map((id) => (id === c.id ? next : id));
+        rest.splice(at, 0, next);
+        await this._mutate('/chains/order', { chain_ids: rest });
+      }
+    };
+    return [
+      this._popHead(`Chain ${c.id}`),
+      el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Name' }), name),
+      el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Order' }), order),
+      note,
+      this._popActions(apply),
+    ];
+  }
+
+  /** Chain `chainId`'s rigid group ("fixed, can move"): the one it has, else the next free number. */
+  _rigidGroup(chainId) {
+    const a = this._inputDoc()?.atoms;
+    const grp = a?.annotations?.condition_CoordinateGroup_1_atom;
+    let own = null;
+    let top = 0;
+    for (let i = 0; i < (grp?.length ?? 0); i += 1) {
+      const g = Number(grp[i]);
+      if (!(g > 0)) continue;
+      top = Math.max(top, g);
+      if (String(a.chain_id[i]) === String(chainId) && (own === null || g < own)) own = g;
+    }
+    return own ?? top + 1;
   }
 
   _backboneOf(indices) {
@@ -1063,9 +1255,16 @@ export class DesignPanel {
       const lenMax = el('input', { type: 'number', min: 1, max: 1000, value: nRes, 'aria-label': 'Most residues' });
       const positionRow = row('Position', position);
       const lengthRow = row('Length', el('span', { class: 'rfd4p-pop-inline' }, lenMin, el('span', { text: '–' }), lenMax));
+      const atomKey = (h) => (h.now.atoms === 'named' ? `named:${h.now.names}` : h.now.atoms);
+      const atomKeys = new Set(hits.map(atomKey));
+      const oneAtoms = atomKeys.size === 1 ? hits[0].now : null;
+      const atomsField = this._atomsField(oneAtoms ? oneAtoms.atoms : 'mixed', oneAtoms?.names ?? '');
+      const atomsRow = row('Atoms', atomsField.select, atomsField.text);
       const sync = () => {
-        if (structure.value === 'sidechain') sequence.value = 'fixed';
-        sequence.disabled = structure.value === 'sidechain';
+        const sidechain = atomsField.select.value === 'sidechain' && structure.value !== 'designed';
+        if (sidechain) sequence.value = 'fixed';
+        sequence.disabled = sidechain;
+        atomsRow.hidden = structure.value === 'designed';
         const free = structure.value === 'designed' && sequence.value === 'designed';
         if (free && position.value !== 'mixed') position.value = 'fixed';
         positionRow.hidden = free;
@@ -1073,12 +1272,13 @@ export class DesignPanel {
       };
       structure.addEventListener('change', sync);
       sequence.addEventListener('change', sync);
+      atomsField.select.addEventListener('change', sync);
       sync();
       const hot = el('input', { type: 'checkbox', checked: hotN > 0 && hotN === polymerAtoms.length, 'aria-label': 'Hotspot' });
       hot.indeterminate = hotN > 0 && hotN < polymerAtoms.length;
       let hotTouched = false;
       hot.addEventListener('change', () => { hotTouched = true; });
-      rows.push(row('Structure', structure), row('Sequence', sequence), positionRow, lengthRow,
+      rows.push(row('Structure', structure), atomsRow, row('Sequence', sequence), positionRow, lengthRow,
         el('label', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Hotspot' }), hot));
       apply = async () => {
         done();
@@ -1094,10 +1294,15 @@ export class DesignPanel {
         const pick = (s, h, key) => (s.value === 'mixed' ? h.now[key] : s.value);
         const changes = [];
         for (const h of hits) {
-          const want = { structure: pick(structure, h, 'structure'), sequence: pick(sequence, h, 'sequence'), position: pick(position, h, 'position') };
-          if (want.structure === 'sidechain') want.sequence = 'fixed';
+          const nowAtoms = h.now.atoms === 'named' ? this._atomNames(h.now.names) : h.now.atoms;
+          const want = {
+            structure: pick(structure, h, 'structure'), sequence: pick(sequence, h, 'sequence'), position: pick(position, h, 'position'),
+            atoms: atomsField.select.value === 'mixed' ? nowAtoms : atomsField.value(),
+          };
+          if (want.atoms === 'sidechain' && want.structure !== 'designed') want.sequence = 'fixed';
           if (want.structure === 'designed' && want.sequence === 'designed') want.position = 'fixed';
-          if (want.structure !== h.now.structure || want.sequence !== h.now.sequence || want.position !== h.now.position) {
+          const sameAtoms = String(want.atoms) === String(nowAtoms) || want.structure === 'designed';
+          if (want.structure !== h.now.structure || want.sequence !== h.now.sequence || want.position !== h.now.position || !sameAtoms) {
             changes.push({ p: h.p, atoms: h.atoms, want });
           }
         }
@@ -1109,7 +1314,7 @@ export class DesignPanel {
         onclick: async () => {
           done();
           await this._runFlow('scaffold', this._spec(), {
-            atoms: polymerAtoms, sidechainsOnly: structure.value === 'sidechain', unindexed: position.value === 'anywhere',
+            atoms: polymerAtoms, sidechainsOnly: atomsField.value() === 'sidechain', unindexed: position.value === 'anywhere',
           });
         },
       });
@@ -1171,7 +1376,7 @@ export class DesignPanel {
       if (opts.rebuild !== false) {
         ok = await this._mutate('/segments/scaffold', {
           atom_indices: selection, spread: opts.spread ?? 0.25, sidechains_only: Boolean(opts.sidechainsOnly),
-          unindexed: Boolean(opts.unindexed),
+          unindexed: Boolean(opts.unindexed), ordered: Boolean(opts.ordered),
           total_min: opts.unindexed ? opts.totalMin : null, total_max: opts.unindexed ? opts.totalMax : null,
         });
       } else {
@@ -1302,16 +1507,21 @@ export class DesignPanel {
       if (!res.ok) throw new Error(res.status === 404 ? `${id} was not found` : `RCSB returned ${res.status}`);
       const text = await res.text();
       this._rememberTitle(`PDB ${id}`, text);
-      const opened = await window.atomworksStudio?.openFile?.(new File([text], `${id}.cif`, { type: 'chemical/x-mmcif' }));
-      if (opened !== false && chains.length) {
-        const a = this._inputDoc()?.atoms;
-        const present = [...new Set(Array.from(a?.chain_id ?? [], String))];
+      // Opened here rather than by Studio's file loader, so the chains named come from an assembly that has them.
+      const doc = await this._openEntry(text, id, chains);
+      if (chains.length) {
+        const a = doc.atoms;
+        const present = [...new Set(Array.from(a.chain_id, String))];
         const missing = chains.filter((c) => !present.some((p) => p.toUpperCase() === c));
         if (missing.length) throw new Error(`no chain ${missing.join(', ')} (it has ${present.join(', ')})`);
         const drop = [];
         for (let i = 0; i < a.nAtoms; i += 1) if (!chains.includes(String(a.chain_id[i]).toUpperCase())) drop.push(i);
-        if (drop.length) await this._mutate('/delete', { atom_indices: drop });
+        if (drop.length) doc.deleteAtoms(drop);
+        doc.undoStack = [];
       }
+      const sid = `rfd4p_fetch_${id}_${Date.now().toString(36)}`;
+      getSharedStudioStore().sessions.set(sid, doc);
+      const opened = await window.atomworksStudio?.openSession?.(sid);
       status.textContent = opened === false ? `Opening ${id} was cancelled.` : '';
       if (opened !== false) this.showStart = false;
       return opened !== false;
@@ -1372,7 +1582,7 @@ export class DesignPanel {
             return false;
           }
           this._rememberTitle(`PDB ${id}`, text);
-          const doc = await createStudioDocWithCcd(text, id, { preset: 'rcsb', assembly: '1' });
+          const doc = await this._openEntry(text, id, chains);
           if (chains.length) {
             const drop = [];
             for (let i = 0; i < doc.atoms.nAtoms; i += 1) if (!chains.includes(String(doc.atoms.chain_id[i]))) drop.push(i);
@@ -1382,16 +1592,34 @@ export class DesignPanel {
           getSharedStudioStore().sessions.set(this.buildSession, doc);
           this.render();
           fetched = true;
-        } else if (step.piece) {
-          const s = step.set;
-          const sub = subs(step.piece).find((x) => {
+        } else if (step.add) {
+          const [id, ...chains] = step.add.split(/\s+/);
+          const res = await fetch(`https://files.rcsb.org/download/${id}.cif`);
+          if (!res.ok) throw new Error(`RCSB returned ${res.status} for ${id}`);
+          const text = await res.text();
+          this._rememberTitle(`PDB ${id}`, text);
+          await this._addStructure(text, id, chains, null);
+          await idle();
+        } else if (step.piece || step.removePiece) {
+          const s = step.set ?? {};
+          const chain = step.piece ?? step.removePiece;
+          const sub = subs(chain).find((x) => {
             const m = /(\d+)(?:–(\d+))?/.exec(x.querySelector('.rfd4p-sub-name')?.textContent ?? '');
             return !isNew(x) && m && step.at >= Number(m[1]) && step.at <= Number(m[2] ?? m[1]);
           });
-          if (!sub) throw new Error(`chain ${step.piece} has no residue ${step.at}`);
+          if (!sub) throw new Error(`chain ${chain} has no residue ${step.at}`);
+          if (step.removePiece) {
+            await click(sub.querySelector('.rfd4p-x'));
+            continue;
+          }
           const pop = open(sub);
           if (s.from != null) { fill(pop, 'First residue', s.from); fill(pop, 'Last residue', s.to); }
           if (s.structure) fill(pop, 'Structure', s.structure, 'change');
+          if (s.atoms) {
+            const named = !ATOM_OPTIONS.some(([v]) => v === s.atoms);
+            fill(pop, 'Atoms', named ? 'named' : s.atoms, 'change');
+            if (named) fill(pop, 'Atom names', s.atoms);
+          }
           if (s.sequence) fill(pop, 'Sequence', s.sequence, 'change');
           if (s.position) fill(pop, 'Position in chain', s.position, 'change');
           if (s.length) { fill(pop, 'Fewest residues', s.length[0]); fill(pop, 'Most residues', s.length[1]); }
@@ -1406,7 +1634,8 @@ export class DesignPanel {
           await click(this.els.addSeq);
         } else if (step.newLength) {
           const chains = step.chain ? [card(step.chain)] : [...this.els.chainList.querySelectorAll('.rfd4p-chain')].reverse();
-          const sub = chains.flatMap((c) => [...(c?.querySelectorAll('.rfd4p-sub') ?? [])]).find(isNew);
+          const sub = chains.flatMap((c) => [...(c?.querySelectorAll('.rfd4p-sub') ?? [])]).filter(isNew)[step.k ?? 0];
+          if (!sub) throw new Error(`no new residues #${(step.k ?? 0) + 1} in chain ${step.chain ?? ''}`);
           const pop = open(sub);
           fill(pop, 'Fewest new residues', step.newLength[0]);
           fill(pop, 'Most new residues', step.newLength[1]);
@@ -1415,6 +1644,15 @@ export class DesignPanel {
           const sub = [...this.els.chainList.querySelectorAll('.rfd4p-sub')].find((x) => x.querySelector('.rfd4p-sub-name')?.textContent === step.ligand);
           const pop = open(sub);
           fill(pop, 'Pose', step.pose, 'change');
+          if (step.atoms) { fill(pop, 'Atoms', 'named', 'change'); fill(pop, 'Atom names', step.atoms); }
+          await apply(pop);
+        } else if (step.chain && (step.name || step.order)) {
+          const chip = card(step.chain)?.querySelector('.rfd4p-chain-id');
+          if (!chip) throw new Error(`no chain ${step.chain}`);
+          chip.click();
+          const pop = this.piecePop;
+          if (step.name) fill(pop, 'Chain name', step.name);
+          if (step.order) fill(pop, 'Chain order', step.order - 1, 'change');
           await apply(pop);
         } else if (step.partial) {
           const box = document.getElementById('partial-diffusion');
