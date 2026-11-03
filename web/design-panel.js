@@ -95,6 +95,9 @@ const TASKS = [
       { piece: 'H', at: 100, set: { from: 99, to: 109, structure: 'designed', sequence: 'designed' } },
       { piece: 'T', at: 550, set: { keepOnly: 'T545-580, T591-607', hotspots: 'T557-573, T591-605' } },
       { removeNew: 'T' },
+      // The frameworks' fold, as upstream's antibody examples give it (Ig-like, CATH 2.60.40).
+      { chain: 'H', fold: '2.60.40' },
+      { chain: 'L', fold: '2.60.40' },
     ],
   },
   {
@@ -171,7 +174,7 @@ const INTERACTION_OPTIONS = [
 // Folds a chain can be asked for, by name (CATH class, architecture, topology); "other" takes any code.
 const FOLD_OPTIONS = [
   ['1', 'mainly α'], ['2', 'mainly β'], ['3', 'α/β'],
-  ['1.10', 'helix bundle (orthogonal)'], ['1.20', 'up-down helix bundle'], ['2.40', 'β-barrel'], ['2.60', 'β-sandwich'],
+  ['1.10', 'helix bundle (orthogonal)'], ['1.20', 'up-down helix bundle'], ['2.40', 'β-barrel'], ['2.60', 'β-sandwich'], ['2.60.40', 'immunoglobulin-like'],
   ['3.30.70', 'ferredoxin-like'], ['3.40.50', 'Rossmann-like'], ['3.20.20', 'TIM barrel'], ['other', 'other code'], ['', 'free'],
 ];
 const CONDITION_KEY = { hbond: 'hbond', saltbridge: 'saltbridge', pistack: 'pistack', pication: 'pication', hydrophobic: 'hydrophobic', metal_coord: 'metal_coord' };
@@ -536,7 +539,7 @@ export class DesignPanel {
     const doc = this._inputDoc();
     if (!doc?.atoms) return null;
     const partial = Boolean(this.app.els.partialDiffusion?.checked);
-    const percent = Number.parseFloat(this.app.els.partialPercent?.value ?? '70') || 70;
+    const percent = Number.parseFloat(this.app.els.partialPercent?.value ?? '40') || 40;
     return designSpec(doc.atoms, { partialDiffusion: partial, partialPercent: percent });
   }
 
@@ -1627,13 +1630,19 @@ export class DesignPanel {
   _rigidGroup(chainId) {
     const a = this._inputDoc()?.atoms;
     const grp = a?.annotations?.condition_CoordinateGroup_1_atom;
+    // Chains from the same structure share one body (an antibody's heavy and light chains keep their pairing), as
+    // upstream's antibody and VHH examples are set; chains from different structures move apart.
+    const chains = this._spec()?.chains ?? [];
+    const source = this._sourceOf(chains.find((c) => c.id === String(chainId)) ?? { id: chainId, role: 'new' });
+    const same = new Set(source ? chains.filter((c) => this._sourceOf(c) === source).map((c) => c.id) : [String(chainId)]);
+    same.add(String(chainId));
     let own = null;
     let top = 0;
     for (let i = 0; i < (grp?.length ?? 0); i += 1) {
       const g = Number(grp[i]);
       if (!(g > 0)) continue;
       top = Math.max(top, g);
-      if (String(a.chain_id[i]) === String(chainId) && (own === null || g < own)) own = g;
+      if (same.has(String(a.chain_id[i])) && (own === null || g < own)) own = g;
     }
     return own ?? top + 1;
   }
@@ -2190,13 +2199,14 @@ export class DesignPanel {
           fill(pop, 'Structure', step.pose, 'change');
           if (step.atoms) { fill(pop, 'Atoms', 'named', 'change'); fill(pop, 'Atom names', step.atoms); }
           await apply(pop);
-        } else if (step.chain && (step.name || step.order)) {
+        } else if (step.chain && (step.name || step.order || step.fold)) {
           const chip = card(step.chain)?.querySelector('.rfd4p-chain-id');
           if (!chip) throw new Error(`no chain ${step.chain}`);
           chip.click();
           const pop = this.piecePop;
           if (step.name) fill(pop, 'Chain name', step.name);
           if (step.order) fill(pop, 'Chain order', step.order - 1, 'change');
+          if (step.fold) fill(pop, 'Fold', step.fold, 'change');
           await apply(pop);
         } else if (step.partial) {
           const box = document.getElementById('partial-diffusion');

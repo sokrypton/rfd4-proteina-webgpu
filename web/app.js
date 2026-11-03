@@ -1318,11 +1318,14 @@ class Rfd4pStudioApp {
       const firstBatchRes = this._buildCurrentBatch(baseSeed);
 
       const preset = this.currentPreset;
-      // What to design comes from the input's annotations (as in upstream's Space); partial diffusion is the one
-      // option on top. The resampled inverse-folding sampler is kept for the benchmark preset only.
-      const inverseFolding = !this.useStudioSession && Boolean(preset?.inverseFolding);
-      const partialPercent = Math.max(1, Math.min(100, Number.parseFloat(this.els.partialPercent?.value ?? '70') || 70));
+      // What to design comes from the input's annotations; partial diffusion is the one option on top. A backbone kept
+      // with its sequence redesigned runs the inverse-folding sampler, as upstream's Space does for that task
+      // (`generation=inverse_folding`): the backbone is kept exactly, only sequence and side chains are sampled.
+      const partialPercent = Math.max(1, Math.min(100, Number.parseFloat(this.els.partialPercent?.value ?? '40') || 40));
       const partialTrajectoryFractionSteps = this.els.partialDiffusion?.checked ? partialPercent / 100 : null;
+      const inverseFolding = partialTrajectoryFractionSteps == null && (this.useStudioSession
+        ? this.designPanel?._spec?.()?.task?.key === 'inverse'
+        : Boolean(preset?.inverseFolding));
       const needEncoder = Boolean(inverseFolding || partialTrajectoryFractionSteps != null);
       if (needEncoder) {
         const has3dCoords = Boolean(

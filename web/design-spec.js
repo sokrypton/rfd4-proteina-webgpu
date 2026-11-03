@@ -48,7 +48,7 @@ const lengthText = (min, max) => (min === max ? String(min) : `${min}–${max}`)
  * @param {object} atoms AtomArray-like (`parseCifToAtomArray` / `StudioDoc.atoms`)
  * @param {{partialDiffusion?: boolean, partialPercent?: number}} [opts]
  */
-export function designSpec(atoms, { partialDiffusion = false, partialPercent = 70 } = {}) {
+export function designSpec(atoms, { partialDiffusion = false, partialPercent = 40 } = {}) {
   const n = atoms?.nAtoms ?? atoms?.chain_id?.length ?? 0;
   const ann = atoms?.annotations ?? {};
   const crd = ann.condition_coordinate_1_atom;
