@@ -1348,6 +1348,112 @@ export class StudioDoc {
     computeIdAndEntityAnnotations(a);
   }
 
+  /**
+   * Bring residues back from their source: `other` holds them (an entry opened as the job's chain was, cut down to
+   * those residues, its conditions set), each labelled with its source residue (`annotation_src-component_1_atom`,
+   * "A38"). They join chain `chainId` next to their source neighbours: after the residue before them in the source, or
+   * before the one after them, else in source order among the chain's residues. A chain renumbered by an ordered motif
+   * is numbered 1, 2, 3… again; peptide and new-residue bonds are rebuilt. One undo step.
+   */
+  insertResiduesFrom(other, chainId, srcChain) {
+    const cid = String(chainId);
+    const SRC = 'annotation_src-component_1_atom';
+    const numOf = (label) => {
+      const s = String(label ?? '');
+      return s.startsWith(String(srcChain)) && /^-?\d+$/.test(s.slice(String(srcChain).length)) ? Number(s.slice(String(srcChain).length)) : null;
+    };
+    return this.compound(() => {
+      const a = this.atoms;
+      const before = a.nAtoms;
+      const resKey = (i) => `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}`;
+      // Renumbered: some residue's number is not its source's.
+      const srcArr0 = a.annotations?.[SRC];
+      let renumbered = false;
+      for (let i = 0; i < before; i += 1) {
+        if (String(a.chain_id[i]) !== cid || this._isSegmentAtom(i)) continue;
+        const n = numOf(srcArr0?.[i]);
+        if (n !== null && n !== Number(a.res_id[i])) { renumbered = true; break; }
+      }
+      const temp = `__ins${Date.now().toString(36)}`;
+      for (let i = 0; i < other.atoms.nAtoms; i += 1) other.atoms.chain_id[i] = temp;
+      this.combine([other]);
+      for (let i = before; i < a.nAtoms; i += 1) a.chain_id[i] = cid;
+      const src = this._ensureAnnotationArray(SRC, { default: '' });
+      // The chain's residues in order, and the new ones grouped into runs of consecutive source numbers.
+      const starts = getResidueSegments(a);
+      const residues = [];
+      for (let r = 0; r < starts.length - 1; r += 1) {
+        const s0 = starts[r];
+        const atoms = [];
+        for (let i = s0; i < starts[r + 1]; i += 1) atoms.push(i);
+        residues.push({ atoms, chain: String(a.chain_id[s0]), added: s0 >= before, segment: this._isSegmentAtom(s0), num: numOf(src[s0]), key: resKey(s0) });
+      }
+      const mine = residues.filter((r) => r.chain === cid);
+      const old = mine.filter((r) => !r.added);
+      const added = mine.filter((r) => r.added).sort((x, y) => x.num - y.num);
+      const runs = [];
+      for (const r of added) {
+        const run = runs.at(-1);
+        if (run && r.num === run.at(-1).num + 1) run.push(r); else runs.push([r]);
+      }
+      // Where each run goes: an index into `old` to insert before.
+      const placed = old.slice();
+      for (const run of runs) {
+        const lo = run[0].num;
+        const hi = run.at(-1).num;
+        let at = placed.findIndex((r) => r.num === lo - 1);
+        if (at >= 0) at += 1;
+        else {
+          at = placed.findIndex((r) => r.num === hi + 1);
+          if (at < 0) {
+            let last = -1;
+            placed.forEach((r, k) => { if (r.num !== null && r.num < lo) last = k; });
+            const next = placed.findIndex((r) => r.num !== null && r.num > hi);
+            at = last >= 0 ? last + 1 : next >= 0 ? next : placed.length;
+          }
+        }
+        placed.splice(at, 0, ...run);
+      }
+      const order = [];
+      let done = false;
+      for (const r of residues) {
+        if (r.chain !== cid) { order.push(...r.atoms); continue; }
+        if (!done) { for (const p of placed) order.push(...p.atoms); done = true; }
+      }
+      this._permuteAtoms(order);
+      if (renumbered) this._renumberChain(cid);
+      this._relinkChain(cid);
+      computeIdAndEntityAnnotations(a);
+      return { changed: true, message: `Brought back ${added.length} residue${added.length === 1 ? '' : 's'} to chain ${cid}.` };
+    });
+  }
+
+  /** Chain `cid`'s links after its residues moved: peptide bonds between consecutive numbers, new residues joined to their neighbours. */
+  _relinkChain(cid) {
+    const a = this.atoms;
+    const starts = getResidueSegments(a);
+    const resOf = new Int32Array(a.nAtoms);
+    for (let r = 0; r < starts.length - 1; r += 1) for (let i = starts[r]; i < starts[r + 1]; i += 1) resOf[i] = r;
+    const inChain = (i) => String(a.chain_id[i]) === cid;
+    const sentinels = [];
+    for (let i = 0; i < a.nAtoms; i += 1) if (inChain(i) && this._isSegmentAtom(i)) sentinels.push(i);
+    const sentinelSet = new Set(sentinels);
+    // Drop the chain's links between residues; keep bonds within residues and to other chains.
+    a.bonds = (a.bonds || []).filter(([u, v]) => !(inChain(u) && inChain(v) && resOf[u] !== resOf[v]) && !sentinelSet.has(u) && !sentinelSet.has(v));
+    const find = (r, name) => { for (let i = starts[r]; i < starts[r + 1]; i += 1) if (a.atom_name[i] === name) return i; return -1; };
+    for (let r = 0; r < starts.length - 2; r += 1) {
+      const s1 = starts[r];
+      const s2 = starts[r + 1];
+      if (!inChain(s1) || !inChain(s2) || this._isSegmentAtom(s1) || this._isSegmentAtom(s2)) continue;
+      if (!this._isPolymerAtom(s1) || !this._isPolymerAtom(s2) || Number(a.res_id[s2]) - Number(a.res_id[s1]) !== 1) continue;
+      const na = a.chain_type?.[s1] === CHAIN_TYPE.DNA || a.chain_type?.[s1] === CHAIN_TYPE.RNA;
+      const out = find(r, na ? "O3'" : 'C');
+      const inn = find(r + 1, na ? 'P' : 'N');
+      if (out >= 0 && inn >= 0) a.bonds.push([out, inn, BOND_TYPE.SINGLE]);
+    }
+    for (const i of sentinels) this._installSentinelBonds(i, a.chain_type?.[i]);
+  }
+
   /** Replace the selected polymer residues with new residues: one `min`-`max` segment per contiguous run. */
   replaceWithSegments(indices, minimum, maximum) {
     const sel = this.resolveIndices(indices, 'residue');
@@ -3291,6 +3397,12 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
       }
       if (subpath === '/charges' && method === 'POST') {
         const editResult = doc.setCharge(body.atom_indices || [], { value: body.value, delta: body.delta });
+        return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
+      }
+      if (subpath === '/residues/insert' && method === 'POST') {
+        const other = store.sessions.get(body.from_session_id);
+        if (!other) return jsonResponse({ detail: 'no such session to take residues from' }, 404);
+        const editResult = doc.insertResiduesFrom(other, body.chain_id, body.source_chain);
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
       if (subpath === '/coordinates/clear' && method === 'POST') {

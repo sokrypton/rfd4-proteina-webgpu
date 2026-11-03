@@ -273,16 +273,61 @@ export class DesignPanel {
       const present = new Set(Array.from(doc.atoms.chain_id, (c) => String(c).toUpperCase()));
       return wanted.every((c) => present.has(c));
     };
+    const done = (doc) => { this._stampSources(doc); this._registerEntry(name, text, doc); return doc; };
     const first = await createStudioDocWithCcd(text, name, { preset: 'rcsb', assembly: '1' });
-    if (!wanted.length || has(first)) return first;
+    if (!wanted.length || has(first)) return done(first);
     const gen = first.cifBlock?.pdbx_struct_assembly_gen;
     const raw = gen?.assembly_id ?? gen?.columns?.assembly_id ?? [];
     const ids = [...new Set((Array.isArray(raw) ? raw : [raw]).map(String))].filter((id) => id !== '1');
     for (const id of ids) {
       const doc = await createStudioDocWithCcd(text, name, { preset: 'rcsb', assembly: id });
-      if (has(doc)) return doc;
+      if (has(doc)) return done(doc);
     }
-    return first;
+    return done(first);
+  }
+
+  /** Each residue of a freshly opened entry labelled with where it is in that entry ("A38"), as AtomWorks labels a motif. */
+  _stampSources(doc) {
+    const a = doc.atoms;
+    const src = a.annotations['annotation_src-component_1_atom'] ??= new Array(a.nAtoms).fill('');
+    for (let i = 0; i < a.nAtoms; i += 1) {
+      if (!src[i] && !/^\d+-\d+$/.test(String(a.res_name[i]))) src[i] = `${a.chain_id[i]}${a.res_id[i]}`;
+    }
+  }
+
+  /** An entry's text (to bring residues back from) and its chains' residues (for the strip), by entry name. */
+  _registerEntry(name, text, doc) {
+    this.entries ??= new Map();
+    if (this.entries.get(name)?.text === text && this.entries.get(name).chains.size) return;
+    const a = doc.atoms;
+    const chains = new Map();
+    let last = null;
+    for (let i = 0; i < a.nAtoms; i += 1) {
+      if (!a.is_polymer?.[i] && a.hetero?.[i]) continue;
+      const cid = String(a.chain_id[i]);
+      const key = `${cid}|${a.res_id[i]}|${a.ins_code[i]}`;
+      if (key === last) continue;
+      last = key;
+      if (!chains.has(cid)) chains.set(cid, []);
+      chains.get(cid).push({ num: Number(a.res_id[i]), name: String(a.res_name[i]) });
+    }
+    // An entry's chains keep their order; merge chains seen in another assembly.
+    const prev = this.entries.get(name)?.chains;
+    if (prev) for (const [cid, list] of prev) if (!chains.has(cid)) chains.set(cid, list);
+    this.entries.set(name, { text, chains });
+  }
+
+  /** Which entry a job chain came from (chains made here have none). */
+  _entryOf(chainId) {
+    const doc = this._inputDoc();
+    return this.chainEntries?.get(doc)?.get(String(chainId)) ?? null;
+  }
+
+  _setChainEntries(chains, entry, doc = this._inputDoc()) {
+    if (!doc) return;
+    this.chainEntries ??= new WeakMap();
+    if (!this.chainEntries.has(doc)) this.chainEntries.set(doc, new Map());
+    for (const cid of chains) this.chainEntries.get(doc).set(String(cid), entry);
   }
 
   async _addStructure(text, name, chains, replace) {
@@ -305,6 +350,7 @@ export class DesignPanel {
     const newChains = [...new Set(added.map((i) => String(this._inputDoc().atoms.chain_id[i])))];
     const original = chains.length === 1 ? ` chain ${chains[0].toUpperCase()}` : '';
     this._rememberSource(newChains, /^[0-9][A-Za-z0-9]{3}$/.test(name) ? `PDB ${name}${original}` : `${name}${original}`);
+    this._setChainEntries(newChains, name);
     this.addStructure.form.hidden = true;
     this.addStructure.replace = null;
     this.render();
@@ -605,11 +651,171 @@ export class DesignPanel {
         onclick: (ev) => this._openPop(ev.currentTarget, () => this._chainPop(c)),
       }),
       many ? remove(`Remove chain ${c.id}`, c.atomIndices) : null);
-    const row = el('div', { class: `rfd4p-chain rfd4p-role-${c.role}` }, gutter, el('div', { class: 'rfd4p-chain-items' }, ...items.filter(Boolean)));
+    const strip = readonly ? null : this._strip(c);
+    const row = el('div', { class: `rfd4p-chain rfd4p-role-${c.role}` }, gutter, el('div', { class: 'rfd4p-chain-items' }, strip, ...items.filter(Boolean)));
     // The chain's colour, as in the viewer and the sequence bar.
     const color = window.atomworksStudio?.chainColor?.(c.id);
     if (color) row.style.setProperty('--chain-color', color);
     return row;
+  }
+
+  /**
+   * A chain from an entry, residue by residue as the entry has it: what each is in the job (fixed, designed, …) or that
+   * it is not in it. Null for chains made here.
+   */
+  _stripData(c) {
+    const entry = this._entryOf(c.id);
+    const info = entry ? this.entries?.get(entry) : null;
+    const a = this._inputDoc()?.atoms;
+    if (!info || !a) return null;
+    const ann = a.annotations ?? {};
+    const src = ann['annotation_src-component_1_atom'];
+    if (!src) return null;
+    // The entry's chain this one came from: the longest chain name its residues' labels start with.
+    const first = c.polymerAtomIndices.find((i) => src[i]);
+    const label = first === undefined ? '' : String(src[first]);
+    const srcChain = [...info.chains.keys()].filter((k) => label.startsWith(k) && /^-?\d+$/.test(label.slice(k.length)))
+      .sort((x, y) => y.length - x.length)[0];
+    const list = srcChain ? info.chains.get(srcChain) : null;
+    if (!list?.length) return null;
+    const has = (v) => Array.isArray(v) && Number.isFinite(v[0]);
+    const present = new Map();
+    for (const i of c.polymerAtomIndices) {
+      const l = String(src[i] ?? '');
+      if (!l.startsWith(srcChain)) continue;
+      const num = Number(l.slice(srcChain.length));
+      if (!Number.isFinite(num)) continue;
+      const r = present.get(num) ?? { atoms: [], crd: false, seq: false, rigid: false, hot: false };
+      r.atoms.push(i);
+      if (has(ann.condition_coordinate_1_atom?.[i])) r.crd = true;
+      const sq = ann.condition_sequence_1_residue?.[i];
+      if (sq != null && sq !== '<M>' && sq !== '.' && sq !== '') r.seq = true;
+      if (Number(ann.condition_CoordinateGroup_1_atom?.[i]) > 0) r.rigid = true;
+      if (ann.condition_hotspot_1_atom?.[i]) r.hot = true;
+      present.set(num, r);
+    }
+    for (const r of present.values()) {
+      r.state = r.rigid ? 'rigid' : r.crd && r.seq ? 'fixed' : r.crd ? 'structure' : r.seq ? 'sequence' : 'designed';
+    }
+    return { entry, srcChain, list, present };
+  }
+
+  /** The strip: one cell per residue of the chain's source; drag across it to pick residues, then say what they are. */
+  _strip(c) {
+    const data = this._stripData(c);
+    if (!data) return null;
+    const { list, present } = data;
+    const words = { fixed: 'fixed', structure: 'structure fixed', sequence: 'sequence fixed', designed: 'designed', rigid: 'fixed, can move' };
+    const cells = list.map((r) => {
+      const p = present.get(r.num);
+      return el('span', { class: `rfd4p-cell ${p ? `rfd4p-cell-${p.state}` : 'rfd4p-cell-out'}${p?.hot ? ' rfd4p-cell-hot' : ''}` });
+    });
+    const strip = el('div', { class: 'rfd4p-strip', 'aria-label': `Chain ${c.id} residues: drag to pick some` }, ...cells);
+    const at = (ev) => {
+      const r = strip.getBoundingClientRect();
+      return Math.max(0, Math.min(list.length - 1, Math.floor(((ev.clientX - r.left) / r.width) * list.length)));
+    };
+    const show = (lo, hi) => cells.forEach((cell, k) => cell.classList.toggle('rfd4p-cell-sel', k >= lo && k <= hi));
+    let drag = null;
+    strip.addEventListener('pointermove', (ev) => {
+      const k = at(ev);
+      const r = list[k];
+      const p = present.get(r.num);
+      strip.title = `${c.id}${r.num} ${r.name} · ${p ? words[p.state] + (p.hot ? ' · hotspot' : '') : 'not in the job'}`;
+      if (drag) { drag.end = k; show(Math.min(drag.start, k), Math.max(drag.start, k)); }
+    });
+    strip.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      try { strip.setPointerCapture(ev.pointerId); } catch { /* not an active pointer */ }
+      const k = at(ev);
+      drag = { start: k, end: k };
+      show(k, k);
+    });
+    strip.addEventListener('pointerup', () => {
+      if (!drag) return;
+      const lo = Math.min(drag.start, drag.end);
+      const hi = Math.max(drag.start, drag.end);
+      drag = null;
+      this._openPop(strip, () => this._stripPop(c, data, list.slice(lo, hi + 1)));
+    });
+    return strip;
+  }
+
+  /** What picked residues of the strip become: fixed, designed, hotspots, or out of the job. */
+  _stripPop(c, data, picked) {
+    const nums = picked.map((r) => r.num);
+    const inJob = nums.filter((n) => data.present.has(n));
+    const out = nums.filter((n) => !data.present.has(n));
+    const title = nums.length === 1 ? `${c.id}${nums[0]}` : `${c.id}${nums[0]}–${nums.at(-1)}`;
+    const allHot = inJob.length > 0 && inJob.every((n) => data.present.get(n).hot);
+    const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
+    const act = (fn) => async () => {
+      note.textContent = '';
+      try {
+        await fn();
+        this._closePop();
+      } catch (err) {
+        note.textContent = String(err?.message ?? err).replace(/^Error:\s*/, '');
+      }
+    };
+    const btn = (text, fn, cls = 'secondary compact') => el('button', { type: 'button', class: cls, text, onclick: act(fn) });
+    return [
+      el('div', { class: 'rfd4p-pop-title' }, el('strong', { text: title }),
+        el('span', { class: 'muted', text: [inJob.length ? `${inJob.length} in the job` : '', out.length ? `${out.length} not` : ''].filter(Boolean).join(' · ') })),
+      el('div', { class: 'rfd4p-pop-row' },
+        btn('Fixed', () => this._stripSet(c, data, nums, 'fixed'), 'primary compact'),
+        btn('Designed', () => this._stripSet(c, data, nums, 'designed')),
+        inJob.length ? btn(allHot ? 'Not hotspots' : 'Hotspots', () => this._batch([{ condition: 'hotspot', atom_indices: inJob.flatMap((n) => data.present.get(n).atoms), enabled: !allHot }])) : null,
+        inJob.length ? btn('Remove', () => this._mutate('/delete', { atom_indices: inJob.flatMap((n) => data.present.get(n).atoms) }), 'danger compact') : null),
+      note,
+    ];
+  }
+
+  /** Residues `nums` of chain `c`'s source made fixed or designed: the missing ones brought back from the entry first. */
+  async _stripSet(c, data, nums, what) {
+    const out = nums.filter((n) => !data.present.has(n));
+    if (out.length) {
+      const info = this.entries.get(data.entry);
+      const doc = await this._openEntry(info.text, data.entry, [data.srcChain]);
+      const keep = new Set(out);
+      const a = doc.atoms;
+      const drop = [];
+      for (let i = 0; i < a.nAtoms; i += 1) if (String(a.chain_id[i]) !== data.srcChain || !keep.has(Number(a.res_id[i]))) drop.push(i);
+      if (drop.length) doc.deleteAtoms(drop);
+      if (!doc.atoms.nAtoms) throw new Error(`${data.entry} has no such residues to bring back`);
+      // They come back already as asked (an entry opens fixed), so bringing them back is one Undo.
+      if (what === 'designed') {
+        const all = Array.from({ length: doc.atoms.nAtoms }, (_, k) => k);
+        doc.setCondition('coordinate', all, { enabled: false, snapshot: false });
+        doc.setCondition('sequence', all, { enabled: false, snapshot: false });
+      }
+      const sid = `rfd4p_src_${Date.now().toString(36)}`;
+      getSharedStudioStore().sessions.set(sid, doc);
+      try {
+        if (!await this._mutate('/residues/insert', { from_session_id: sid, chain_id: c.id, source_chain: data.srcChain })) throw new Error(this.lastError ?? 'could not bring them back');
+      } finally {
+        getSharedStudioStore().sessions.delete(sid);
+      }
+    }
+    // Then the whole range takes the setting (the residues brought back come in fixed).
+    const now = this._spec()?.chains.find((x) => x.id === c.id);
+    const fresh = now ? this._stripData(now) : null;
+    if (!fresh) return;
+    // Only residues not already so (those brought back are).
+    const target = what === 'fixed' ? 'fixed' : 'designed';
+    const atoms = new Set(nums.filter((n) => fresh.present.get(n) && fresh.present.get(n).state !== target)
+      .flatMap((n) => fresh.present.get(n).atoms));
+    const want = what === 'fixed'
+      ? { structure: 'fixed', atoms: 'all', sequence: 'fixed', position: 'fixed' }
+      : { structure: 'designed', atoms: 'all', sequence: 'designed', position: 'fixed' };
+    const parts = [];
+    for (const p of now.pieces) {
+      if (p.kind === 'new') continue;
+      const mine = p.atomIndices.filter((i) => atoms.has(i));
+      if (mine.length) parts.push({ p, atoms: mine, want });
+    }
+    if (parts.length) await this._applyPieces(parts);
   }
 
   _range(c, p) {
@@ -1087,7 +1293,14 @@ export class DesignPanel {
       if (!/^[A-Za-z0-9_]{1,4}$/.test(next)) { note.textContent = 'A chain name is 1–4 letters or digits'; return; }
       if (next !== c.id && ids.includes(next)) { note.textContent = `There is a chain ${next} already`; return; }
       this._closePop();
-      if (next !== c.id && !await this._mutate('/chains', { atom_indices: c.atomIndices, chain_id: next })) return;
+      if (next !== c.id) {
+        const entry = this._entryOf(c.id);
+        if (!await this._mutate('/chains', { atom_indices: c.atomIndices, chain_id: next })) return;
+        if (entry) this._setChainEntries([next], entry);
+        // Its caption ("PDB 3EAK · B") follows it too.
+        const label = this.sources?.get(this._inputDoc())?.get(c.id);
+        if (label) this._rememberSource([next], label);
+      }
       const at = Number(order.value);
       if (at !== ids.indexOf(c.id)) {
         const rest = ids.filter((id) => id !== c.id).map((id) => (id === c.id ? next : id));
@@ -1525,6 +1738,7 @@ export class DesignPanel {
       const sid = `rfd4p_fetch_${id}_${Date.now().toString(36)}`;
       getSharedStudioStore().sessions.set(sid, doc);
       const opened = await window.atomworksStudio?.openSession?.(sid);
+      this._setChainEntries(new Set(Array.from(doc.atoms.chain_id, String)), id, doc);
       status.textContent = opened === false ? `Opening ${id} was cancelled.` : '';
       if (opened !== false) this.showStart = false;
       return opened !== false;
@@ -1593,6 +1807,7 @@ export class DesignPanel {
           }
           this.buildSession = `rfd4p_example_${task.example}_${Date.now().toString(36)}`;
           getSharedStudioStore().sessions.set(this.buildSession, doc);
+          this._setChainEntries(new Set(Array.from(doc.atoms.chain_id, String)), id, doc);
           this.render();
           fetched = true;
         } else if (step.add) {
