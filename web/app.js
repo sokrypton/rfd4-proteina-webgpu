@@ -198,9 +198,12 @@ function unmodelledTokens(inputAtoms) {
  */
 function buildMotifOverlayAtoms(inputAtoms) {
   if (!inputAtoms?.token_id || !inputAtoms.condition_coordinate_1_atom) return [];
+  // Conditioned coordinates are centred in the batch; designs are shown in the input's frame, so the motif is too.
+  const [sx, sy, sz] = inputAtoms.center_shift ?? [0, 0, 0];
   const crdOf = (i) => {
     const c = inputAtoms.condition_coordinate_1_atom[i];
-    return Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1]) && Number.isFinite(c[2]) ? c : null;
+    return Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1]) && Number.isFinite(c[2])
+      ? [c[0] + sx, c[1] + sy, c[2] + sz] : null;
   };
   const tokenChain = new Map();
   const tokenHasCrd = new Map();
