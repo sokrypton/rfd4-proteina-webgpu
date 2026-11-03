@@ -921,7 +921,9 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected) {
   color: var(--text, #f1f1f2);
 }
 .rfd4p-piece-pop[hidden] { display: none; }
-.rfd4p-pop-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.rfd4p-pop-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; cursor: move; touch-action: none; user-select: none; }
+.rfd4p-pop-title .rfd4p-pop-x { cursor: pointer; }
+.rfd4p-pop-moving { opacity: 0.92; }
 .rfd4p-pop-title .muted { font-size: 11px; }
 .rfd4p-pop-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .rfd4p-pop-label { flex: none; width: 64px; color: var(--text-muted, #b1b3b9); font-size: 11px; }

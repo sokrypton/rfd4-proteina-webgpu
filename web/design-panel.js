@@ -205,6 +205,7 @@ export class DesignPanel {
     // Floating actions next to the pointer for the current selection (viewer or sequence bar).
     this.pop = el('div', { class: 'rfd4p-piece-pop rfd4p-sel-pop', role: 'dialog', 'aria-label': 'Selected residues', hidden: true });
     document.body.append(this.pop);
+    this._movable(this.pop);
     this.lastPointer = null;
     this._buildAddStructure();
     this._buildTaskGrid();
@@ -769,6 +770,7 @@ export class DesignPanel {
     if (!this.piecePop) {
       this.piecePop = el('div', { class: 'rfd4p-piece-pop', role: 'dialog', hidden: true });
       document.body.append(this.piecePop);
+      this._movable(this.piecePop);
       document.addEventListener('pointerdown', (ev) => {
         if (!this.piecePop.hidden && !this.piecePop.contains(ev.target) && !ev.target.closest?.('.rfd4p-sub-open')) this._closePop();
       }, true);
@@ -786,7 +788,44 @@ export class DesignPanel {
     const left = card.left - w - 8 >= 8 ? card.left - w - 8 : Math.max(8, Math.min(window.innerWidth - w - 8, r.left));
     pop.style.left = `${left}px`;
     pop.style.top = `${Math.max(8, Math.min(window.innerHeight - h - 8, r.top - 8))}px`;
+    this._placeMoved(pop);
     pop.querySelector('input:not([type=radio]):not([type=checkbox]), button.primary')?.focus();
+  }
+
+  /** Popups move by their title bar; once moved, popups open where it was left (until the page is reloaded). */
+  _movable(pop) {
+    pop.addEventListener('pointerdown', (ev) => {
+      const head = ev.target.closest?.('.rfd4p-pop-title');
+      if (!head || ev.button !== 0 || ev.target.closest('button, input, select')) return;
+      ev.preventDefault();
+      const r = pop.getBoundingClientRect();
+      const dx = ev.clientX - r.left;
+      const dy = ev.clientY - r.top;
+      try { head.setPointerCapture(ev.pointerId); } catch { /* not an active pointer */ }
+      pop.classList.add('rfd4p-pop-moving');
+      const move = (e) => {
+        this.popSpot = { left: e.clientX - dx, top: e.clientY - dy };
+        this._placeMoved(pop);
+      };
+      const up = () => {
+        pop.classList.remove('rfd4p-pop-moving');
+        head.removeEventListener('pointermove', move);
+        head.removeEventListener('pointerup', up);
+        head.removeEventListener('pointercancel', up);
+      };
+      head.addEventListener('pointermove', move);
+      head.addEventListener('pointerup', up);
+      head.addEventListener('pointercancel', up);
+    });
+  }
+
+  /** Where the user last left a popup, kept on screen. */
+  _placeMoved(pop) {
+    if (!this.popSpot) return;
+    const w = pop.offsetWidth;
+    const h = pop.offsetHeight;
+    pop.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, this.popSpot.left))}px`;
+    pop.style.top = `${Math.max(8, Math.min(window.innerHeight - Math.min(h, 40) - 8, this.popSpot.top))}px`;
   }
 
   _closePop() {
@@ -1764,6 +1803,7 @@ export class DesignPanel {
     const h = pop.offsetHeight;
     pop.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, p.x + 14))}px`;
     pop.style.top = `${Math.max(8, Math.min(window.innerHeight - h - 8, p.y + 14))}px`;
+    this._placeMoved(pop);
   }
 
   // ---- set-ups (the start screen's "then", and the selection popup's shortcuts) --------------------------------
