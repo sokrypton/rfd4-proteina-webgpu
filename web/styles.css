@@ -993,22 +993,3 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 #rfd4p-studio-card button.rfd4p-chain-id:hover:not(:disabled),
 #rfd4p-studio-card button.rfd4p-chain-id:focus-visible { outline: 1px solid var(--text, #f1f1f2); outline-offset: 1px; }
 #rfd4p-studio-card button.rfd4p-chain-id:disabled { cursor: default; opacity: 1; }
-
-/* The residue strip (web/design-panel.js `_strip`): one cell per residue of the chain's source entry. */
-.rfd4p-strip {
-  display: flex;
-  height: 12px;
-  margin: 0 0 4px;
-  cursor: crosshair;
-  touch-action: none;
-  user-select: none;
-}
-.rfd4p-cell { flex: 1 1 0; min-width: 0; height: 100%; }
-.rfd4p-cell-fixed { background: var(--chain-color, #82aaff); }
-.rfd4p-cell-structure { background: var(--chain-color, #82aaff); opacity: 0.6; }
-.rfd4p-cell-sequence { background: var(--chain-color, #82aaff); opacity: 0.35; }
-.rfd4p-cell-rigid { background: repeating-linear-gradient(135deg, var(--chain-color, #82aaff) 0 3px, transparent 3px 5px); }
-.rfd4p-cell-designed { background: var(--text-muted, #8b8e96); opacity: 0.55; }
-.rfd4p-cell-out { background: linear-gradient(transparent 5px, var(--border, #383a3f) 5px 7px, transparent 7px); }
-.rfd4p-cell-hot { box-shadow: inset 0 3px 0 #f59e0b; }
-.rfd4p-cell-sel { outline: 1px solid var(--text, #f1f1f2); outline-offset: -1px; opacity: 1; }
