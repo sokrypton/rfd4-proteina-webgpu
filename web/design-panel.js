@@ -27,6 +27,7 @@ const ADVANCED_KEY = 'rfd4p-advanced-editor';
  * `partial`.
  */
 const TASKS = [
+  { example: 'unconditional', title: 'Protein from scratch', desc: 'A new fold of the length you choose' },
   {
     // The blocks idea: a ferredoxin-like fold drawn as strands, helices and loops, each its own block of new residues.
     example: 'blueprint', fallback: 'unconditional', title: 'Blueprint', desc: 'A fold drawn as blocks: β-α-β-β-α-β',
