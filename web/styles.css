@@ -356,6 +356,9 @@ body:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]),
 /* Every layer behind the viewer is the background it draws, so nothing flashes before its first frame (Mol*'s
    stylesheet makes its canvas near-white): black, or white in light mode. */
 #viewer, #viewer .msp-plugin, #viewer .msp-viewport, #viewer .msp-canvas { background: #000 !important; }
+/* Mol*'s frame is its own colour (blue-grey, or beige in its light skin), unlike every other edge here; Studio's panels
+   already draw the lines around the viewer. */
+#viewer .msp-layout-standard { border: 0 !important; }
 [data-host-theme="light"] #viewer, [data-host-theme="light"] #viewer .msp-plugin,
 [data-host-theme="light"] #viewer .msp-viewport, [data-host-theme="light"] #viewer .msp-canvas { background: #fff !important; }
 
