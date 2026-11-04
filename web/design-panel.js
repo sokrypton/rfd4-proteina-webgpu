@@ -1468,7 +1468,9 @@ export class DesignPanel {
     };
 
     const row = (label, ...children) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...children);
-    const crop = src && reach.iLo >= 0 && src.length > 1 ? this._cropBar(c, p, src, reach, residuesText, ranges) : null;
+    // A residue taken from the entry and renumbered (a motif's "A38", residue 1 of its new chain) is named as the card
+    // names it, by the entry, with nothing to crop: its numbering here would not match the card.
+    const crop = !p.source && src && reach.iLo >= 0 && src.length > 1 ? this._cropBar(c, p, src, reach, residuesText, ranges) : null;
     const positionRow = row('Position', position);
     const restRow = row('Rest', rest);
     const betweenRow = el('div', { class: 'rfd4p-pop-row', title: 'The residues between the ranges are free; a length makes them new residues, each design picking one length' },
@@ -1477,7 +1479,10 @@ export class DesignPanel {
     return [
       this._popHead(this._pieceText(c, p)),
       // The ranges first: narrowing them is how a loaded structure is cut to the part that matters.
-      row('Residues', el('span', { class: 'rfd4p-pop-inline' }, el('span', { text: c.id }), residuesText)),
+      p.source
+        ? row('Residues', el('span', { class: 'rfd4p-pop-static', text: p.source,
+          title: `From the entry's ${p.source}; ${c.id}${p.start}${p.end !== p.start ? `–${p.end}` : ''} in this chain` }))
+        : row('Residues', el('span', { class: 'rfd4p-pop-inline' }, el('span', { text: c.id }), residuesText)),
       crop,
       restRow,
       betweenRow,
