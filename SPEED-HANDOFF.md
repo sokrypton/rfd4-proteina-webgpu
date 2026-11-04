@@ -701,3 +701,30 @@ State of the evidence before writing a new kernel class, so the next session sta
 - **A step change needs a new kernel shape**, not a knob: e.g. a thread-to-output map that keeps more of one operand in
   registers without crossing the 64-register cliff, chosen from a register/occupancy model of the M2 first, then
   prototyped on triProjG alone (45% of a pass) behind `gemmVariant` and measured with `bench-kernels.js`.
+
+### 15.1 The stock GEMM is at this M2's multiply-add issue rate (diagnostic builds, 2026-11-03)
+
+Timing-only arms of `gemmSource` (wrong results on purpose; reverted), `bench-kernels.js`, uncond_short n=100,
+3 interleaved rounds, stock flags. `triProjG` baseline 127.9 ms, `gemm 10000x768x384` 36.4 ms:
+
+| arm | triProjG | 768x384 (LN-in) | pass |
+|---|---:|---:|---:|
+| no staging after the first k-tile (no global loads, no workgroup stores) | 1.03x | 1.04x | 1.015x |
+| no barriers | 1.08x | 1.23x | 1.14x |
+| no staging and no barriers (the bare inner loop) | 1.12x | 1.28x | 1.17x |
+| inner loop entirely f16 (f16 accumulators, no conversions) | **1.02x** | 1.13x | 1.04x |
+| 6 vec4 ops per k instead of 8 FMAs | **1.30x** | 1.27x | 1.31x |
+
+What that says: time follows the number of multiply-add instructions and nothing else. Loads cost 3%, the
+f16->f32 conversions and f16 vs f32 arithmetic cost nothing measurable (so the probe's 1.7x f16 rate does not show
+up in a real kernel here, and f16 partials/accumulators cannot win), and three quarters of the FMAs take three
+quarters of the time. Counting: triProjG at n=100 is 151 GFLOP = 75.5 G scalar FMAs in 127.9 ms = **~590 G FMA/s,
+95% of the ~620 G/s scalar issue ceiling** `probe-alu.js` measures (its vec4 figure is 4x that only because it
+counts four FLOPs per issued lane-op; the hardware lanes are scalar). The bare inner loop runs at ~1.33 TFLOP/s.
+
+**So no new stock kernel class can buy more than the barriers' ~8% (23% on the LN-in GEMM) on this machine**, and
+only without paying occupancy for it (double buffering and K-tile 32 both double workgroup memory, which is what
+cost f32 staging 27%). The 2x is the matrix units (subgroup matrices, P0), and nothing on the stock path
+substitutes for them. Fewer multiply-adds (Strassen-style) would trade O(n^2) adds and f16 error for at most 12.5%
+per level; not worth it. Remaining stock-path levers are outside the GEMM: fewer passes (P2), the live frame's
+decode (~9% of a design).
