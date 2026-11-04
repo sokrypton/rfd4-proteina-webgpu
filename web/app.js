@@ -36,6 +36,7 @@ import {
   installStudioApiInterceptor,
 } from './studio-api.js';
 import { DesignPanel } from './design-panel.js';
+import { openGuide } from './guide-dialog.js';
 import { resultsFiles } from './results-zip.js';
 import {
   REFOLD_MODELS, criteriaKind, describeRefold, designedChains, motifSlots, partialTemplates, passes, pdbToCif,
@@ -664,6 +665,9 @@ class Rfd4pStudioApp {
   }
 
   async init() {
+    // The guide opens as a popup, from the card and from the footer's Guide link (Studio's own guide is linked in it).
+    document.getElementById('rfd4p-guide-btn')?.addEventListener('click', () => void openGuide());
+    document.getElementById('guide-link')?.addEventListener('click', (ev) => { ev.preventDefault(); void openGuide(); });
     this._initSeed();
     this._bindControls();
     await this._loadPreset(RFD4P_PRESETS[0].id, { syncStudio: false });

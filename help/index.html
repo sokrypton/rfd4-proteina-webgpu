@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RFD4-Proteina WebGPU guide</title>
+<meta name="description" content="How to set up, run and compare designs with RFD4-Proteina in the browser.">
+<style>
+  :root {
+    --bg: #ffffff; --text: #1f2328; --muted: #59636e; --border: #d1d9e0; --surface: #f6f8fa;
+    --accent: #2f6fde; --hot: #f59e0b; --pass: #1f8f6a; --refold: #c026d3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111214; --text: #ededef; --muted: #a3a6ad; --border: #34363b; --surface: #1a1b1e;
+      --accent: #82aaff; --hot: #f59e0b; --pass: #45b99a; --refold: #e040fb;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #111214; --text: #ededef; --muted: #a3a6ad; --border: #34363b; --surface: #1a1b1e;
+    --accent: #82aaff; --hot: #f59e0b; --pass: #45b99a; --refold: #e040fb;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 40px 0 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+  h3 { font-size: 15px; margin: 22px 0 6px; }
+  p, ul, ol { margin: 0 0 10px; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 2px 0; }
+  a { color: var(--accent); }
+  .lead { color: var(--muted); margin-bottom: 18px; }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 14px; margin: 8px 0 0; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0 12px; font-size: 14px; }
+  th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  .table-wrap { overflow-x: auto; }
+  code, kbd { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0 4px; }
+  .ui { font-weight: 600; }
+  .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 6px; }
+  .note { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 14px; }
+  footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>RFD4-Proteina in the browser</h1>
+  <p class="lead">Set up a design, run it on your own GPU, and compare the results. Nothing is uploaded: the model runs in
+    Chrome through WebGPU.</p>
+  <nav class="toc" aria-label="Contents">
+    <a href="#start">Start</a><a href="#card">The design card</a><a href="#pieces">Pieces</a><a href="#select">Picking residues</a>
+    <a href="#chains">Chains</a><a href="#look">Colours</a><a href="#run">Running</a><a href="#designs">Designs</a>
+    <a href="#examples">Examples</a><a href="#terms">Words</a>
+  </nav>
+
+  <h2 id="start">Start</h2>
+  <p>A job is built from parts. Start with one, then add more the same way:</p>
+  <ul>
+    <li><span class="ui">+ seq</span>: a new chain for the model to design, 60–100 residues to start.</li>
+    <li><span class="ui">+ pdb</span>: chains from a PDB entry (<code>5O45</code>, or <code>1J79 A C</code> for some chains) or a file,
+      kept as they are.</li>
+    <li><span class="ui">+ lig</span>: a small molecule by its PDB code (<code>HEM</code>, <code>ATP</code>, <code>ZN</code>), placed by the model.</li>
+  </ul>
+  <p>Or open one of the <a href="#examples">examples</a>: each is fetched from its PDB entry and set up for you.
+    <span class="ui">Clear</span> empties the job; <span class="ui">Back</span> brings it back.</p>
+
+  <h2 id="card">The design card</h2>
+  <p>The card lists each chain as pieces, in order: what is kept, what is free, and where new residues go.</p>
+  <ul>
+    <li>A piece reads like <code>A17–131 · fixed · 3 hotspots</code>, <code>H99–109 · free</code> or <code>50–120 · new</code>.</li>
+    <li>Click a piece to change it. Its residues are selected in the viewer while its popup is open, and brought to the
+      middle of the view.</li>
+    <li><span class="ui">+</span> between pieces inserts new residues there; <span class="ui">×</span> removes a piece.</li>
+    <li>Chains are grouped under the structure they came from (<code>PDB 5O45 · A</code>); click that caption to swap the structure.</li>
+    <li><span class="ui">Undo</span> steps back through every edit.</li>
+  </ul>
+  <p>Every setting is <span class="ui">fixed</span> (kept as given) or <span class="ui">free</span> (the model decides).</p>
+
+  <h2 id="pieces">Pieces</h2>
+  <h3>Residues</h3>
+  <p>One range or several, like <code>1–40, 60–115</code>. Under it, a bar shows the chain as it was loaded: drag either end
+    in to crop the piece, or out to bring residues back (up to the next piece). The structure previews it as you drag:
+    residues about to be cut nearly vanish.</p>
+  <ul>
+    <li><span class="ui">Rest</span>: what happens to residues outside the ranges: removed (the default), free, or unchanged.</li>
+    <li><span class="ui">Between</span>: with several ranges, a length for the gaps, which become new residues (for a variable linker).</li>
+  </ul>
+  <h3>Structure, Sequence, Position</h3>
+  <div class="table-wrap"><table>
+    <tr><th>Setting</th><th>Options</th></tr>
+    <tr><td>Structure</td><td><b>fixed</b>: kept where it is. <b>rigid</b>: kept as it is, but the model places it (a framework
+      docking onto a target). <b>free</b>: the model builds it. With fixed or rigid, <b>Atoms</b> says which: all, backbone,
+      side chains, or named (<code>CG, OD1</code>).</td></tr>
+    <tr><td>Sequence</td><td><b>fixed</b>: these amino acids. <b>free</b>: the model writes them.</td></tr>
+    <tr><td>Position</td><td><b>fixed</b>: at this place in the chain. <b>free</b>: anywhere in the chain (a catalytic residue the model places).</td></tr>
+    <tr><td>Length</td><td>With structure and sequence both free: how many residues. Another count than now makes them
+      <b>new residues</b>, each design picking one length from the range.</td></tr>
+    <tr><td>Hotspots</td><td>Residues of this chain a binder should touch: <code>A56, A60-62</code>, or some atoms: <code>A56(CG,OH)</code>.</td></tr>
+  </table></div>
+  <p>Chains from the same structure that are rigid move as one body, so an antibody's heavy and light chains keep their pairing.</p>
+  <h3>More</h3>
+  <ul>
+    <li><span class="ui">Shape</span>: helix, strand or loop. <span class="ui">Exposure</span>: buried, intermediate or exposed.</li>
+    <li><span class="ui">Interaction</span>: what the side chains should do: H-bond donor or acceptor, salt bridge, π-stacking,
+      π-cation, hydrophobic, metal-coordinating.</li>
+    <li><span class="ui">Keep only</span>: type residues (<code>A38, A14, A99</code>) to keep just those, in that order; the rest of
+      the chain is rebuilt around them (motif scaffolding).</li>
+  </ul>
+  <h3>New residues</h3>
+  <p>A <code>50–120 · new</code> piece has a Length range, a Shape, an Exposure and the chain's Fold. New residues that replaced
+    residues show <span class="ui">was 7</span>: click it, or set Structure or Sequence to fixed, to bring the originals back
+    with their coordinates.</p>
+
+  <h2 id="select">Picking residues</h2>
+  <p>Click residues in the viewer or the sequence bar for a shorter popup: Structure, Sequence, Length for one free
+    stretch, <span class="ui">Hotspot</span>, and <span class="ui">Include</span> (untick to take them out of the job). The rest is
+    under More. Use it to free or fix a region straight from the structure.</p>
+  <p>Popups move by their title bar, and later ones open where you left the last.</p>
+
+  <h2 id="chains">Chains</h2>
+  <p>Click a chain's letter for its name, its place in the job, and a <span class="ui">Fold</span> for it to take
+    (CATH: helix bundle, β-sandwich, immunoglobulin-like, ferredoxin-like, Rossmann-like, TIM barrel, or any code).</p>
+
+  <h2 id="look">Colours</h2>
+  <ul>
+    <li><span class="swatch" style="background: var(--hot)"></span>Amber: hotspots, in the viewer, the sequence bar and the card.</li>
+    <li><span class="swatch" style="background: var(--accent)"></span>Blue text and dashed cards: free.</li>
+    <li><span class="swatch" style="background: var(--muted); opacity: .35"></span>Faded in the structure: residues the model will rebuild
+      (not with partial diffusion, where they are its starting point).</li>
+    <li><span class="swatch" style="border: 2px solid var(--text)"></span>Outline: the selection, the same in the viewer, the sequence bar,
+      the card and the Designs table.</li>
+    <li><span class="swatch" style="background: var(--refold)"></span>Magenta: a refold over its design.</li>
+    <li>Chains take cool colours only, so none is mistaken for these.</li>
+  </ul>
+
+  <h2 id="run">Running</h2>
+  <ul>
+    <li><span class="ui">Designs</span>: how many (1–8). <span class="ui">Seed</span>: the same seed and settings give the same design;
+      🎲 draws a new one, and a new seed is drawn after each run unless you type one.</li>
+    <li><span class="ui">Generate</span> becomes <span class="ui">Stop</span> while it runs and fills up as it goes
+      (<code>design 2 of 4 · step 41/60</code>). The structure is drawn live at every step.</li>
+  </ul>
+  <h3>More settings</h3>
+  <div class="table-wrap"><table>
+    <tr><th>Setting</th><th>What it does</th></tr>
+    <tr><td>Start from the input structure</td><td>Partial diffusion: start part of the way from the input instead of from noise.
+      About 40% stays close; higher changes more. Needs every residue defined, with coordinates.</td></tr>
+    <tr><td>Thinking</td><td>Extra recycling passes per step (none, low, medium, high): slower, sometimes better.</td></tr>
+    <tr><td>Backbone K, Latents K</td><td>Sampling temperature for the structure and the sequence: lower is hotter, more varied.</td></tr>
+    <tr><td>Early stop</td><td>Stop once the structure and sequence stop changing.</td></tr>
+  </table></div>
+  <p>A job where every chain keeps its backbone and only the sequence is free runs as inverse folding: the backbone comes
+    back exactly as given.</p>
+
+  <h2 id="designs">Designs</h2>
+  <p>Every design of every run on this input is a row. Click a row to see it. Earlier runs fold away under
+    <code>Run 1 · seeds …</code>; a different input starts the list over.</p>
+  <ul>
+    <li><span class="ui">Refold all</span> folds each design's sequence again with AlphaFold 3 or OpenBind-0 and scores how well it comes
+      back. <span class="ui">⟳</span> refolds one design; <span class="ui">⤓</span> downloads it.</li>
+    <li>Click a column head to sort by it. By default, designs that pass come first, then the rest by the job's main number.</li>
+    <li><span class="ui">Save all (.zip)</span>: the input, every design with its trajectory, every refold, and the table as
+      <code>summary.csv</code>.</li>
+  </ul>
+  <div class="table-wrap"><table>
+    <tr><th>Column</th><th>Meaning</th><th>Better</th></tr>
+    <tr><td>RMSD</td><td>Å between the design and its refold. For a binder or antibody, after fitting on the target, so where it sits counts.</td><td>lower</td></tr>
+    <tr><td>pLDDT</td><td>The refold model's confidence, 0–100.</td><td>higher</td></tr>
+    <tr><td>ipTM</td><td>Its confidence in the interface, 0–1.</td><td>higher</td></tr>
+    <tr><td>iPAE</td><td>Å: the lowest predicted error between a designed residue and the rest.</td><td>lower</td></tr>
+  </table></div>
+  <p><span style="color: var(--pass); font-weight: 700">✓</span> marks designs that meet the model's own pass criteria; designs
+    that miss them are greyed out.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Job</th><th>Passes when</th></tr>
+    <tr><td>Monomer</td><td>RMSD ≤ 1.5 Å</td></tr>
+    <tr><td>Binder</td><td>the binder's pTM ≥ 0.80, iPAE ≤ 1.5, RMSD on the target ≤ 2.5 Å</td></tr>
+    <tr><td>Antibody</td><td>iPAE ≤ 2.0, RMSD on the target ≤ 2.0 Å</td></tr>
+  </table></div>
+  <p>Motif, enzyme and small-molecule jobs get the numbers but no ✓: their criteria also need motif and ligand RMSDs not
+    computed here. Passing is a computational check; binding still needs an experiment.</p>
+  <p class="note">AlphaFold 3's parameters are Google DeepMind's, for non-commercial use under a prohibited-use policy. The page
+    asks once before using them; OpenBind-0 (same architecture, Apache 2.0) is the alternative.</p>
+
+  <h2 id="examples">Examples</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Example</th><th>Set-up</th></tr>
+    <tr><td>Protein from scratch</td><td>One free chain of 250 residues.</td></tr>
+    <tr><td>Blueprint</td><td>A ferredoxin-like fold drawn as blocks: strand, loop, helix, … each a block of new residues with its shape.</td></tr>
+    <tr><td>Protein binder</td><td>PD-L1 (5O45) fixed with three hotspots; a new binder of 50–120 residues.</td></tr>
+    <tr><td>Small-molecule binder</td><td>SAM (1XVA), placed by the model; a 150-residue protein around it.</td></tr>
+    <tr><td>Motif scaffolding</td><td>Three residues of 1QJG fixed; the rest rebuilt as four stretches of new residues.</td></tr>
+    <tr><td>Enzyme</td><td>A catalytic Asp's tip atoms (position free), Zn and part of orotate (1J79) fixed; 180 new residues.</td></tr>
+    <tr><td>Antibody loop</td><td>HER2 (1N8Z) fixed with hotspots; heavy and light frameworks rigid as one body; CDR H3 free.</td></tr>
+    <tr><td>Nanobody (VHH)</td><td>PD-L1 (3EAK) fixed with hotspots; the 4Z18 framework rigid; three CDRs as new residues.</td></tr>
+    <tr><td>Redesign a sequence</td><td>2KL8's backbone kept, its sequence free (inverse folding).</td></tr>
+    <tr><td>Diversify a structure</td><td>2KL8 free, starting 40% of the way from it (partial diffusion).</td></tr>
+  </table></div>
+  <p>The examples reproduce the inputs of the model's own demo, fetched from their PDB entries.</p>
+
+  <h2 id="terms">Words</h2>
+  <ul>
+    <li><b>Fixed / free</b>: kept as given / decided by the model.</li>
+    <li><b>Rigid</b>: kept as it is, placed by the model.</li>
+    <li><b>New residues</b>: residues with no starting structure, a length range; each design picks one length.</li>
+    <li><b>Hotspot</b>: a target residue a binder should touch.</li>
+    <li><b>Partial diffusion</b>: start from the input structure part of the way, for variants close to it.</li>
+    <li><b>Refold</b>: fold a design's sequence again with a structure predictor; a design that comes back as designed is
+      self-consistent.</li>
+  </ul>
+  <p><span class="ui">Advanced editor</span> (bottom of the card) opens AtomWorks Studio's full editor: every condition, bonds,
+    analysis and the query bar.</p>
+
+  <footer>
+    <p>Runs in desktop Chrome with WebGPU. Model: <a href="https://github.com/RosettaCommons/RFD4-Proteina">RFD4-Proteina</a>
+      (<a href="https://huggingface.co/nvidia/RFD4-Proteina">weights</a>). Editor and viewer:
+      <a href="https://github.com/RosettaCommons/atomworks-studio">AtomWorks Studio</a>, with its own
+      <a href="../guide/">guide</a>. Source of this site:
+      <a href="https://github.com/sokrypton/rfd4-proteina-webgpu">rfd4-proteina-webgpu</a>.</p>
+    <p><a href="../">← Back to the designer</a></p>
+  </footer>
+</main>
+</body>
+</html>
