@@ -1220,3 +1220,11 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 #rfd4p-fetch-status:empty { display: none; }
 #rfd4p-studio-card:not(.rfd4p-starting) #rfd4p-examples { display: none; }
 .rfd4p-piece-pop .rfd4p-pop-static { align-self: center; font-size: 12px; }
+/* A piece's residues: from – to boxes per range, as new residues' length. */
+.rfd4p-piece-pop .rfd4p-ranges-wrap, .rfd4p-piece-pop .rfd4p-ranges { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.rfd4p-piece-pop .rfd4p-range { display: inline-flex; align-items: center; gap: 4px; }
+.rfd4p-piece-pop .rfd4p-range input { width: 64px; }
+#rfd4p-studio-card .rfd4p-range-x, .rfd4p-piece-pop .rfd4p-range-x, .rfd4p-piece-pop .rfd4p-range-add {
+  min-height: 0; height: 22px; padding: 0 6px; border: 0; background: none; color: var(--text-muted, #b1b3b9); cursor: pointer; font-size: 14px;
+}
+.rfd4p-piece-pop .rfd4p-range-add:hover, .rfd4p-piece-pop .rfd4p-range-x:hover { color: var(--text, #ededef); }

@@ -1486,7 +1486,7 @@ export class DesignPanel {
       p.source
         ? row('Residues', el('span', { class: 'rfd4p-pop-static', text: p.source,
           title: `From the entry's ${p.source}; ${c.id}${p.start}${p.end !== p.start ? `–${p.end}` : ''} in this chain` }))
-        : row('Residues', el('span', { class: 'rfd4p-pop-inline' }, el('span', { text: c.id }), residuesText)),
+        : row('Residues', el('span', { class: 'rfd4p-pop-inline' }, el('span', { text: c.id }), this._rangeBoxes(residuesText, reach))),
       crop,
       restRow,
       betweenRow,
@@ -1606,6 +1606,51 @@ export class DesignPanel {
    * each end. Dragging a handle in crops the piece, out brings residues back (up to its neighbours); it edits the
    * Residues field, so Rest, Between and Apply work as typed.
    */
+  /**
+   * A piece's residues as a pair of boxes per range (from – to), as new residues take their length, kept in step with
+   * `field`, the hidden text the popup reads ("1–40, 60–115") and the crop bar writes; "+" adds a range, × drops one.
+   */
+  _rangeBoxes(field, reach) {
+    field.hidden = true;
+    const box = el('span', { class: 'rfd4p-ranges' });
+    let writing = false;
+    const read = () => String(field.value).split(/[,;]+/).map((t) => t.trim()).filter(Boolean)
+      .map((t) => { const m = /^(-?\d+)\s*(?:[-–]\s*(-?\d+))?$/.exec(t); return m ? [m[1], m[2] ?? m[1]] : [t, t]; });
+    const write = () => {
+      const parts = [...box.querySelectorAll('.rfd4p-range')].map((r) => {
+        const [a, b] = [...r.querySelectorAll('input')].map((i) => i.value.trim());
+        return !a && !b ? '' : a === b || !b ? a : !a ? b : `${a}–${b}`;
+      }).filter(Boolean);
+      writing = true;
+      field.value = parts.join(', ');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      writing = false;
+    };
+    const draw = () => {
+      const rs = read();
+      if (!rs.length) rs.push(['', '']);
+      box.replaceChildren(...rs.map(([a, b], k) => {
+        const num = (v, label) => {
+          const i = el('input', { type: 'number', value: v, min: reach.lo, max: reach.hi, step: 1, 'aria-label': label });
+          i.addEventListener('input', write);
+          return i;
+        };
+        return el('span', { class: 'rfd4p-range' }, num(a, 'From residue'), el('span', { text: '–' }), num(b, 'To residue'),
+          rs.length > 1 ? el('button', { type: 'button', class: 'rfd4p-range-x', text: '×', title: 'Drop this range', 'aria-label': 'Drop this range',
+            onclick: () => { box.children[k].remove(); write(); draw(); } }) : null);
+      }), el('button', { type: 'button', class: 'rfd4p-range-add', text: '+', title: 'Another range (the residues between become free, or new with a length)',
+        'aria-label': 'Another range', onclick: () => {
+          const last = read().at(-1);
+          const from = last ? Math.min(reach.hi, Number(last[1]) + 2) : reach.lo;
+          field.value = [field.value, `${from}–${reach.hi}`].filter(Boolean).join(', ');
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+        } }));
+    };
+    field.addEventListener('input', () => { if (!writing) draw(); });
+    draw();
+    return el('span', { class: 'rfd4p-ranges-wrap' }, box, field);
+  }
+
   _cropBar(c, p, src, reach, field, ranges) {
     const n = src.length;
     const pct = (k) => `${(k / n) * 100}%`;
