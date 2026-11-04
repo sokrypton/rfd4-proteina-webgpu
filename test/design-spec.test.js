@@ -12,7 +12,8 @@ const specOf = (file, opts) => designSpec(parseCifToAtomArray(exampleCif(file)),
 test('designSpec reads task, roles, lengths and contig from the bundled examples', () => {
   const cases = [
     ['protein_binder.cif', 'binder', 'A17-131/0 50-120', [165, 235], { A: 'fixed', B: 'new' }],
-    ['antibody_design.cif', 'antibody', null, [280, 280], { L: 'sequence', H: 'motif', T: 'fixed' }],
+    // A rigid framework is held, by its shape: L reads as kept.
+    ['antibody_design.cif', 'antibody', null, [280, 280], { L: 'fixed', H: 'motif', T: 'fixed' }],
     ['enzyme_design.cif', 'enzyme', '180/[A1] + ORO, ZN', [180, 180], { A: 'motif', B: 'ligand', C: 'ligand' }],
     ['motif_scaffolding.cif', 'motif', '10-20/A1/15-30/A3/15-30/A5/10-20', [53, 103], { A: 'motif' }],
     ['nanobody.cif', 'antibody', null, [223, 246], { A: 'fixed', H: 'motif' }],

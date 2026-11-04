@@ -67,8 +67,11 @@ test('protein binder: fix the target, mark hotspots, add a 50-120 chain', () => 
 test('antibody: keep L/H sequences, redesign CDR H3, fix the target with hotspots', () => {
   const { original, bare } = load('antibody_design.cif');
   bare.setConditions([...role(bare, 'L', 'sequence'), ...role(bare, 'H', 'sequence'), ...role(bare, 'T', 'fixed')]);
-  // Selection action "Redesign" on the CDR H3 residues.
+  // The frameworks rigid, each a body of its own, as the bundled file has them; CDR H3 not part of it.
   const h3 = maskedResidues(original, 'H');
+  bare.setInternalCoordinateConditioning(chainAtoms(bare, 'L'), true, 'atom', 2);
+  bare.setInternalCoordinateConditioning(chainAtoms(bare, 'H'), true, 'atom', 1);
+  bare.setInternalCoordinateConditioning(h3, false, 'residue');
   bare.setConditions([
     { condition: 'coordinate', atom_indices: h3, enabled: false, scope: 'residue' },
     { condition: 'sequence', atom_indices: h3, enabled: false, scope: 'residue' },

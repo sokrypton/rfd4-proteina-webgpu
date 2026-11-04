@@ -116,7 +116,7 @@ const SCENES = {
   async piece() {
     await openExample('protein_binder');
     await page(`async (w, d, sleep) => {
-      [...d.querySelectorAll('#rfd4p-chain-list .rfd4p-sub-open')].find((b) => /fixed/.test(b.innerText)).click(); await sleep(1500);
+      [...d.querySelectorAll('#rfd4p-chain-list .rfd4p-sub-open')].find((b) => /^A[0-9]/.test(b.innerText.trim())).click(); await sleep(1500);
       const pop = [...d.querySelectorAll('.rfd4p-piece-pop')].find((x) => !x.hidden);
       const h = pop.querySelector('.rfd4p-crop-lo'); const t = pop.querySelector('.rfd4p-crop-track').getBoundingClientRect();
       const hb = h.getBoundingClientRect();

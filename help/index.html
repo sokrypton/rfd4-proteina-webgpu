@@ -107,6 +107,10 @@
     <tr><td>Hotspots</td><td>Residues of this chain a binder should touch: <code>A56, A60-62</code>, or some atoms: <code>A56(CG,OH)</code>.</td></tr>
   </table></div>
   <p>Chains from the same structure that are rigid move as one body, so an antibody's heavy and light chains keep their pairing.</p>
+  <p class="note">Designing a binder: crop the target to the domain around the site (the crop bar), give it two or three
+    hotspots, and add the binder with <span class="ui">+ seq</span>. A structure loaded as it is becomes the binder's target the way
+    the model's own recipe sets one up: backbone rigid (its shape kept, placed by the model with the binder), sequence fixed.
+    There is no need to centre it.</p>
   <h3>More</h3>
   <ul>
     <li><span class="ui">Shape</span>: helix, strand or loop. <span class="ui">Exposure</span>: buried, intermediate or exposed.</li>
@@ -147,6 +151,8 @@
   <ul>
     <li><span class="ui">Designs</span>: how many (1–8). <span class="ui">Seed</span>: the same seed and settings give the same design;
       🎲 draws a new one, and a new seed is drawn after each run unless you type one.</li>
+    <li><span class="ui">Thinking</span>, above Generate: extra recycling passes per step (none, low, medium, high). Medium is the
+      default, as the model's own; none is about three times faster, at some cost (more binders clash with their target).</li>
     <li><span class="ui">Generate</span> becomes <span class="ui">Stop</span> while it runs and fills up as it goes
       (<code>design 2 of 4 · step 41/60</code>). The structure is drawn live at every step.</li>
   </ul>
@@ -155,7 +161,6 @@
     <tr><th>Setting</th><th>What it does</th></tr>
     <tr><td>Start from the input structure</td><td>Partial diffusion: start part of the way from the input instead of from noise.
       About 40% stays close; higher changes more. Needs every residue defined, with coordinates.</td></tr>
-    <tr><td>Thinking</td><td>Extra recycling passes per step (none, low, medium, high): slower, sometimes better.</td></tr>
     <tr><td>Backbone K, Latents K</td><td>Sampling temperature for the structure and the sequence: lower is hotter, more varied.</td></tr>
     <tr><td>Early stop</td><td>Stop once the structure and sequence stop changing.</td></tr>
   </table></div>
@@ -199,7 +204,8 @@
     <tr><th>Example</th><th>Set-up</th></tr>
     <tr><td>Protein from scratch</td><td>One free chain of 250 residues.</td></tr>
     <tr><td>Blueprint</td><td>A ferredoxin-like fold drawn as blocks: strand, loop, helix, … each a block of new residues with its shape.</td></tr>
-    <tr><td>Protein binder</td><td>PD-L1 (5O45) fixed with three hotspots; a new binder of 50–120 residues.</td></tr>
+    <tr><td>Protein binder</td><td>PD-L1 (5O45): its backbone rigid, sequence fixed, three hotspots; a new binder of 50–120
+      residues. The model's own default set-up for binders.</td></tr>
     <tr><td>Small-molecule binder</td><td>SAM (1XVA), placed by the model; a 150-residue protein around it.</td></tr>
     <tr><td>Motif scaffolding</td><td>Three residues of 1QJG fixed; the rest rebuilt as four stretches of new residues.</td></tr>
     <tr><td>Enzyme</td><td>A catalytic Asp's tip atoms (position free), Zn and part of orotate (1J79) fixed; 180 new residues.</td></tr>

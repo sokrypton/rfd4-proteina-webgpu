@@ -165,9 +165,10 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 4
       segments.push({ ...r.segment, where });
     });
     const ligands = chain.residues.filter((r) => !r.kind);
-    const fixed = polymer.filter((r) => r.crdAtoms > 0);
+    // Held in place, or held by their shape as a rigid body (a binder's target as upstream sets it up): kept either way.
+    const fixed = polymer.filter((r) => r.crdAtoms > 0 || r.relative);
     // Unmodelled residues (no coordinates) cannot be held in place, so roles are judged on the modelled ones.
-    const resolved = polymer.filter((r) => r.resolved || r.crdAtoms > 0);
+    const resolved = polymer.filter((r) => r.resolved || r.crdAtoms > 0 || r.relative);
     const allFixed = fixed.length > 0 && fixed.length === resolved.length;
     const seqFixed = polymer.filter((r) => r.seqFixed);
     const freeRes = polymer.filter((r) => !r.crdAtoms && !r.seqFixed);

@@ -71,13 +71,6 @@
                         <input type="range" id="partial-diffusion-percent" class="rfd4p-slider" min="1" max="100" step="1" value="40" disabled aria-label="How far from the input (%)" />
                         <input type="number" id="partial-diffusion-percent-num" class="rfd4p-slider-num" min="1" max="100" step="1" value="40" disabled aria-label="How far from the input (%)" />
                     </div>
-                    <fieldset class="representation-mode rfd4p-thinking-group" id="thinking-radio-group" aria-label="Thinking">
-                        <legend title="Extra recycling passes: slower, sometimes better designs">Thinking</legend>
-                        <label><input type="radio" name="thinking-radio" value="none" checked />none</label>
-                        <label><input type="radio" name="thinking-radio" value="low" />low</label>
-                        <label><input type="radio" name="thinking-radio" value="medium" />med</label>
-                        <label><input type="radio" name="thinking-radio" value="high" />high</label>
-                    </fieldset>
                     <p class="rfd4p-sampling-note">Lower K = higher temperature and more variation. Defaults give stronger low-temperature sampling.</p>
                     <label for="backbone-k">
                         <span class="rfd4p-slider-head">
@@ -99,6 +92,13 @@
                 </div>
             </details>
 
+            <fieldset class="representation-mode rfd4p-thinking-group" id="thinking-radio-group" aria-label="Thinking">
+                <legend title="Extra recycling passes: slower, sometimes better designs">Thinking</legend>
+                <label><input type="radio" name="thinking-radio" value="none" />none</label>
+                <label><input type="radio" name="thinking-radio" value="low" />low</label>
+                <label><input type="radio" name="thinking-radio" value="medium" checked />med</label>
+                <label><input type="radio" name="thinking-radio" value="high" />high</label>
+            </fieldset>
             <button id="predict" class="primary rfd4p-generate-btn" type="button" disabled>
                 Generate design
             </button>
