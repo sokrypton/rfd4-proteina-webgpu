@@ -1094,8 +1094,8 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 .rfd4p-guide-body figcaption { margin-top: 4px; color: var(--muted); font-size: 12px; }
 .rfd4p-guide-body footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
 
-/* + seq, + pdb, + lig: one bar across the card, tinted, so the way to build a job stands out (bigger on the start
-   screen, where it is the way in). */
+/* + seq, + pdb, + lig: one bar across the card, tinted, so the way to build a job stands out; the same on the start
+   screen and under a job. */
 #rfd4p-studio-card .rfd4p-chain-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 #rfd4p-studio-card .rfd4p-chain-actions > button {
   min-height: 30px; font-weight: 600; color: var(--accent-hover, #a9c4ff);
@@ -1104,4 +1104,3 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 #rfd4p-studio-card .rfd4p-chain-actions > button:hover:not(:disabled) {
   color: var(--accent-ink, #142038); background: var(--accent, #82aaff);
 }
-#rfd4p-studio-card .rfd4p-start-actions > button { min-height: 38px; font-size: 13.5px; }

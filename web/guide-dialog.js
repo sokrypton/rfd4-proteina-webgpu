@@ -7,7 +7,8 @@ const GUIDE_URL = new URL('../help/index.html', import.meta.url);
 let dialog = null;
 
 async function build() {
-  const res = await fetch(GUIDE_URL);
+  // Revalidated, not taken from the cache: Pages lets a browser keep it 10 minutes, so an edited guide showed stale.
+  const res = await fetch(GUIDE_URL, { cache: 'no-cache' });
   if (!res.ok) throw new Error(`guide not found (${res.status})`);
   const page = new DOMParser().parseFromString(await res.text(), 'text/html');
   const main = page.querySelector('main');
