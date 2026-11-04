@@ -38,7 +38,7 @@ test('resultsFiles packages input, designs, trajectories, every refold and a sum
   const csv = files.find((f) => f.name === 'summary.csv').text.trim().split('\n');
   assert.equal(csv.length, 1 + 3 + 1);
   // no metrics on these refolds: RMSD on target, designed-chain pTM, min iPAE and the verdict are left empty
-  assert.ok(csv[1].startsWith('1,7,50,B,A:MK B:G,af3,0,0.5,,80.12,0.8,0.61,,,,A,H:109'), 'refold seed 0 when none was given');
+  assert.ok(csv[1].startsWith('1,7,50,B,A:MK B:G,af3,0,,,0.5,,80.12,0.8,0.61,,,,A,H:109'), 'refold seed 0 when none was given');
   assert.ok(csv[0].includes('rmsd_on_target') && csv[0].includes('min_ipae') && csv[0].includes('passes'));
   assert.match(files.find((f) => f.name === 'README.txt').text, /WEIGHTS_TERMS_OF_USE/);
   assert.ok(!names.some((n) => n.endsWith('.pdb')));

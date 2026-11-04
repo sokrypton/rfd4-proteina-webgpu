@@ -35,6 +35,8 @@ function refoldSummary(r) {
     model: r.model,
     model_name: REFOLD_MODELS[r.model] ?? r.model,
     seed: r.seed ?? 0,
+    recycles: r.recycles ?? null,
+    steps: r.steps ?? null,
     rmsd_designed_chain: round(r.rmsd, 3),
     rmsd_on_target: round(r.metrics?.placedRmsd, 3),
     plddt: round(c.meanPlddt, 2),
@@ -105,7 +107,7 @@ export function resultsFiles({ input, designs, generatedAt = new Date().toISOStr
     if (refolds.length === 0) rows.push(base);
     for (const r of refolds) {
       rows.push({
-        ...base, refold_model: r.model, refold_seed: r.seed, rmsd_designed_chain: r.rmsd_designed_chain, rmsd_on_target: r.rmsd_on_target,
+        ...base, refold_model: r.model, refold_seed: r.seed, refold_recycles: r.recycles, refold_steps: r.steps, rmsd_designed_chain: r.rmsd_designed_chain, rmsd_on_target: r.rmsd_on_target,
         plddt: r.plddt, ptm: r.ptm, iptm: r.iptm, designed_chain_ptm: r.designed_chain_ptm, min_ipae: r.min_ipae,
         passes: r.passes, templated_chains: r.templated_chains,
         partial_templates: r.partial_templates.map((p) => `${p.chain}:${p.residues}`),
@@ -113,7 +115,7 @@ export function resultsFiles({ input, designs, generatedAt = new Date().toISOStr
     }
   }
   files.push({ name: 'summary.json', text: `${JSON.stringify(summary, null, 2)}\n` });
-  const columns = ['design', 'seed', 'steps_run', 'designed_chains', 'sequences', 'refold_model', 'refold_seed', 'rmsd_designed_chain',
+  const columns = ['design', 'seed', 'steps_run', 'designed_chains', 'sequences', 'refold_model', 'refold_seed', 'refold_recycles', 'refold_steps', 'rmsd_designed_chain',
     'rmsd_on_target', 'plddt', 'ptm', 'iptm', 'designed_chain_ptm', 'min_ipae', 'passes', 'templated_chains',
     'partial_templates'];
   files.push({

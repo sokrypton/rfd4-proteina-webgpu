@@ -114,22 +114,38 @@
 
             <!-- Every design of the runs on this input, one row each with its refold's numbers (web/app.js _renderDesigns). -->
             <div id="design-results" class="rfd4p-results-box" hidden>
-                <div class="rfd4p-results-head">
-                    <strong>Designs</strong>
-                    <div id="rfd4p-refold" class="rfd4p-refold-row" hidden>
-                        <select id="rfd4p-refold-model" class="rfd4p-refold-model" aria-label="Refold with">
-                            <option value="af3" selected>AlphaFold 3</option>
-                            <option value="openbind0">OpenBind-0</option>
-                        </select>
-                        <label class="rfd4p-refold-seed" title="The refold model's seed: another seed, another sample of the fold">seed
-                            <input id="rfd4p-refold-seed" type="number" min="0" max="4294967295" step="1" value="0" aria-label="Refold seed" />
-                        </label>
-                        <button id="rfd4p-refold-btn" class="secondary compact" type="button"
-                                title="Fold each design's sequence again with a structure prediction model and score it">Refold all</button>
-                    </div>
-                </div>
+                <strong class="rfd4p-results-title">Designs</strong>
                 <div id="design-view-radios" class="rfd4p-designs" role="radiogroup" aria-label="Designs"></div>
-                <p id="rfd4p-refold-result" class="rfd4p-refold-result" aria-live="polite" hidden></p>
+                <!-- Refold: fold each design's sequence again and score how it comes back (web/app.js _refoldDesigns). -->
+                <div id="rfd4p-refold" class="rfd4p-refold-box" hidden>
+                    <strong>Refold</strong>
+                    <div class="rfd4p-refold-grid">
+                        <label>Model
+                            <select id="rfd4p-refold-model" class="rfd4p-refold-model">
+                                <option value="af3" selected>AlphaFold 3</option>
+                                <option value="openbind0">OpenBind-0</option>
+                            </select>
+                        </label>
+                        <label title="Another seed samples the fold again">Seed
+                            <input id="rfd4p-refold-seed" type="number" min="0" max="4294967295" step="1" value="0" />
+                        </label>
+                        <label title="Trunk recycling passes: more is slower, sometimes more confident">Recycles
+                            <select id="rfd4p-refold-recycles">
+                                <option value="0">0</option><option value="1">1</option><option value="2">2</option>
+                                <option value="3" selected>3</option><option value="5">5</option><option value="10">10</option>
+                            </select>
+                        </label>
+                        <label title="Diffusion steps of the structure module: 25 is LocalFold's default, 200 what AlphaFold 3 was trained with">Steps
+                            <select id="rfd4p-refold-steps">
+                                <option value="25" selected>25</option><option value="50">50</option>
+                                <option value="100">100</option><option value="200">200</option>
+                            </select>
+                        </label>
+                    </div>
+                    <button id="rfd4p-refold-btn" class="secondary compact" type="button"
+                            title="Refold every design not yet refolded with these settings">Refold all</button>
+                    <p id="rfd4p-refold-result" class="rfd4p-refold-result" aria-live="polite" hidden></p>
+                </div>
                 <dialog id="rfd4p-refold-terms" class="rfd4p-refold-terms" aria-labelledby="rfd4p-refold-terms-title">
                     <form method="dialog">
                         <h2 id="rfd4p-refold-terms-title">AlphaFold 3 model parameters</h2>

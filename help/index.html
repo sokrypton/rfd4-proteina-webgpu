@@ -173,8 +173,9 @@
     <code>Run 1 · seeds …</code>; a different input starts the list over.</p>
   <ul>
     <li><span class="ui">Refold all</span> folds each design's sequence again with AlphaFold 3 or OpenBind-0 and scores how well it comes
-      back. <span class="ui">↻</span> refolds one design; <span class="ui">⤓</span> downloads it. Change the
-      <span class="ui">seed</span> to sample another fold: Refold all then redoes every design with the new seed.</li>
+      back. <span class="ui">↻</span> refolds one design; <span class="ui">⤓</span> downloads it. The
+      <span class="ui">Refold</span> box holds its settings: model, seed, recycles (3) and diffusion steps (25; AlphaFold 3 was
+      trained with 200). Change any of them and Refold all folds every design again with the new ones.</li>
     <li>Click a column head to sort by it. By default, designs that pass come first, then the rest by the job's main number.</li>
     <li><span class="ui">Save all (.zip)</span>: the input, every design with its trajectory, every refold, and the table as
       <code>summary.csv</code>.</li>

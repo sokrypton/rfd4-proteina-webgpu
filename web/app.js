@@ -567,6 +567,8 @@ class Rfd4pStudioApp {
       refoldBox: document.getElementById('rfd4p-refold'),
       refoldModel: document.getElementById('rfd4p-refold-model'),
       refoldSeed: document.getElementById('rfd4p-refold-seed'),
+      refoldRecycles: document.getElementById('rfd4p-refold-recycles'),
+      refoldSteps: document.getElementById('rfd4p-refold-steps'),
       refoldBtn: document.getElementById('rfd4p-refold-btn'),
       refoldResult: document.getElementById('rfd4p-refold-result'),
       refoldTerms: document.getElementById('rfd4p-refold-terms'),
@@ -1309,12 +1311,16 @@ class Rfd4pStudioApp {
     if (!model) return;
     const name = REFOLD_MODELS[model] ?? model;
     const seed = Math.max(0, Number.parseInt(this.els.refoldSeed?.value ?? '0', 10) || 0);
+    const recycles = Math.max(0, Number.parseInt(this.els.refoldRecycles?.value ?? '3', 10) || 0);
+    const steps = Math.max(1, Number.parseInt(this.els.refoldSteps?.value ?? '25', 10) || 25);
+    const settings = { seed, recycles, steps };
     const all = (this.runs ?? []).flatMap((r) => r.designs);
-    // Refold all skips designs already refolded with this model and this seed: a new seed samples them again.
-    const todo = (sids ?? all.filter((sid) => !this.generatedViews.get(sid)?.refolds?.some((r) => r.model === model && (r.seed ?? 0) === seed)))
+    // Refold all skips designs already refolded with these settings: another seed, recycles or steps folds them again.
+    const same = (r) => r.model === model && (r.seed ?? 0) === seed && (r.recycles ?? 0) === recycles && (r.steps ?? 25) === steps;
+    const todo = (sids ?? all.filter((sid) => !this.generatedViews.get(sid)?.refolds?.some(same)))
       .filter((sid) => this.generatedViews.get(sid)?.pdb);
     if (!todo.length) {
-      this._setRefoldStatus(`Every design is refolded with ${name}, seed ${seed}.`);
+      this._setRefoldStatus(`Every design is refolded with ${name} with these settings.`);
       return;
     }
     const abort = new AbortController();
@@ -1347,7 +1353,7 @@ class Rfd4pStudioApp {
         this._renderDesigns();
         const tag = todo.length > 1 ? ` (${k + 1} of ${todo.length})` : '';
         this._setRefoldStatus(`Refolding Design ${view.designIndex} with ${name}${tag}…`);
-        const ok = await this._refoldOne(sid, model, seed, abort, lf,
+        const ok = await this._refoldOne(sid, model, settings, abort, lf,
           (text) => this._setRefoldStatus(`Design ${view.designIndex}${tag}: ${text}`));
         if (ok) done += 1;
         else if (!abort.signal.aborted) failed += 1;
@@ -1369,12 +1375,12 @@ class Rfd4pStudioApp {
   }
 
   /** One design's refold: scored, kept for "Save all", and drawn over the design. False if it failed. */
-  async _refoldOne(sid, model, seed, abort, lf, status) {
+  async _refoldOne(sid, model, { seed, recycles, steps }, abort, lf, status) {
     const view = this.generatedViews.get(sid);
     const name = REFOLD_MODELS[model] ?? model;
     try {
       const result = await lf.refoldDesign({
-        pdb: view.pdb, chain: view.designedChains, model, device: this.gpuDevice, seed, signal: abort.signal,
+        pdb: view.pdb, chain: view.designedChains, model, device: this.gpuDevice, seed, recycles, steps, signal: abort.signal,
         partial: view.partialTemplates ?? [],
         status: (text) => status(text.replace(/^refolding with \S+( · )?/, '') || `refolding with ${name}`),
       });
@@ -1382,7 +1388,7 @@ class Rfd4pStudioApp {
       view.pass = passes(view.metrics, view.kind);
       view.refoldText = describeRefold(model, result, view.designedChains, view.partialTemplates ?? []);
       (view.refolds ??= []).push({
-        model, seed, pdb: result.refold, cif: pdbToCif(result.refold), rmsd: result.rmsd, confidence: result.confidence,
+        model, seed, recycles, steps, pdb: result.refold, cif: pdbToCif(result.refold), rmsd: result.rmsd, confidence: result.confidence,
         templated: result.templated, partial: result.partial, text: view.refoldText, metrics: view.metrics, pass: view.pass,
       });
       view.refoldError = false;
