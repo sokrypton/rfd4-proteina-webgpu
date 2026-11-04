@@ -8,6 +8,9 @@
                 <button id="rfd4p-guide-btn" type="button" class="secondary compact rfd4p-guide-btn" title="How to set up, run and compare designs">Guide</button>
             </div>
 
+            <!-- One box, two tabs: Input (the start screen, then the design) and Outputs (the designs, once there are some). -->
+            <div id="rfd4p-job" class="rfd4p-job rfd4p-section" data-tab="input">
+            <div id="rfd4p-tabs" class="rfd4p-dtabs" role="tablist"></div>
             <!-- Start: nothing open yet. Each task opens a ready-made input (web/design-panel.js). -->
             <div id="rfd4p-start" class="rfd4p-start">
                 <!-- A new job from its parts, as the design view adds them; or an example below. -->
@@ -22,9 +25,6 @@
                 <button id="rfd4p-back" type="button" class="secondary compact" hidden>← Back to the current design</button>
             </div>
 
-            <!-- One box, two tabs once there are designs: Input (the design, below) and Outputs (the designs). -->
-            <div id="rfd4p-job" class="rfd4p-job rfd4p-section" data-tab="input">
-            <div id="rfd4p-tabs" class="rfd4p-dtabs" role="tablist" hidden></div>
             <!-- Design: what will be generated, read from the open document. -->
             <div id="rfd4p-design" class="rfd4p-design" hidden>
                 <div class="rfd4p-task-head">

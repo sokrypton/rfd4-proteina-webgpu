@@ -49,14 +49,13 @@ body:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]),
   padding: 12px 16px;
 }
 
-.rfd4p-card .card-title-row {
-  margin-bottom: 8px;
-  flex-wrap: nowrap;
-}
-.rfd4p-card .card-title-row h2, .rfd4p-card .card-title-row .viewer-backend { white-space: nowrap; }
+/* The card's title row (RFD4-Proteina, the backend, light/dark, Guide), moved into Studio's header at its right end
+   (web/app.js _mountCardIntoStudio), where the strip had room to spare. */
+.rfd4p-head { display: flex; align-items: center; gap: 6px; flex: none; margin: 0; flex-wrap: nowrap; }
+.rfd4p-head h2 { margin: 0 4px 0 0; font-size: 14px; white-space: nowrap; }
+.rfd4p-head .viewer-backend { white-space: nowrap; }
 
-.rfd4p-card .viewer-backend {
-  margin-left: auto;
+.rfd4p-head .viewer-backend {
   padding: 2px 7px;
   border-radius: 3px;
   color: var(--accent, #82aaff);
@@ -1058,7 +1057,13 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
   cursor: pointer;
 }
 .rfd4p-piece-pop .rfd4p-pop-x:hover { color: var(--text, #f1f1f2); }
-.rfd4p-starting #design-results, .rfd4p-starting #generation-status, .rfd4p-starting #rfd4p-tabs { display: none; }
+.rfd4p-starting #design-results, .rfd4p-starting #generation-status { display: none; }
+/* On the start screen the Input tab is the one open, and Outputs waits for a design. */
+.rfd4p-starting #rfd4p-job > .rfd4p-design { display: none; }
+#rfd4p-studio-card.rfd4p-starting .rfd4p-dtab:first-child {
+  color: var(--text, #ededef); border-color: var(--border, #383a3f); border-bottom-color: var(--rfd4p-box);
+}
+#rfd4p-studio-card.rfd4p-starting .rfd4p-dtab:not(:first-child) { opacity: 0.45; pointer-events: none; border-color: transparent; color: var(--text-muted, #b1b3b9); }
 
 /* The Designs table (web/app.js _renderDesigns): one row a design, its refold's numbers, sortable by column. */
 /* "Designs", its tables, then the Refold box: everything refolding takes, in one bordered square. */
@@ -1092,7 +1097,6 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 .rfd4p-job > .rfd4p-design[hidden], .rfd4p-job > #design-results[hidden] { display: none; }
 .rfd4p-design > .rfd4p-chain-actions { margin: 0; }
 .rfd4p-job[data-tab="input"] > #design-results, .rfd4p-job[data-tab="outputs"] > .rfd4p-design { display: none; }
-#rfd4p-studio-card .rfd4p-job:not(:has(> .rfd4p-design:not([hidden]))):not(:has(> #design-results:not([hidden]))) { display: none; }
 /* Input / Outputs tabs over the box's content. */
 .rfd4p-dtabs[hidden] { display: none; }
 .rfd4p-dtabs { display: flex; gap: 2px; margin-bottom: 0; border-bottom: 1px solid var(--border, #383a3f); }
@@ -1100,7 +1104,8 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
   min-height: 0; padding: 5px 10px; margin-bottom: -1px; border: 1px solid transparent; border-radius: 5px 5px 0 0;
   background: none; color: var(--text-muted, #b1b3b9); font-size: 12.5px; font-weight: 600; cursor: pointer;
 }
-#rfd4p-studio-card .rfd4p-dtab:hover { color: var(--text, #ededef); }
+#rfd4p-studio-card .rfd4p-dtab:hover:not(:disabled) { color: var(--text, #ededef); }
+#rfd4p-studio-card .rfd4p-dtab:disabled { opacity: 0.45; cursor: default; }
 #rfd4p-studio-card .rfd4p-dtab.is-on {
   color: var(--text, #ededef); border-color: var(--border, #383a3f); border-bottom-color: var(--rfd4p-box);
 }
@@ -1135,8 +1140,7 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 }
 
 /* The guide popup (web/guide-dialog.js), its content from help/index.html. */
-.rfd4p-card .rfd4p-guide-btn { margin-left: 6px; }
-.rfd4p-card .rfd4p-theme-btn { margin-left: 6px; min-width: 30px; padding: 0 6px; font-size: 14px; line-height: 1; }
+.rfd4p-head .rfd4p-theme-btn { min-width: 30px; padding: 0 6px; font-size: 14px; line-height: 1; }
 .rfd4p-guide {
   --hot: #f59e0b; --pass: var(--success, #45b99a); --refold: #e040fb; --muted: var(--text-muted, #a3a6ad);
   width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0;
@@ -1203,3 +1207,4 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 #rfd4p-studio-card .rfd4p-source-row:hover .rfd4p-source-x,
 #rfd4p-studio-card .rfd4p-source-row:focus-within .rfd4p-source-x { opacity: 1; }
 @media (hover: none) { #rfd4p-studio-card .rfd4p-source-x { opacity: 1; } }
+#rfd4p-fetch-status:empty { display: none; }

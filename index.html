@@ -10,7 +10,7 @@
     <!-- This site serves the Studio bundle itself; its offline cache would pin stale assets on Pages. -->
     <meta name="atomworks-studio-service-worker" content="off" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="./web/styles.css?v=7f0fe82314" />
+    <link rel="stylesheet" href="./web/styles.css?v=8c1a7a31c6" />
     <!-- Light or dark before anything draws, so the viewer never flashes the other colour (web/app.js _initTheme keeps it). -->
     <script>
       try {
@@ -45,8 +45,8 @@
           "./shared/rfd4p/presets.js": "./shared/rfd4p/presets.js?v=8db26644f7",
           "./shared/rfd4p/safetensors.js": "./shared/rfd4p/safetensors.js?v=c238bc6559",
           "./shared/rfd4p/vendor/fzstd.js": "./shared/rfd4p/vendor/fzstd.js?v=e6cdba40d4",
-          "./web/app.js": "./web/app.js?v=e9affbaabb",
-          "./web/design-panel.js": "./web/design-panel.js?v=486631d483",
+          "./web/app.js": "./web/app.js?v=ca69527ea4",
+          "./web/design-panel.js": "./web/design-panel.js?v=0063c956b5",
           "./web/design-spec.js": "./web/design-spec.js?v=5b8999f1bb",
           "./web/guide-dialog.js": "./web/guide-dialog.js?v=df4c3ca412",
           "./web/ligand-ccd.js": "./web/ligand-ccd.js?v=b937ddbebf",
@@ -66,7 +66,7 @@
       }
     </script>
     <!-- module-versions:end -->
-    <script type="module" src="./web/app.js?v=e9affbaabb"></script>
+    <script type="module" src="./web/app.js?v=ca69527ea4"></script>
     <script type="module" crossorigin src="./assets/index-BDSqyf6X.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-XVSNrjGR.css">
   </head>
@@ -81,6 +81,9 @@
                 <button id="rfd4p-guide-btn" type="button" class="secondary compact rfd4p-guide-btn" title="How to set up, run and compare designs">Guide</button>
             </div>
 
+            <!-- One box, two tabs: Input (the start screen, then the design) and Outputs (the designs, once there are some). -->
+            <div id="rfd4p-job" class="rfd4p-job rfd4p-section" data-tab="input">
+            <div id="rfd4p-tabs" class="rfd4p-dtabs" role="tablist"></div>
             <!-- Start: nothing open yet. Each task opens a ready-made input (web/design-panel.js). -->
             <div id="rfd4p-start" class="rfd4p-start">
                 <!-- A new job from its parts, as the design view adds them; or an example below. -->
@@ -95,9 +98,6 @@
                 <button id="rfd4p-back" type="button" class="secondary compact" hidden>← Back to the current design</button>
             </div>
 
-            <!-- One box, two tabs once there are designs: Input (the design, below) and Outputs (the designs). -->
-            <div id="rfd4p-job" class="rfd4p-job rfd4p-section" data-tab="input">
-            <div id="rfd4p-tabs" class="rfd4p-dtabs" role="tablist" hidden></div>
             <!-- Design: what will be generated, read from the open document. -->
             <div id="rfd4p-design" class="rfd4p-design" hidden>
                 <div class="rfd4p-task-head">

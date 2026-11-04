@@ -703,7 +703,11 @@ export class DesignPanel {
     if (els.runSettings) els.runSettings.hidden = starting;
     // A run's results and status belong to the document, so they go with it.
     els.start?.closest('#rfd4p-studio-card')?.classList.toggle('rfd4p-starting', starting);
-    if (!hasDoc || (starting && !this.building)) return;
+    if (!hasDoc || (starting && !this.building)) {
+      // The start screen sits under the Input tab too.
+      this.app._renderDesigns?.();
+      return;
+    }
 
     const viewingDesign = this._viewingDesign();
     els.design.classList.toggle('rfd4p-readonly', viewingDesign);
@@ -735,7 +739,8 @@ export class DesignPanel {
 
     this.showHotspots();
     // An edit to the input changes which Input rows the Designs table shows (the input as it is now, or as a run had it).
-    if (this.app.runs?.length) this.app._renderDesigns?.();
+    // Also with no runs: the Input / Outputs tabs are there from the start.
+    this.app._renderDesigns?.();
     // A job is open: have the model ready before Generate, if its weights are already cached (nothing is downloaded).
     this.app.preloadWeights?.();
 

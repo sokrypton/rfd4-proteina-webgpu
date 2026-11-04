@@ -105,7 +105,7 @@ const SCENES = {
   async start() {
     await page(`async (w, d, sleep) => { for (let i = 0; i < 600 && !d.querySelector('[data-example]'); i++) await sleep(50); await sleep(1500); }`);
     // The parts to start from and the first examples: enough to see what is there.
-    await shot('start', await around(['#rfd4p-studio-card .card-title-row', '.rfd4p-start-actions', '.rfd4p-task-card:nth-child(-n+4)']));
+    await shot('start', await around(['.rfd4p-start-actions', '.rfd4p-task-card:nth-child(-n+4)']));
   },
   // The binder example: the card's pieces beside the target, hotspots in amber.
   async card() {

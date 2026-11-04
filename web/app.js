@@ -586,6 +586,14 @@ class Rfd4pStudioApp {
       popover.prepend(card);
       this._bindControls();
     }
+    // The title row (RFD4-Proteina, backend, light/dark, Guide) goes to the right end of Studio's header, which had room
+    // to spare, so the card starts with the design.
+    const head = this.els.studioCard?.querySelector('.card-title-row') ?? document.querySelector('.rfd4p-head');
+    const header = document.querySelector('.app-shell > header') ?? document.querySelector('header');
+    if (head && header && head.parentElement !== header) {
+      head.classList.add('rfd4p-head');
+      header.append(head);
+    }
     const closeBtn = document.getElementById('close-structure');
     if (closeBtn && !closeBtn.__rfd4pCloseBound) {
       closeBtn.__rfd4pCloseBound = true;
@@ -1197,20 +1205,20 @@ class Rfd4pStudioApp {
       tr.addEventListener('click', (ev) => { if (!ev.target.closest('button, label, input')) radio.click(); });
       return tr;
     };
-    // One box, two tabs once there are designs: Input (the design being edited) and Outputs (this table). The structure
+    // One box, two tabs from the start: Input (the start screen, then the design being edited) and Outputs (this
+    // table; greyed out until there are designs). The structure
     // shown says which is open, and opening a tab shows its structure (Outputs: the design last looked at).
     const input = views.get(this.inputSessionId);
     const designSids = runs[0]?.designs ?? [];
     const onInput = !designs.length || this.studioSessionId === this.inputSessionId;
     const tab = (label, on, sid) => h('button', {
       type: 'button', role: 'tab', class: `rfd4p-dtab${on ? ' is-on' : ''}`, 'aria-selected': String(on), text: label,
-      onclick: () => { if (!on && sid) void this._selectDesign(sid); },
+      disabled: !on && !sid, onclick: () => { if (!on && sid) void this._selectDesign(sid); },
     });
     const lastSeen = designSids.includes(this.lastDesignSid) ? this.lastDesignSid : designSids[0];
     if (this.els.jobTabs) {
       this.els.jobTabs.replaceChildren(tab('Input', onInput, input?.isInput ? this.inputSessionId : null),
-        tab(`Outputs (${designSids.length})`, !onInput, lastSeen));
-      this.els.jobTabs.hidden = !designs.length;
+        tab(designSids.length ? `Outputs (${designSids.length})` : 'Outputs', !onInput, lastSeen));
     }
     if (this.els.jobBox) this.els.jobBox.dataset.tab = onInput ? 'input' : 'outputs';
     const table = h('table', { class: 'rfd4p-dtable' }, thead(), h('tbody', {}, ...order(designSids).map(([sid, v]) => row(sid, v))));
