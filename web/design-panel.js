@@ -677,6 +677,8 @@ export class DesignPanel {
     this.showHotspots();
     // An edit to the input changes which Input rows the Designs table shows (the input as it is now, or as a run had it).
     if (this.app.runs?.length) this.app._renderDesigns?.();
+    // A job is open: have the model ready before Generate, if its weights are already cached (nothing is downloaded).
+    this.app.preloadWeights?.();
 
     // Nothing to generate: keep Generate off (a running job keeps its Stop button).
     if (!this.app.activeAbortController && this.app.els.predictBtn) {

@@ -78,6 +78,7 @@ import {
   fetchShardedWeights,
   parseSafetensors,
   readShardedTensor,
+  shardedWeightsCached,
 } from '../shared/rfd4p/safetensors.js';
 import {
   aeMasks,
@@ -216,6 +217,7 @@ export {
   fetchShardedWeights,
   parseSafetensors,
   readShardedTensor,
+  shardedWeightsCached,
   aeMasks,
   decodeLatentsCpu,
   decoderPostprocess,

@@ -673,3 +673,10 @@ the card's notice), fewer passes (quality), and shorter jobs (crop the target).
 
 **Lost, do not repeat:** the same compiled-in K on `gemmSubmatSource` (developer flags): 0.972x / 0.971x a pass at
 n = 100 / 208 (triProjG 0.96-0.97x), bit-identical. The matrix kernel keeps reading K from the uniform block.
+
+**Shipped: the model preloaded once a job is open** (`app.preloadWeights`, `shardedWeightsCached`): when every core
+shard is already in the browser's cache (only the manifest is fetched to check; nothing else is downloaded, so a metered
+visitor pays nothing), the weights load and go to the GPU before Generate. A returning visitor's first design reaches
+step 1 in 1.8-2.1 s instead of 2.5-2.8 s (binder example, interleaved, M2). On `localhost` the weight cache is off by
+design; tests turn it on with `globalThis.__rfd4pCacheWeights = true`. Also tried: a tiny warm-up design (8 residues,
+2 steps) to compile the pipelines ahead: 1.26-1.40 s vs 1.41 s, within noise, not shipped.

@@ -209,7 +209,8 @@ export async function fetchShardedWeights(baseDir = DEFAULT_LOCAL_SHARDED_DIR, o
     includeEncoder = false,
     onProgress = null,
     signal = null,
-    cache: useCache = isRemote,
+    // Tests switch the cache on for a local server (`__rfd4pCacheWeights`), as it is for the site.
+    cache: useCache = isRemote || globalThis.__rfd4pCacheWeights === true,
   } = opts;
 
   const manifestRes = await fetchWithRetry(`${cleanBase}/manifest.json`, signal);
@@ -348,6 +349,28 @@ export async function fetchShardedWeights(baseDir = DEFAULT_LOCAL_SHARDED_DIR, o
  * @param {string} [url]
  * @returns {Promise<object>} Unwrapped model configuration (`{ nn, autoencoder_config, ... }`)
  */
+/**
+ * Whether every shard a design needs (all but the encoder's) is already in the browser's cache, so loading them would
+ * download nothing: only the manifest (a few kB) is fetched to know their names. False wherever caches are unavailable.
+ */
+export async function shardedWeightsCached(baseDir = DEFAULT_LOCAL_SHARDED_DIR) {
+  if (typeof caches === 'undefined') return false;
+  try {
+    const cleanBase = baseDir.replace(/\/+$/, '');
+    const manifest = await (await fetch(`${cleanBase}/manifest.json`)).json();
+    const cacheName = `rfd4p-sharded-${manifest.bundle?.format ?? 'int8'}-${manifest.bundle?.bytes ?? 0}`;
+    if (!(await caches.keys()).includes(cacheName)) return false;
+    const store = await caches.open(cacheName);
+    const files = manifest.shards
+      ? manifest.shards.filter((sh) => sh.role !== 'encoder').map((sh) => sh.file)
+      : [...new Set(Object.values(manifest.tensors ?? {}).map((rec) => rec.file))];
+    for (const file of files) if (!(await store.match(`${cleanBase}/${file}`))) return false;
+    return files.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchRfd4pConfig(url = DEFAULT_LOCAL_CONFIG_URL) {
   let res = await fetch(url).catch(() => null);
   if (!res || !res.ok) {
