@@ -728,3 +728,12 @@ cost f32 staging 27%). The 2x is the matrix units (subgroup matrices, P0), and n
 substitutes for them. Fewer multiply-adds (Strassen-style) would trade O(n^2) adds and f16 error for at most 12.5%
 per level; not worth it. Remaining stock-path levers are outside the GEMM: fewer passes (P2), the live frame's
 decode (~9% of a design).
+
+### 15.2 K-tile 32 (half the barriers per multiply-add): 0.87x / 0.82x, bit-identical
+
+Built as `gemmVariant.ktile32` (two 16-deep stagings per barrier pair, full-K calls with K % 32 == 0, prefetch kept
+for the first half), measured in the trunk, 3 interleaved rounds: pass 279.7 -> 321.5 ms at n=100 (0.87x), 1138.9 ->
+1382.7 at n=208 (0.82x); triProjG 0.87x / 0.82x, the LN-in GEMM 0.76x / 0.72x. Doubling workgroup memory (6.4 ->
+12.8 KB) halves workgroups per core, exactly as f32 staging did, and that costs more than the barriers it saves.
+Reverted. With 15.1 this closes the stock GEMM: occupancy is the only thing that pays for the barriers, and the
+FMAs are at the issue rate.
