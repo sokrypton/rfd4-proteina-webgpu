@@ -28,8 +28,13 @@ for (const m of page.matchAll(/(?:src|href)="(\.\/[^"]+)"/g)) refs.add(m[1]);
 for (const m of page.matchAll(/"(\.\/[A-Za-z0-9._/-]+\.(?:js|css|wasm|svg|json|webmanifest))"/g)) refs.add(m[1]);
 for (const ref of [...refs].sort()) {
   const clean = ref.replace(/^\.\//, '').split('?')[0];
-  if (!clean || clean.endsWith('/')) continue;
-  if (!existsSync(join(ROOT, clean))) problems.push(`missing asset referenced by index.html: ${clean}`);
+  if (!clean) continue;
+  // A link to a directory is served by its index.html, so that is what has to exist. `./guide/` is the live
+  // case: skipping these meant the guide could go missing and the page would 404 with every check still green.
+  const target = clean.endsWith('/') ? `${clean}index.html` : clean;
+  if (!existsSync(join(ROOT, target))) {
+    problems.push(`missing asset referenced by index.html: ${target}`);
+  }
 }
 
 // 3. The Studio bridge.
