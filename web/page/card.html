@@ -108,13 +108,6 @@
 
             <div id="rfd4p-run-settings" class="rfd4p-run-settings rfd4p-section" hidden>
 
-            <fieldset class="representation-mode rfd4p-thinking-group" id="thinking-radio-group" aria-label="Thinking">
-                <legend title="Extra recycling passes: slower, sometimes better designs">Thinking</legend>
-                <label><input type="radio" name="thinking-radio" value="none" checked />none</label>
-                <label><input type="radio" name="thinking-radio" value="low" />low</label>
-                <label><input type="radio" name="thinking-radio" value="medium" />med</label>
-                <label><input type="radio" name="thinking-radio" value="high" />high</label>
-            </fieldset>
             <!-- How many designs, beside the button that makes them. -->
             <div class="rfd4p-generate-row">
                 <input type="number" id="samples-input" class="rfd4p-designs-count" value="1" min="1" max="8" step="1"
@@ -123,6 +116,13 @@
                     Generate design
                 </button>
             </div>
+            <fieldset class="representation-mode rfd4p-thinking-group" id="thinking-radio-group" aria-label="Thinking">
+                <legend title="Extra recycling passes: slower, sometimes better designs">Thinking</legend>
+                <label><input type="radio" name="thinking-radio" value="none" checked />none</label>
+                <label><input type="radio" name="thinking-radio" value="low" />low</label>
+                <label><input type="radio" name="thinking-radio" value="medium" />med</label>
+                <label><input type="radio" name="thinking-radio" value="high" />high</label>
+            </fieldset>
             <details class="rfd4p-sampling-details" id="sampling-accordion">
                 <summary>More settings</summary>
                 <div class="rfd4p-sampling-body">

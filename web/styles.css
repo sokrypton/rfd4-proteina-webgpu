@@ -1101,8 +1101,10 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 .rfd4p-dtabs[hidden] { display: none; }
 .rfd4p-dtabs { display: flex; gap: 2px; margin-bottom: 0; }
 /* Tabs on the left, Clear and Undo on the right, one line under both. */
-.rfd4p-tabrow { display: flex; align-items: flex-end; gap: 8px; border-bottom: 1px solid var(--border, #383a3f); }
-.rfd4p-tabrow .rfd4p-task-buttons { margin: 0 0 4px auto; }
+.rfd4p-tabrow { position: relative; display: flex; align-items: flex-end; border-bottom: 1px solid var(--border, #383a3f); }
+/* Out of the row's flow, so the tabs are the same height whether Clear and Undo show or not. */
+.rfd4p-tabrow .rfd4p-task-buttons { position: absolute; right: 0; bottom: 4px; }
+#rfd4p-studio-card .rfd4p-tabrow .rfd4p-task-buttons button { min-height: 0; height: 24px; padding: 0 8px; font-size: 12px; }
 
 #rfd4p-studio-card .rfd4p-dtab {
   min-height: 0; padding: 5px 10px; margin-bottom: -1px; border: 1px solid transparent; border-radius: 5px 5px 0 0;
