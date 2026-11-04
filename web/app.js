@@ -1238,25 +1238,57 @@ class Rfd4pStudioApp {
     return k > 0 ? `${v.seed} (${k + 1})` : String(v.seed);
   }
 
-  /** The refold controls: Refold all (Stop while refolds run), and what the refolds are doing. */
+  /**
+   * The refold controls. Refold all is also the refolds' progress, as Generate is a run's: "Stop · seed 163509 (2 of 3)
+   * · 40%", filling up, cut short with an ellipsis when narrow (the whole of it in its tooltip). The parameters coming
+   * down fill it too, even before a click, since that wait is minutes on a slow link. Only a failure gets a line.
+   */
   _syncRefoldUi() {
     const any = (this.runs ?? []).some((r) => r.designs.length);
     if (this.els.refoldBox) this.els.refoldBox.hidden = !any || this.noWebGpu;
-    if (this.els.refoldBtn) this.els.refoldBtn.textContent = this.refoldAbort ? 'Stop' : 'Refold all';
+    const btn = this.els.refoldBtn;
+    if (btn) {
+      const pre = this.weightPrefetch;
+      const fetching = pre && !pre.done && pre.totalBytes ? pre : null;
+      const mb = (bytes) => (bytes / 1e6).toFixed(0);
+      let label = this.refoldAbort ? 'Stop' : (this.refoldNote ?? 'Refold all');
+      let fraction = null;
+      if (this.refoldAbort && this.refoldLabel) {
+        label = `Stop · ${this.refoldLabel}`;
+        fraction = this.refoldFraction ?? 0;
+      } else if (fetching) {
+        label = `${label} · ${pre.name} ${mb(pre.loadedBytes)} / ${mb(pre.totalBytes)} MB`;
+        fraction = pre.loadedBytes / pre.totalBytes;
+      }
+      btn.textContent = label;
+      btn.title = fetching && !this.refoldAbort
+        ? `Downloading ${pre.name} parameters: first time only, kept for next time` : 'Refold every design not yet refolded with these settings';
+      btn.classList.toggle('rfd4p-running', fraction !== null);
+      btn.style.setProperty('--rfd4p-progress', `${(Math.max(0, Math.min(1, fraction ?? 0)) * 100).toFixed(1)}%`);
+    }
     if (this.els.refoldResult) {
-      // The refolds' own news wins; otherwise say if the parameters are still coming down, because that wait is
-      // minutes long on a slow link and used to show nothing at all.
-      const text = this.refoldStatus ?? this._prefetchNote();
+      const text = this.refoldStatusError ? this.refoldStatus : null;
       this.els.refoldResult.textContent = text ?? '';
-      this.els.refoldResult.classList.toggle('error', Boolean(this.refoldStatus && this.refoldStatusError));
+      this.els.refoldResult.classList.toggle('error', Boolean(text));
       this.els.refoldResult.hidden = !text;
     }
   }
 
-  _setRefoldStatus(text, isError = false) {
+  /** What the refolds are doing, for the button (`label`, `fraction` of the whole) or, on a failure, its line. */
+  _setRefoldStatus(text, isError = false, { label = null, fraction = null } = {}) {
     this.refoldStatus = text;
     this.refoldStatusError = isError;
+    this.refoldLabel = label;
+    this.refoldFraction = fraction;
     this._syncRefoldUi();
+  }
+
+  /** A word on the idle button for a moment ("All refolded"), back to Refold all after. */
+  _flashRefoldNote(text) {
+    this.refoldNote = text;
+    this._syncRefoldUi();
+    clearTimeout(this.refoldNoteTimer);
+    this.refoldNoteTimer = setTimeout(() => { this.refoldNote = null; this._syncRefoldUi(); }, 2500);
   }
 
   /** Whether AlphaFold 3's weights terms have already been agreed to in this browser. */
@@ -1303,14 +1335,6 @@ class Rfd4pStudioApp {
   }
 
   /** What the Refold row says while parameters are still coming down, or nothing once they are here. */
-  _prefetchNote() {
-    const state = this.weightPrefetch;
-    if (!state || state.done || !state.totalBytes) return null;
-    const mb = (bytes) => (bytes / 1e6).toFixed(0);
-    return `Downloading ${state.name} parameters — ${mb(state.loadedBytes)} of ${mb(state.totalBytes)} MB.`
-      + ' First time only; it is kept for next time.';
-  }
-
   /**
    * AlphaFold 3's parameters are Google DeepMind's, for non-commercial use under a prohibited-use policy: ask once per
    * browser, and offer OpenBind-0 (same architecture, Apache 2.0) as the way past rather than only through.
@@ -1359,7 +1383,8 @@ class Rfd4pStudioApp {
     const todo = (sids ?? all.filter((sid) => !this.generatedViews.get(sid)?.refolds?.some(same)))
       .filter((sid) => this.generatedViews.get(sid)?.pdb);
     if (!todo.length) {
-      this._setRefoldStatus(`Every design is refolded with ${name} with these settings.`);
+      this._setRefoldStatus(null);
+      this._flashRefoldNote('All refolded with these settings');
       return;
     }
     const abort = new AbortController();
@@ -1381,8 +1406,8 @@ class Rfd4pStudioApp {
         const loaded = progress.loadedBytes ?? 0;
         const total = progress.totalBytes ?? 0;
         if (!total) return;
-        this._setRefoldStatus(`${name}: downloading parameters — ${(loaded / 1e6).toFixed(0)} of ${(total / 1e6).toFixed(0)} MB.`
-          + ' First time only; it is kept for next time.');
+        this._setRefoldStatus(null, false,
+          { label: `${name} ${(loaded / 1e6).toFixed(0)} / ${(total / 1e6).toFixed(0)} MB`, fraction: loaded / total });
       }, lf.FOLDERS[model] ?? model);
       for (let k = 0; k < todo.length && !abort.signal.aborted; k += 1) {
         const sid = todo[k];
@@ -1391,18 +1416,23 @@ class Rfd4pStudioApp {
         this.refoldSid = sid;
         this._renderDesigns();
         const tag = todo.length > 1 ? ` (${k + 1} of ${todo.length})` : '';
-        this._setRefoldStatus(`Refolding seed ${this._designName(view)} with ${name}${tag}…`);
-        const ok = await this._refoldOne(sid, model, settings, abort, lf,
-          (text) => this._setRefoldStatus(`Seed ${this._designName(view)}${tag}: ${text}`));
+        const what = `seed ${this._designName(view)}${tag}`;
+        this._setRefoldStatus(null, false, { label: what, fraction: k / todo.length });
+        // LocalFold reports "phase · 40%": the button fills by it within this design's share.
+        const ok = await this._refoldOne(sid, model, settings, abort, lf, (text) => {
+          const pct = /(\d+)%/.exec(text);
+          const inner = pct ? Math.min(1, Number(pct[1]) / 100) : 0;
+          this._setRefoldStatus(null, false, { label: `${what}${pct ? ` · ${pct[1]}%` : ''}`, fraction: (k + inner) / todo.length });
+        });
         if (ok) done += 1;
         else if (!abort.signal.aborted) failed += 1;
       }
       const stopped = abort.signal.aborted ? ' Stopped.' : '';
-      this._setRefoldStatus(`Refolded ${done} design${done === 1 ? '' : 's'} with ${name}.${failed ? ` ${failed} failed.` : ''}${stopped}`,
+      this._setRefoldStatus(failed ? `Refolded ${done} design${done === 1 ? '' : 's'} with ${name}; ${failed} failed.${stopped}` : null,
         failed > 0);
     } catch (err) {
       if (!abort.signal.aborted) console.error('Refold failed:', err);
-      this._setRefoldStatus(abort.signal.aborted ? 'Refold stopped.' : `Refold failed: ${err?.message ?? err}`, !abort.signal.aborted);
+      this._setRefoldStatus(abort.signal.aborted ? null : `Refold failed: ${err?.message ?? err}`, !abort.signal.aborted);
     } finally {
       if (this.refoldAbort === abort) {
         this.refoldAbort = null;

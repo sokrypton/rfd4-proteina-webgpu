@@ -1088,6 +1088,9 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 .rfd4p-designs-busy .rfd4p-design-sort { pointer-events: none; opacity: 0.6; }
 
 /* A run's progress fills its button (Stop, while it runs). */
+/* Refold all is also the refolds' progress (and the parameters' download): one line, cut with an ellipsis. */
+#rfd4p-studio-card #rfd4p-refold-btn { display: block; width: 100%; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#rfd4p-studio-card #rfd4p-refold-btn.rfd4p-running,
 #rfd4p-studio-card .rfd4p-generate-btn.rfd4p-running {
   background: linear-gradient(90deg, var(--accent-soft, #26354c) var(--rfd4p-progress, 0%),
     var(--surface-recessed, #191a1c) var(--rfd4p-progress, 0%));
