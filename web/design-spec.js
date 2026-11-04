@@ -341,7 +341,7 @@ function chainPieces(residues, segmentWhere) {
     if (p.kind === 'new') {
       run = null;
       out.push({ kind: 'new', min: r.segment.min, max: r.segment.max, atomIndex: r.segment.atomIndex,
-        where: segmentWhere.get(r.segment.atomIndex) ?? '', count: 0, atomIndices: r.atomIndices, hotspots: [], ss: r.ss, rasa: r.rasa, inter: r.inter });
+        where: segmentWhere.get(r.segment.atomIndex) ?? '', count: 0, atomIndices: r.atomIndices, hotspots: [], ss: r.ss, rasa: r.rasa, inter: r.inter, fold: r.fold });
       continue;
     }
     const src = splitSource(r.source);

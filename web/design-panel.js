@@ -643,7 +643,10 @@ export class DesignPanel {
     const viewingDesign = this._viewingDesign();
     els.design.classList.toggle('rfd4p-readonly', viewingDesign);
     els.taskLabel.textContent = spec.task.label;
-    els.taskDetail.textContent = viewingDesign ? 'A generated design (read-only). Select Input under Designs to edit.' : '';
+    const snapshot = viewingDesign && this.app.generatedViews?.get(this.app.studioSessionId)?.isSnapshot;
+    els.taskDetail.textContent = !viewingDesign ? '' : snapshot
+      ? 'The input of an earlier run (read-only). Select the editable Input under Designs to edit.'
+      : 'A generated design (read-only). Select Input under Designs to edit.';
     els.taskDetail.hidden = !viewingDesign;
     if (els.newDoc) els.newDoc.hidden = viewingDesign;
     const actions = els.addSeq?.parentElement;
@@ -669,6 +672,8 @@ export class DesignPanel {
     els.warnings.replaceChildren(...notes);
 
     this.showHotspots();
+    // An edit to the input changes which Input rows the Designs table shows (the input as it is now, or as a run had it).
+    if (this.app.runs?.length) this.app._renderDesigns?.();
 
     // Nothing to generate: keep Generate off (a running job keeps its Stop button).
     if (!this.app.activeAbortController && this.app.els.predictBtn) {
@@ -770,7 +775,11 @@ export class DesignPanel {
   _status(p) {
     const word = (options, v) => (v ? options.find(([k]) => k === String(v))?.[1] ?? '' : '');
     // "new" last, so it lines up down a chain of blocks ("helix · new", "loop · new").
-    if (p.kind === 'new') return [word(SHAPE_OPTIONS, p.ss), word(EXPOSURE_OPTIONS, p.rasa), 'new'].filter(Boolean).join(' · ');
+    if (p.kind === 'new') {
+      const code = String(p.fold ?? '').replace(/(\.x)+$/, '');
+      const fold = code ? FOLD_OPTIONS.find(([k]) => k === code)?.[1] ?? code : '';
+      return [fold, word(SHAPE_OPTIONS, p.ss), word(EXPOSURE_OPTIONS, p.rasa), 'new'].filter(Boolean).join(' · ');
+    }
     const { structure, atoms, names, sequence, position } = this._properties(p);
     // The popup's words: both fixed reads "fixed", both free "free", otherwise which one is fixed; part of the atoms
     // says which.
@@ -1039,10 +1048,16 @@ export class DesignPanel {
    * The Fold row for chain `c` (named folds, or a CATH code typed under "other"), and `apply()`, which sets it on the
    * chain's residues and new residues (each new residue takes it when the job is built). Resolves false on a bad code.
    */
-  _foldField(c, note) {
-    const now = String(c.fold ?? '').replace(/(\.x)+$/, '');
+  /**
+   * The Fold row (CATH): of the whole chain from its chain popup, or with `block` (a new-residues piece) of those new
+   * residues only, so a chain can hold domains of different folds (a kept domain and a β-barrel built onto it). The
+   * label is per residue, as the model reads it.
+   */
+  _foldField(c, note, block = null) {
+    const now = String((block ? block.fold : c.fold) ?? '').replace(/(\.x)+$/, '');
     const known = FOLD_OPTIONS.some(([v]) => v && v !== 'other' && v === now);
-    const select = el('select', { 'aria-label': 'Fold', title: 'A fold for the whole chain to take (CATH)' });
+    const select = el('select', { 'aria-label': 'Fold',
+      title: block ? 'A fold for these new residues to take (CATH); the rest of the chain keeps its own' : 'A fold for the whole chain to take (CATH)' });
     for (const [v, text] of FOLD_OPTIONS) {
       select.append(el('option', { value: v, text: v && v !== 'other' ? `${text} (${v})` : text,
         selected: v === (known ? now : now ? 'other' : '') }));
@@ -1056,7 +1071,7 @@ export class DesignPanel {
     const apply = async () => {
       const want = select.value === 'other' ? code.value.trim() : select.value;
       if (want && !/^\d+(\.\d+){0,3}$/.test(want)) { note.textContent = 'A fold code is numbers with dots, e.g. 3.30.70'; return false; }
-      const atoms = [...c.polymerAtomIndices, ...c.segments.map((g) => g.atomIndex)];
+      const atoms = block ? block.atomIndices : [...c.polymerAtomIndices, ...c.segments.map((g) => g.atomIndex)];
       if (want === now || !atoms.length) return true;
       return this._batch([{ condition: 'cath_label', atom_indices: atoms, enabled: Boolean(want), value: want, scope: 'residue' }]);
     };
@@ -1546,7 +1561,7 @@ export class DesignPanel {
     const extra = this._extraFields({ ss: p.ss, rasa: p.rasa }, { interaction: false });
     const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
     // The chain's fold, here too: where a new chain is laid out is where one looks for it.
-    const fold = this._foldField(c, note);
+    const fold = this._foldField(c, note, p);
     const apply = async () => {
       const lo = Math.max(1, Math.round(Number(min.value)) || p.min);
       const hi = Math.max(lo, Math.round(Number(max.value)) || p.max);

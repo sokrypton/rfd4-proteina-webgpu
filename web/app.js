@@ -1051,7 +1051,7 @@ class Rfd4pStudioApp {
     const views = [...this.generatedViews.entries()];
     const input = views.find(([, v]) => v.isInput)?.[1];
     const store = getSharedStudioStore();
-    const designs = views.filter(([, v]) => !v.isInput && !v.isRefold && v.cif)
+    const designs = views.filter(([, v]) => !v.isInput && !v.isRefold && !v.isSnapshot && v.cif)
       .map(([sid, v]) => ({
         index: v.designIndex ?? 1, label: v.label, seed: v.seed, stepsRun: v.stepsRun, nsteps: v.nsteps,
         cif: v.cif, pdb: v.pdb, trajectoryCif: store.getSession(sid)?.trajectoryCif ?? null,
@@ -1091,7 +1091,8 @@ class Rfd4pStudioApp {
     const box = this.els.designViewRadios;
     if (!this.els.designResultsRow || !box) return;
     const views = this.generatedViews;
-    const runs = (this.runs ?? []).filter((r) => r.designs.length);
+    // Runs belong to the input they were made from; another input opened shows none until it has its own.
+    const runs = this.runsInput === this.inputSessionId ? (this.runs ?? []).filter((r) => r.designs.length) : [];
     const designs = runs.flatMap((r) => r.designs).map((sid) => views.get(sid)).filter(Boolean);
     const kind = designs.find((v) => v.kind != null)?.kind ?? null;
     const placed = kind === 'binder' || kind === 'antibody';
@@ -1134,42 +1135,50 @@ class Rfd4pStudioApp {
         },
       })),
       h('span'));
-    const row = (sid, v) => {
+    const row = (sid, v, inputTitle = null) => {
       const cls = ['rfd4p-design-row', v.isInput ? 'rfd4p-design-input' : '',
         v.pass === true ? 'rfd4p-design-pass' : '', v.pass === false ? 'rfd4p-design-fail' : ''].filter(Boolean).join(' ');
-      const label = h('label', { class: cls, style: `grid-template-columns: ${grid}`, title: v.isInput ? 'The input the designs were made from' : `seed ${v.seed}` });
+      const isInputRow = v.isInput || v.isSnapshot;
+      const label = h('label', { class: cls, style: `grid-template-columns: ${grid}`, title: isInputRow ? inputTitle : `seed ${v.seed}` });
       const radio = h('input', { type: 'radio', name: 'design-view-radio', value: sid });
       radio.checked = sid === this.studioSessionId;
-      label.append(radio, h('span', { class: 'rfd4p-design-name', text: v.isInput ? 'Input' : `Design ${v.designIndex}` }),
+      label.append(radio, h('span', { class: 'rfd4p-design-name', text: isInputRow ? 'Input' : `Design ${v.designIndex}` }),
         h('span', { class: 'rfd4p-design-mark', text: v.pass === true ? '✓' : '' }));
-      const state = v.isInput ? '' : this.refoldSid === sid ? 'refolding…' : this.refoldQueue?.includes(sid) ? 'queued'
+      const state = isInputRow ? '' : this.refoldSid === sid ? 'refolding…' : this.refoldQueue?.includes(sid) ? 'queued'
         : v.refoldError ? 'refold failed' : null;
       if (state !== null) label.append(h('span', { class: 'rfd4p-design-state', text: state, style: `grid-column: span ${cols.length}` }));
       else for (const c of cols) { const x = value(v, c.key); label.append(h('span', { class: 'rfd4p-design-num', text: x === null ? '' : c.fmt(x) })); }
       const stop = (fn) => (ev) => { ev.preventDefault(); ev.stopPropagation(); fn(); };
       label.append(h('span', { class: 'rfd4p-design-actions' },
-        v.isInput || this.noWebGpu ? null : h('button', {
+        isInputRow || this.noWebGpu ? null : h('button', {
           type: 'button', class: 'rfd4p-design-act rfd4p-design-refold', text: '↻', disabled: busy,
           title: v.metrics ? 'Refold this design again' : 'Refold this design', 'aria-label': `Refold Design ${v.designIndex}`,
           onclick: stop(() => { void this._refoldDesigns([sid]); }),
         }),
         h('button', {
           type: 'button', class: 'rfd4p-design-act', text: '⤓', title: 'Download this structure (CIF)',
-          'aria-label': `Download ${v.isInput ? 'the input' : `Design ${v.designIndex}`}`,
+          'aria-label': `Download ${isInputRow ? 'the input' : `Design ${v.designIndex}`}`,
           onclick: stop(() => this._downloadText(v.cif, `${v.filenameStem || 'design'}.cif`, 'chemical/x-mmcif')),
         })));
       return label;
     };
+    // Each run's own input first in its group: the input itself while it is unchanged since the newest run, else the
+    // run's read-only copy. The input as it is now heads the table only once it has changed since that run.
     const input = views.get(this.inputSessionId);
+    const revisionNow = getSharedStudioStore().getSession(this.inputSessionId)?.revision ?? null;
     const parts = [head];
-    if (input?.isInput) parts.push(row(this.inputSessionId, input));
+    const newest = runs.at(-1);
+    const unchanged = (r) => r === newest && r.inputRevision === revisionNow;
+    if (input?.isInput && (!newest || !unchanged(newest))) parts.push(row(this.inputSessionId, input, 'The input as it is now (editable)'));
     const seedText = (r) => (r.seeds[0] === r.seeds[1] ? `seed ${r.seeds[0]}` : `seeds ${r.seeds[0]}–${r.seeds[1]}`);
     for (const [k, r] of runs.entries()) {
-      const rows = order(r.designs).map(([sid, v]) => row(sid, v));
+      const own = unchanged(r) && input?.isInput ? [this.inputSessionId, input, 'The input these designs were made from (editable)']
+        : r.inputSnapshot && views.get(r.inputSnapshot) ? [r.inputSnapshot, views.get(r.inputSnapshot), `The input run ${r.index} was made from (read-only)`] : null;
+      const rows = [own ? row(...own) : null, ...order(r.designs).map(([sid, v]) => row(sid, v))].filter(Boolean);
       if (runs.length === 1) { parts.push(...rows); continue; }
       const group = h('details', { class: 'rfd4p-run' },
         h('summary', { text: `Run ${r.index} · ${seedText(r)} · ${r.designs.length} design${r.designs.length === 1 ? '' : 's'}` }), ...rows);
-      group.open = k === runs.length - 1 || r.designs.includes(this.studioSessionId);
+      group.open = k === runs.length - 1 || r.designs.includes(this.studioSessionId) || r.inputSnapshot === this.studioSessionId;
       parts.push(group);
     }
     box.replaceChildren(...(designs.length ? parts : []));
@@ -1500,7 +1509,18 @@ class Rfd4pStudioApp {
         this.designSort = null;
         this.runsInput = this.inputSessionId;
       }
-      const run = { index: (this.runs.at(-1)?.index ?? 0) + 1, seeds: [baseSeed, baseSeed + numSamples - 1], designs: [] };
+      const run = { index: (this.runs.at(-1)?.index ?? 0) + 1, seeds: [baseSeed, baseSeed + numSamples - 1], designs: [], inputRevision };
+      // The input as this run had it, kept read-only beside its designs: edits after it do not change what it was.
+      const inputNow = store.getSession(this.inputSessionId);
+      if (inputNow) {
+        const cif = inputNow.toCif();
+        const { sessionId: snapshotSid } = store.createSession(cif, `input-run-${run.index}.cif`);
+        this.generatedViews.set(snapshotSid, {
+          label: 'Input', cif, pdb: null, isInput: false, isSnapshot: true, hasTrajectory: false,
+          filenameStem: `input-run-${run.index}`, runIndex: run.index,
+        });
+        run.inputSnapshot = snapshotSid;
+      }
       this.runs.push(run);
       this._renderDesigns();
 
