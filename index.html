@@ -168,6 +168,23 @@
 
             <div id="rfd4p-run-settings" class="rfd4p-run-settings rfd4p-section" hidden>
             <strong class="rfd4p-section-title">Run</strong>
+
+            <fieldset class="representation-mode rfd4p-thinking-group" id="thinking-radio-group" aria-label="Thinking">
+                <legend title="Extra recycling passes: slower, sometimes better designs">Thinking</legend>
+                <label><input type="radio" name="thinking-radio" value="none" checked />none</label>
+                <label><input type="radio" name="thinking-radio" value="low" />low</label>
+                <label><input type="radio" name="thinking-radio" value="medium" />med</label>
+                <label><input type="radio" name="thinking-radio" value="high" />high</label>
+            </fieldset>
+            <!-- How many designs, beside the button that makes them. -->
+            <div class="rfd4p-generate-row">
+                <label for="samples-input" class="rfd4p-designs-field" title="How many designs to make, one after another">Designs
+                    <input type="number" id="samples-input" value="1" min="1" max="8" step="1" />
+                </label>
+                <button id="predict" class="primary rfd4p-generate-btn" type="button" disabled>
+                    Generate design
+                </button>
+            </div>
             <details class="rfd4p-sampling-details" id="sampling-accordion">
                 <summary>More settings</summary>
                 <div class="rfd4p-sampling-body">
@@ -204,23 +221,6 @@
                     </label>
                 </div>
             </details>
-
-            <fieldset class="representation-mode rfd4p-thinking-group" id="thinking-radio-group" aria-label="Thinking">
-                <legend title="Extra recycling passes: slower, sometimes better designs">Thinking</legend>
-                <label><input type="radio" name="thinking-radio" value="none" checked />none</label>
-                <label><input type="radio" name="thinking-radio" value="low" />low</label>
-                <label><input type="radio" name="thinking-radio" value="medium" />med</label>
-                <label><input type="radio" name="thinking-radio" value="high" />high</label>
-            </fieldset>
-            <!-- How many designs, beside the button that makes them. -->
-            <div class="rfd4p-generate-row">
-                <label for="samples-input" class="rfd4p-designs-field" title="How many designs to make, one after another">Designs
-                    <input type="number" id="samples-input" value="1" min="1" max="8" step="1" />
-                </label>
-                <button id="predict" class="primary rfd4p-generate-btn" type="button" disabled>
-                    Generate design
-                </button>
-            </div>
             <!-- Shown by web/app.js only on desktop Chrome whose GPU lacks subgroup matrices: beside Generate, where the wait is. -->
             <div id="rfd4p-speed-hint" class="rfd4p-speed-hint" role="note" hidden>
                 <p><strong>Up to 2× faster designs:</strong> turn on Chrome's experimental WebGPU. Paste
