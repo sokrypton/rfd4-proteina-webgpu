@@ -6,16 +6,6 @@
                 <span id="webgpu-badge" class="viewer-backend">WebGPU FP16</span>
                 <button id="rfd4p-guide-btn" type="button" class="secondary compact rfd4p-guide-btn" title="How to set up, run and compare designs">Guide</button>
             </div>
-            <!-- Shown by web/app.js only on desktop Chrome whose GPU lacks subgroup matrices. -->
-            <div id="rfd4p-speed-hint" class="rfd4p-speed-hint" role="note" hidden>
-                <p>Designs can run about <strong>2× faster</strong> with Chrome's experimental WebGPU features.
-                    Paste <code>chrome://flags/#enable-unsafe-webgpu</code> into the address bar, set it to
-                    <em>Enabled</em> and relaunch Chrome. It applies to every site, not just this one.</p>
-                <div class="rfd4p-speed-hint-actions">
-                    <button id="rfd4p-speed-copy" type="button" class="secondary compact">Copy address</button>
-                    <button id="rfd4p-speed-dismiss" type="button" class="secondary compact">Dismiss</button>
-                </div>
-            </div>
 
             <!-- Start: nothing open yet. Each task opens a ready-made input (web/design-panel.js). -->
             <div id="rfd4p-start" class="rfd4p-start">
@@ -103,6 +93,16 @@
             <button id="predict" class="primary rfd4p-generate-btn" type="button" disabled>
                 Generate design
             </button>
+            <!-- Shown by web/app.js only on desktop Chrome whose GPU lacks subgroup matrices: beside Generate, where the wait is. -->
+            <div id="rfd4p-speed-hint" class="rfd4p-speed-hint" role="note" hidden>
+                <p><strong>Up to 2× faster designs:</strong> turn on Chrome's experimental WebGPU. Paste
+                    <code>chrome://flags/#enable-unsafe-webgpu</code> into the address bar, set it to <em>Enabled</em> and
+                    relaunch Chrome.</p>
+                <div class="rfd4p-speed-hint-actions">
+                    <button id="rfd4p-speed-copy" type="button" class="secondary compact">Copy address</button>
+                    <button id="rfd4p-speed-dismiss" type="button" class="secondary compact">Not now</button>
+                </div>
+            </div>
             <div id="generation-status" class="rfd4p-status-box" hidden>
                 <p id="rfd4p-status-message" class="inline-feedback muted" aria-live="polite"></p>
                 <div id="rfd4p-model-load" class="rfd4p-model-load" hidden>

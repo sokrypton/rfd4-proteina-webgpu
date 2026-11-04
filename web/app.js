@@ -781,6 +781,8 @@ class Rfd4pStudioApp {
     const hasMatrix = this.gpuDevice.features?.has?.('chromium-experimental-subgroup-matrix') === true;
     if (dismissed || !desktopChrome || hasMatrix) return;
     hint.hidden = false;
+    // Said again after each design, until dismissed.
+    this.speedHintOn = true;
     const copy = document.getElementById('rfd4p-speed-copy');
     copy?.addEventListener('click', async () => {
       try {
@@ -792,6 +794,7 @@ class Rfd4pStudioApp {
     });
     document.getElementById('rfd4p-speed-dismiss')?.addEventListener('click', () => {
       hint.hidden = true;
+      this.speedHintOn = false;
       try { localStorage.setItem(KEY, '1'); } catch { /* not remembered; fine */ }
     });
   }
@@ -1764,7 +1767,8 @@ class Rfd4pStudioApp {
       this._prefetchFoldWeights();
       const stopNote = earlyStops.length ? ` Converged early at step ${earlyStops.join(', ')}.` : '';
       const seeds = numSamples > 1 ? `seeds ${baseSeed}–${baseSeed + numSamples - 1}` : `seed ${baseSeed}`;
-      this.setStatus(`Generated from input revision ${inputRevision} with ${seeds} (${elapsedS} s on ${backendLabel}).${stopNote}`);
+      const faster = this.speedHintOn ? ' Up to 2× faster with Chrome\'s experimental WebGPU (see above).' : '';
+      this.setStatus(`Generated from input revision ${inputRevision} with ${seeds} (${elapsedS} s on ${backendLabel}).${stopNote}${faster}`);
       if (!this.seedPinned) this._rollSeed();
     } catch (err) {
       this.setProgress(0, 'idle');

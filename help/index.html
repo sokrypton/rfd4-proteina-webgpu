@@ -154,6 +154,9 @@
     <li><span class="ui">Thinking</span>, above Generate: extra recycling passes per step (none, low, medium, high). None is the
       default, for speed; medium is the model's own default, about three times slower, and may give better designs (fewer
       binders clashing with their target).</li>
+    <li>On desktop Chrome, a note under Generate offers designs up to 2× faster: turn on Chrome's experimental WebGPU
+      (<code>chrome://flags/#enable-unsafe-webgpu</code>, Enabled, relaunch). How much faster depends on the GPU (about 2× on
+      an M2, less on newer chips). Nothing else changes.</li>
     <li><span class="ui">Generate</span> becomes <span class="ui">Stop</span> while it runs and fills up as it goes
       (<code>design 2 of 4 · step 41/60</code>). The structure is drawn live at every step.</li>
   </ul>

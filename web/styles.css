@@ -642,7 +642,7 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
 }
 
 .rfd4p-speed-hint {
-  margin: 0 0 10px;
+  margin: 0;
   padding: 8px 10px;
   border: 1px solid var(--border-strong, #50535a);
   border-radius: 4px;
