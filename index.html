@@ -10,7 +10,7 @@
     <!-- This site serves the Studio bundle itself; its offline cache would pin stale assets on Pages. -->
     <meta name="atomworks-studio-service-worker" content="off" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="./web/styles.css?v=abf65bc0ad" />
+    <link rel="stylesheet" href="./web/styles.css?v=355d696977" />
     <!-- app.js first: its import of studio-api.js installs the /api/* fetch interceptor the Studio bundle boots against. -->
     <!-- module-versions:start (tools/stamp-modules.mjs) -->
     <script type="importmap">
@@ -38,7 +38,7 @@
           "./shared/rfd4p/presets.js": "./shared/rfd4p/presets.js?v=8db26644f7",
           "./shared/rfd4p/safetensors.js": "./shared/rfd4p/safetensors.js?v=c238bc6559",
           "./shared/rfd4p/vendor/fzstd.js": "./shared/rfd4p/vendor/fzstd.js?v=e6cdba40d4",
-          "./web/app.js": "./web/app.js?v=0c1780c8d6",
+          "./web/app.js": "./web/app.js?v=9fe46a40f6",
           "./web/design-panel.js": "./web/design-panel.js?v=4fdadf7593",
           "./web/design-spec.js": "./web/design-spec.js?v=5b8999f1bb",
           "./web/guide-dialog.js": "./web/guide-dialog.js?v=df4c3ca412",
@@ -59,9 +59,9 @@
       }
     </script>
     <!-- module-versions:end -->
-    <script type="module" src="./web/app.js?v=0c1780c8d6"></script>
-    <script type="module" crossorigin src="./assets/index-H6K66f49.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-CTn3vkIg.css">
+    <script type="module" src="./web/app.js?v=9fe46a40f6"></script>
+    <script type="module" crossorigin src="./assets/index-Dopq41WL.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-A4B3oFja.css">
   </head>
   <body>
     <!-- RFD4-Proteina Generation Card (mounted directly into AtomWorks Studio's right sidebar) -->
@@ -70,6 +70,7 @@
             <div class="card-title-row">
                 <h2>RFD4-Proteina</h2>
                 <span id="webgpu-badge" class="viewer-backend">WebGPU FP16</span>
+                <button id="rfd4p-theme-btn" type="button" class="secondary compact rfd4p-theme-btn" title="Light mode" aria-label="Light mode">☀</button>
                 <button id="rfd4p-guide-btn" type="button" class="secondary compact rfd4p-guide-btn" title="How to set up, run and compare designs">Guide</button>
             </div>
 

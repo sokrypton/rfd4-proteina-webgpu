@@ -180,6 +180,8 @@ try {
   };
   await send('Page.enable');
   await send('Runtime.enable');
+  // The guide shows the page as most people see it: dark (headless Chrome reports light). THEME=light for the other.
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: process.env.THEME ?? 'dark' }] });
   const wanted = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(SCENES);
   for (const name of wanted) {
     if (!SCENES[name]) throw new Error(`no scene ${name} (have ${Object.keys(SCENES).join(', ')})`);

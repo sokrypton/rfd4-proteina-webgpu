@@ -682,6 +682,7 @@ class Rfd4pStudioApp {
     // The guide opens as a popup, from the card and from the footer's Guide link (Studio's own guide is linked in it).
     document.getElementById('rfd4p-guide-btn')?.addEventListener('click', () => void openGuide());
     document.getElementById('guide-link')?.addEventListener('click', (ev) => { ev.preventDefault(); void openGuide(); });
+    this._initTheme();
     this._initSeed();
     this._bindControls();
     await this._loadPreset(RFD4P_PRESETS[0].id, { syncStudio: false });
@@ -717,6 +718,7 @@ class Rfd4pStudioApp {
     // AtomWorks Studio runs in this same document and announces session changes as window events.
     window.addEventListener('atomworks-studio', (ev) => {
       const event = { data: ev.detail };
+      if (event.data?.type === 'ready') this._applyTheme();
       if (['ready', 'changed', 'example'].includes(event.data?.type)) {
         this._mountCardIntoStudio();
         const sid = event.data.session_id;
@@ -1217,6 +1219,36 @@ class Rfd4pStudioApp {
     if (this.els.downloadsBox) this.els.downloadsBox.hidden = designs.length < 1;
     this.els.designResultsRow.hidden = designs.length < 1;
     this._syncRefoldUi();
+  }
+
+  /**
+   * Light or dark: the computer's setting until the switch in the card's title is pressed, then that, per browser.
+   * Studio takes its colours and the viewer's background from `setTheme`; this page's own colours follow the same
+   * `data-host-theme` on the body.
+   */
+  _initTheme() {
+    const query = window.matchMedia?.('(prefers-color-scheme: light)');
+    const stored = () => { try { return localStorage.getItem('rfd4p.theme'); } catch { return null; } };
+    this.theme = stored() ?? (query?.matches ? 'light' : 'dark');
+    query?.addEventListener?.('change', () => { if (!stored()) { this.theme = query.matches ? 'light' : 'dark'; this._applyTheme(); } });
+    document.getElementById('rfd4p-theme-btn')?.addEventListener('click', () => {
+      this.theme = this.theme === 'light' ? 'dark' : 'light';
+      try { localStorage.setItem('rfd4p.theme', this.theme); } catch { /* storage blocked: this page only */ }
+      this._applyTheme();
+    });
+    this._applyTheme();
+  }
+
+  _applyTheme() {
+    const light = this.theme === 'light';
+    document.body.dataset.hostTheme = light ? 'light' : 'dark';
+    window.atomworksStudio?.setTheme?.(this.theme);
+    const btn = document.getElementById('rfd4p-theme-btn');
+    if (btn) {
+      btn.textContent = light ? '☾' : '☀';
+      btn.title = light ? 'Dark mode' : 'Light mode';
+      btn.setAttribute('aria-label', btn.title);
+    }
   }
 
   /** Select a row of the Designs table and show it. */

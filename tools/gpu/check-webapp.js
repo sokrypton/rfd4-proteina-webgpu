@@ -284,6 +284,8 @@ export async function main() {
     throw new Error(`a second design on the same input did not join the list:`
       + ` ${designRadioCountAfterNewInput} -> ${designRadioCount}`);
   }
+  // The input is a tab (Input / Outputs) over the designs, no longer a row of their table.
+  const jobTabCount = win.document.querySelectorAll('#rfd4p-tabs [role="tab"]').length;
 
   // Verify clicking #predict directly inside the embedded Studio DOM triggers runDesign
   const latestStudioDoc = win.document;
@@ -324,7 +326,7 @@ export async function main() {
       molstarRenderedAtoms > 0 &&
       restraintsAfterAdd.restraints?.length >= 1 &&
       Boolean(exported.cif && exported.name) &&
-      designRadioCount >= 2 &&
+      designRadioCount >= 1 && jobTabCount === 2 &&
       Boolean(designEntry?.hasTrajectory) &&
       trajectoryModelCount === 10 &&
       convertedCif.includes('_atom_site.Cartn_x') &&
@@ -347,6 +349,7 @@ export async function main() {
     exportedName: exported.name,
     designRadioCount,
     designRadioCountAfterNewInput,
+    jobTabCount,
     liveFramesCalled,
     trajectoryModelCount,
     statusText,
