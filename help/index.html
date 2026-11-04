@@ -42,7 +42,7 @@
   .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 6px; }
   figure { margin: 12px 0 16px; }
   figure img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; }
-  figure.narrow img { max-width: 320px; }
+  figure.narrow img { max-width: 340px; }
   figcaption { margin-top: 6px; color: var(--muted); font-size: 13px; }
   .note { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 14px; }
   footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
@@ -81,7 +81,7 @@
     <li>Chains are grouped under the structure they came from (<code>PDB 5O45 · A</code>); click that caption to swap the structure.</li>
     <li><span class="ui">Undo</span> steps back through every edit.</li>
   </ul>
-  <figure><img src="img/card.webp" alt="The protein binder example: PD-L1 in the viewer, its sequence above, and the card with chain A fixed with 3 hotspots and chain B as 50–120 new residues" loading="lazy"><figcaption>The binder example: the target kept with its hotspots (amber), a new chain of 50–120 residues to design.</figcaption></figure>
+  <figure class="narrow"><img src="img/card.webp" alt="The protein binder example: PD-L1 in the viewer, its sequence above, and the card with chain A fixed with 3 hotspots and chain B as 50–120 new residues" loading="lazy"><figcaption>The binder example's card: the target kept with three hotspots, a new chain of 50–120 residues to design.</figcaption></figure>
   <p>Every setting is <span class="ui">fixed</span> (kept as given) or <span class="ui">free</span> (the model decides).</p>
 
   <h2 id="pieces">Pieces</h2>
@@ -172,7 +172,7 @@
     <li><span class="ui">Save all (.zip)</span>: the input, every design with its trajectory, every refold, and the table as
       <code>summary.csv</code>.</li>
   </ul>
-  <figure><img src="img/designs.webp" alt="Three designs refolded and ranked in the Designs table" loading="lazy"><figcaption>Three designs from scratch, refolded and ranked: Design 1 passes (✓) and its refold (magenta) lies on it; the others are greyed out.</figcaption></figure>
+  <figure class="narrow"><img src="img/designs.webp" alt="Three designs refolded and ranked in the Designs table" loading="lazy"><figcaption>Three designs from scratch, refolded and ranked: Design 1 passes (✓); the others are greyed out.</figcaption></figure>
   <div class="table-wrap"><table>
     <tr><th>Column</th><th>Meaning</th><th>Better</th></tr>
     <tr><td>RMSD</td><td>Å between the design and its refold. For a binder or antibody, after fitting on the target, so where it sits counts.</td><td>lower</td></tr>

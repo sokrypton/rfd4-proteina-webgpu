@@ -210,6 +210,12 @@ function unmodelledTokens(inputAtoms) {
  * coordinate-conditioned is a target and is drawn by the frame itself. Placed on an unused chain id so it can never
  * share a residue key with the scaffold.
  */
+/**
+ * Whether a chain's held residues are a motif, worth showing against what the model builds: a few residues it scaffolds
+ * (1QJG's three), not a kept domain the job extends (6MRR and 100 new residues), whose shadow would only double it.
+ */
+const isSmallMotif = (fixed, total) => fixed > 0 && fixed < total && fixed <= total / 4;
+
 function buildMotifOverlayAtoms(inputAtoms) {
   if (!inputAtoms?.token_id || !inputAtoms.condition_coordinate_1_atom) return [];
   // Conditioned coordinates are centred in the batch; designs are shown in the input's frame, so the motif is too.
@@ -239,8 +245,9 @@ function buildMotifOverlayAtoms(inputAtoms) {
     if (tokenHasCrd.get(tid)) c.fixed += 1;
     chainTokens.set(chain, c);
   }
-  const isMotifToken = (tid) => tokenHasCrd.get(tid) &&
-    (!tokenIndexed.get(tid) || chainTokens.get(tokenChain.get(tid)).fixed < chainTokens.get(tokenChain.get(tid)).total);
+  // Residues placed anywhere always (an enzyme's catalytic tips); residues held in place only as a small motif.
+  const isMotifToken = (tid) => tokenHasCrd.get(tid) && (!tokenIndexed.get(tid)
+    || isSmallMotif(chainTokens.get(tokenChain.get(tid)).fixed, chainTokens.get(tokenChain.get(tid)).total));
   const used = new Set(tokenChain.values());
   const chainId = [...'MNOPQRSTUVWXYZ'].find((c) => !used.has(c)) ?? 'MOTIF';
   const out = [];
@@ -280,7 +287,7 @@ function motifSideChainAtoms(structureAtoms, skipTokens = new Set()) {
   }
   for (const tokens of chainTokens.values()) {
     const fixed = [...tokens].filter((t) => tokenFixed.get(t));
-    if (fixed.length < tokens.size) for (const t of fixed) motifTokens.add(t);
+    if (isSmallMotif(fixed.length, tokens.size)) for (const t of fixed) motifTokens.add(t);
   }
   if (!motifTokens.size) return [];
   return structureAtoms

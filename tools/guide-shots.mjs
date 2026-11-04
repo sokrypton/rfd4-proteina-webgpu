@@ -65,6 +65,30 @@ const rectOf = (selector, pad = 0) => page(`async (w, d) => {
     height: Math.min(1000 - Math.max(0, r.top - ${pad}), r.height + 2 * ${pad}) };
 }`);
 
+/**
+ * The box around what a shot is about: the elements `selectors` match (shown ones), and with `structure` the middle
+ * of the viewer where the structure sits, padded and kept on screen.
+ */
+const around = (selectors, { pad = 10, structure = false, upTo = null } = {}) => page(`async (w, d) => {
+  const rs = ${JSON.stringify(selectors)}.flatMap((sel) => [...d.querySelectorAll(sel)])
+    .filter((e) => !e.hidden && e.getClientRects().length).map((e) => e.getBoundingClientRect());
+  if (${structure}) {
+    const v = d.getElementById('viewer').getBoundingClientRect();
+    const cx = v.left + v.width / 2;
+    const cy = v.top + v.height / 2;
+    rs.push({ left: cx - 230, top: cy - 170, right: cx + 230, bottom: cy + 170 });
+  }
+  if (!rs.length) return null;
+  let bottom = Math.max(...rs.map((r) => r.bottom));
+  ${upTo ? `const cap = d.querySelectorAll(${JSON.stringify(upTo)}); if (cap.length) bottom = Math.min(bottom, cap[cap.length - 1].getBoundingClientRect().bottom);` : ''}
+  // A shot of the structure stays inside the viewer: none of the card beside it.
+  const right = ${structure} ? d.getElementById('viewer').getBoundingClientRect().right : w.innerWidth;
+  const x = Math.max(0, Math.min(...rs.map((r) => r.left)) - ${pad});
+  const y = Math.max(0, Math.min(...rs.map((r) => r.top)) - ${pad});
+  return { x, y, width: Math.min(right, Math.max(...rs.map((r) => r.right)) + ${pad}) - x,
+    height: Math.min(w.innerHeight, bottom + ${pad}) - y };
+}`);
+
 /** Open the start screen and build an example from its card, as a visitor would. */
 const openExample = (example) => page(`async (w, d, sleep) => {
   for (let i = 0; i < 600 && !d.querySelector('[data-example="${example}"]'); i++) await sleep(50);
@@ -80,12 +104,13 @@ const SCENES = {
   // The start screen: the parts to start from, then the examples.
   async start() {
     await page(`async (w, d, sleep) => { for (let i = 0; i < 600 && !d.querySelector('[data-example]'); i++) await sleep(50); await sleep(1500); }`);
-    await shot('start', await rectOf('#rfd4p-studio-card', 6));
+    // The parts to start from and the first examples: enough to see what is there.
+    await shot('start', await around(['#rfd4p-studio-card .card-title-row', '.rfd4p-start-actions', '.rfd4p-task-card:nth-child(-n+4)']));
   },
   // The binder example: the card's pieces beside the target, hotspots in amber.
   async card() {
     await openExample('protein_binder');
-    await shot('card', null, 0.5);
+    await shot('card', await around(['#rfd4p-design']));
   },
   // A piece's popup, its crop bar dragged in: the residues to be cut fade in the structure.
   async piece() {
@@ -99,8 +124,8 @@ const SCENES = {
       ev('pointerdown', hb.left + 4); ev('pointermove', t.left + t.width * 0.3); ev('pointerup', t.left + t.width * 0.3);
       await sleep(2500);
     }`);
-    await shot('piece', null, 0.5);
-    await shot('piece-popup', await rectOf('.rfd4p-piece-pop:not(.rfd4p-sel-pop)', 4));
+    // The structure and the popup beside it: the cut fading as the bar is dragged.
+    await shot('piece', await around(['.rfd4p-piece-pop:not(.rfd4p-sel-pop)'], { structure: true }));
   },
   // A few residues picked in the structure: the short popup, and the outline that marks a selection everywhere.
   async select() {
@@ -109,10 +134,10 @@ const SCENES = {
       const a = w.rfd4pApp.designPanel._inputDoc().atoms; const pick = [];
       for (let i = 0; i < a.nAtoms; i++) if (a.chain_id[i] === 'A' && a.res_id[i] >= 50 && a.res_id[i] <= 60) pick.push(i);
       const r = d.getElementById('viewer').getBoundingClientRect();
-      w.rfd4pApp.designPanel.lastPointer = { x: r.left + r.width * 0.7, y: r.top + r.height * 0.42 };
+      w.rfd4pApp.designPanel.lastPointer = { x: r.left + r.width * 0.6, y: r.top + r.height * 0.6 };
       w.atomworksStudio.setSelection(pick); await sleep(2500);
     }`);
-    await shot('select', null, 0.5);
+    await shot('select', await around(['.rfd4p-sel-pop'], { structure: true }));
   },
   // Three designs from scratch, refolded with OpenBind-0 and ranked.
   async designs() {
@@ -131,8 +156,7 @@ const SCENES = {
       for (let i = 0; i < 12000 && app.refoldAbort; i++) await sleep(100);
       await sleep(3000);
     }`);
-    await shot('designs', null, 0.5);
-    await shot('designs-table', await rectOf('#design-results', 6));
+    await shot('designs', await around(['#design-results']));
   },
 };
 

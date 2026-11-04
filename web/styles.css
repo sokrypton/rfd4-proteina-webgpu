@@ -1092,7 +1092,7 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 .rfd4p-guide-body .note { padding: 8px 10px; border: 1px solid var(--border, #383a3f); border-radius: 6px; font-size: 13px; }
 .rfd4p-guide-body figure { margin: 10px 0 14px; }
 .rfd4p-guide-body figure img { display: block; width: 100%; height: auto; border: 1px solid var(--border, #383a3f); border-radius: 6px; }
-.rfd4p-guide-body figure.narrow img { max-width: 300px; }
+.rfd4p-guide-body figure.narrow img { max-width: 340px; }
 .rfd4p-guide-body figcaption { margin-top: 4px; color: var(--muted); font-size: 12px; }
 .rfd4p-guide-body footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
 
