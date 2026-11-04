@@ -30,11 +30,11 @@ const TASKS = [
   { example: 'unconditional', title: 'Protein from scratch', desc: 'A new fold of the length you choose' },
   {
     // The blocks idea: a ferredoxin-like fold drawn as strands, helices and loops, each its own block of new residues.
-    example: 'blueprint', fallback: 'unconditional', title: 'Blueprint', desc: 'A fold drawn as blocks: β-α-β-β-α-β',
+    example: 'blueprint', fallback: 'unconditional', title: 'Blueprint', desc: 'A fold drawn as blocks: E-H-E-E-H-E',
     recipe: [
       { start: 'unconditional' },
-      { blocks: [[6, 'strand'], [3, 'loop'], [14, 'helix'], [3, 'loop'], [6, 'strand'], [3, 'loop'],
-        [6, 'strand'], [3, 'loop'], [14, 'helix'], [3, 'loop'], [6, 'strand']] },
+      { blocks: [[6, 'E'], [3, 'C'], [14, 'H'], [3, 'C'], [6, 'E'], [3, 'C'],
+        [6, 'E'], [3, 'C'], [14, 'H'], [3, 'C'], [6, 'E']] },
     ],
   },
   {
@@ -163,7 +163,9 @@ const SEQUENCE_OPTIONS = [['fixed', 'fixed'], ['designed', 'free']];
 const POSITION_OPTIONS = [['fixed', 'fixed'], ['anywhere', 'free']];
 // What else can be asked of residues: their secondary structure, how exposed they are, an interaction to make. Every
 // list ends with "free", the model decides, as the three properties do.
-const SHAPE_OPTIONS = [['1', 'helix'], ['2', 'strand'], ['3', 'loop'], ['0', 'free']];
+// Secondary structure as DSSP's letters, H helix, E strand, C coil (loop): a card reads "6 · E · new", the popup says both.
+const SHAPE_OPTIONS = [['1', 'H helix'], ['2', 'E strand'], ['3', 'C loop'], ['0', 'free']];
+const SHAPE_LETTER = { 1: 'H', 2: 'E', 3: 'C' };
 const EXPOSURE_OPTIONS = [['1', 'buried'], ['2', 'intermediate'], ['3', 'exposed'], ['0', 'free']];
 const INTERACTION_OPTIONS = [
   ['hbond:1', 'H-bond donor'], ['hbond:2', 'H-bond acceptor'], ['hbond:3', 'H-bond donor or acceptor'],
@@ -860,11 +862,11 @@ export class DesignPanel {
   /** What a piece row says after its residues: what is kept, in a few words. */
   _status(p) {
     const word = (options, v) => (v ? options.find(([k]) => k === String(v))?.[1] ?? '' : '');
-    // "new" last, so it lines up down a chain of blocks ("helix · new", "loop · new").
+    // "new" last, so it lines up down a chain of blocks ("H · new", "C · new").
     if (p.kind === 'new') {
       const code = String(p.fold ?? '').replace(/(\.x)+$/, '');
       const fold = code ? FOLD_OPTIONS.find(([k]) => k === code)?.[1] ?? code : '';
-      return [fold, word(SHAPE_OPTIONS, p.ss), word(EXPOSURE_OPTIONS, p.rasa), 'new'].filter(Boolean).join(' · ');
+      return [fold, SHAPE_LETTER[p.ss] ?? '', word(EXPOSURE_OPTIONS, p.rasa), 'new'].filter(Boolean).join(' · ');
     }
     const { structure, atoms, names, sequence, position } = this._properties(p);
     // The popup's words: both fixed reads "fixed", both free "free", otherwise which one is fixed; part of the atoms
@@ -874,7 +876,7 @@ export class DesignPanel {
       : structure === 'rigid' ? (part ? `${part} rigid` : 'rigid')
         : structure === 'fixed' && sequence === 'fixed' ? (part ? `${part} fixed` : 'fixed')
           : structure === 'fixed' ? 'structure fixed' : 'sequence fixed';
-    return [what, position === 'anywhere' ? 'position free' : '', word(SHAPE_OPTIONS, p.ss), word(EXPOSURE_OPTIONS, p.rasa), word(INTERACTION_OPTIONS, p.inter),
+    return [what, position === 'anywhere' ? 'position free' : '', SHAPE_LETTER[p.ss] ?? '', word(EXPOSURE_OPTIONS, p.rasa), word(INTERACTION_OPTIONS, p.inter),
       p.hotspots.length ? `${p.hotspots.length} hotspot${p.hotspots.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
   }
 
@@ -2362,7 +2364,7 @@ export class DesignPanel {
           for (let i = 0; i < 100 && blocksNow().length < step.blocks.length; i += 1) {
             await click([...chainCard().querySelectorAll('.rfd4p-slot')].at(-1));
           }
-          const shapes = Object.fromEntries(SHAPE_OPTIONS.map(([v, text]) => [text, v]));
+          const shapes = Object.fromEntries(SHAPE_OPTIONS.map(([v, text]) => [text.split(' ')[0], v]));
           for (let k = 0; k < step.blocks.length; k += 1) {
             const [len, shape] = step.blocks[k];
             const pop = open(blocksNow()[k]);

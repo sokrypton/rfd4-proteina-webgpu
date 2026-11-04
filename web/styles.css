@@ -39,6 +39,10 @@ body:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]),
   --rfd4p-box-border: #d3d7dd;
   --rfd4p-sunk: #f4f5f7;
   --rfd4p-hover: rgba(0, 0, 0, 0.04);
+  /* Studio's light palette leaves its tinted backgrounds dark (a warning was dark text on dark red). */
+  --danger-soft: #fbe5e5;
+  --warning-soft: #fbf0d9;
+  --success-soft: #def3ec;
 }
 #atomworks-studio-popover { background: var(--rfd4p-sidebar); }
 
