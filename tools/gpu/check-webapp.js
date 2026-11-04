@@ -272,7 +272,18 @@ export async function main() {
   const pdbSessionResp = await win.fetch('/api/v1/sessions', { method: 'POST', body: pdbForm });
   const pdbSessionData = pdbSessionResp.ok ? await pdbSessionResp.json() : null;
 
-  const designRadioCount = app.els.designViewRadios?.querySelectorAll('input[type="radio"]').length ?? 0;
+  // The designs list is per input: generating again from the SAME unchanged input appends, while an edited or
+  // different input starts the list over (web/app.js, `this.runsInput !== this.inputSessionId`). This gate had
+  // asserted >= 2 radios after running two DIFFERENT presets, which only held before that behaviour existed.
+  // Run the same input twice instead, which is what actually proves designs accumulate and can be picked between.
+  const radioCount = () => app.els.designViewRadios?.querySelectorAll('input[type="radio"]').length ?? 0;
+  const designRadioCountAfterNewInput = radioCount();
+  await app.runDesign({ nsteps: 10, recycleSchedule: 'none' });
+  const designRadioCount = radioCount();
+  if (designRadioCount <= designRadioCountAfterNewInput) {
+    throw new Error(`a second design on the same input did not join the list:`
+      + ` ${designRadioCountAfterNewInput} -> ${designRadioCount}`);
+  }
 
   // Verify clicking #predict directly inside the embedded Studio DOM triggers runDesign
   const latestStudioDoc = win.document;
@@ -335,6 +346,7 @@ export async function main() {
     colorButtonCount: colorBtns.length,
     exportedName: exported.name,
     designRadioCount,
+    designRadioCountAfterNewInput,
     liveFramesCalled,
     trajectoryModelCount,
     statusText,

@@ -15,7 +15,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,6 +34,25 @@ for (const ref of [...refs].sort()) {
   const target = clean.endsWith('/') ? `${clean}index.html` : clean;
   if (!existsSync(join(ROOT, target))) {
     problems.push(`missing asset referenced by index.html: ${target}`);
+  }
+}
+
+// 2b. Assets a module fetches at runtime through `new URL('...', import.meta.url)`. These never appear in
+// index.html, so nothing above sees them: `web/guide-dialog.js` loads `help/index.html` that way, and a missing
+// guide would fail only when a visitor pressed the button.
+const moduleFiles = execFileSync('git', ['ls-files', 'web/*.js'], { cwd: ROOT, encoding: 'utf8' })
+  .split('\n').filter(Boolean);
+for (const f of moduleFiles) {
+  const src = readFileSync(join(ROOT, f), 'utf8');
+  for (const m of src.matchAll(/new URL\(\s*['"`]([^'"`]+)['"`]\s*,\s*import\.meta\.url\s*\)/g)) {
+    const spec = m[1];
+    // Only static specifiers can be checked; a template with `${...}` is resolved at runtime.
+    if (spec.includes('${') || /^(https?:)?\/\//.test(spec) || spec.startsWith('data:')) continue;
+    const resolved = resolve(dirname(join(ROOT, f)), spec.split('?')[0]);
+    const target = resolved.endsWith('/') ? join(resolved, 'index.html') : resolved;
+    if (!existsSync(target)) {
+      problems.push(`${f} fetches ${spec} at runtime, which does not exist (${relative(ROOT, target)})`);
+    }
   }
 }
 
