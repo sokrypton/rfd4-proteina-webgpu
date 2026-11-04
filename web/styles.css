@@ -1208,3 +1208,4 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 #rfd4p-studio-card .rfd4p-source-row:focus-within .rfd4p-source-x { opacity: 1; }
 @media (hover: none) { #rfd4p-studio-card .rfd4p-source-x { opacity: 1; } }
 #rfd4p-fetch-status:empty { display: none; }
+#rfd4p-studio-card:not(.rfd4p-starting) #rfd4p-examples { display: none; }
