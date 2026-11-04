@@ -670,3 +670,6 @@ stride in as well (`constAll`) measured 1.004x / 1.023x, no steadier, so not shi
 **Not repeated, already ruled out:** the pair-bias norm is already folded into its projection at load (MLX's trick).
 The stock path is at the M2's f32 ceiling for its class; the large levers left are the subgroup-matrix flag (2.2x,
 the card's notice), fewer passes (quality), and shorter jobs (crop the target).
+
+**Lost, do not repeat:** the same compiled-in K on `gemmSubmatSource` (developer flags): 0.972x / 0.971x a pass at
+n = 100 / 208 (triProjG 0.96-0.97x), bit-identical. The matrix kernel keeps reading K from the uniform block.
