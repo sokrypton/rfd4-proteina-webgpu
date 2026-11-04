@@ -789,14 +789,16 @@ body:not(.rfd4p-advanced) .sequence-token.condition-hotspot:not(.selected):not(.
    selected residues; hovering is the same outline, fainter. Accent stays "free", amber "hotspot". */
 #rfd4p-studio-card .rfd4p-sub.rfd4p-sub-selected { border-color: var(--text, #ededef); box-shadow: inset 0 0 0 1px var(--text, #ededef); }
 
+/* The checkbox on its own line, the slider and its number under it: side by side, the label left the slider no room. */
 .rfd4p-partial-setting {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 52px;
+  grid-template-columns: minmax(0, 1fr) 52px;
   align-items: center;
-  gap: 6px;
+  gap: 4px 6px;
   margin: 6px 0;
   font-size: 12px;
 }
+.rfd4p-partial-setting > .checkbox { grid-column: 1 / -1; }
 
 /* Chains grouped by source (`_sourceGroups`): one muted caption per structure; clicking it replaces that structure. */
 #rfd4p-studio-card .rfd4p-chain-list { gap: 10px; }
