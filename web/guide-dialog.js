@@ -22,6 +22,8 @@ async function build() {
     a.target = '_blank';
     a.rel = 'noopener';
   }
+  // Images too: their paths are the guide page's.
+  for (const img of main.querySelectorAll('img[src]')) img.src = new URL(img.getAttribute('src'), GUIDE_URL).href;
   const d = document.createElement('dialog');
   d.className = 'rfd4p-guide';
   d.setAttribute('aria-label', 'Guide');
