@@ -173,7 +173,45 @@ const INTERACTION_OPTIONS = [
 ];
 // Folds a chain can be asked for, by name (CATH class, architecture, topology); "other" takes any code.
 /** What + pdb takes, the same on the start screen and under a job. */
-const STRUCTURE_NOTE = 'Its ID in the PDB, then any chains to keep (5O45 A, 1J79 A C), or a file. Its chains come in fixed; free what you want designed.';
+const STRUCTURE_NOTE = 'Its ID in the PDB, then any chains to keep (5O45 A, 1J79 A C) with the ligands filed under them, or a ligand by its code (9FJX B LVY), or a file. It comes in fixed; free what you want designed.';
+
+/**
+ * What "1J79 A C" or "9FJX B LVY" keeps of an entry: the chains named, with the ligands the entry files under them
+ * (`pdbx_nonpoly_scheme.pdb_strand_id`: lenalidomide and zinc are label chains J and I, author chain B), and any
+ * ligand named by its code. Throws, naming the chains and ligands there are, for a name that is neither.
+ */
+export function namedAtoms(doc, names) {
+  const a = doc.atoms;
+  const col = (cat, key) => { const t = doc.cifBlock?.[cat]; const v = t?.[key] ?? t?.columns?.[key]; return v == null ? [] : (Array.isArray(v) ? v : [v]); };
+  const asym = col('pdbx_nonpoly_scheme', 'asym_id');
+  const strand = col('pdbx_nonpoly_scheme', 'pdb_strand_id');
+  const strandOf = new Map(asym.map((id, k) => [String(id).toUpperCase(), String(strand[k] ?? '').toUpperCase()]));
+  const chainOf = (i) => String(a.chain_id[i]).toUpperCase();
+  const present = new Set(Array.from(a.chain_id, (c) => String(c).toUpperCase()));
+  const codes = new Set(Array.from(a.res_name, (r) => String(r).toUpperCase()));
+  const keepChains = new Set();
+  const keepCodes = new Set();
+  const missing = [];
+  for (const raw of names) {
+    const n = String(raw).toUpperCase();
+    if (present.has(n)) {
+      keepChains.add(n);
+      for (const [label, auth] of strandOf) if (auth === n && present.has(label)) keepChains.add(label);
+    } else if (codes.has(n)) keepCodes.add(n);
+    else missing.push(raw);
+  }
+  if (missing.length) {
+    const ligands = [...present].filter((c) => strandOf.has(c)).map((c) => {
+      const i = Array.from(a.chain_id, (x) => String(x).toUpperCase()).indexOf(c);
+      return String(a.res_name[i]);
+    });
+    const chains = [...present].filter((c) => !strandOf.has(c));
+    throw new Error(`no chain or ligand ${missing.join(', ')} (chains ${chains.join(', ')}${ligands.length ? `; ligands ${[...new Set(ligands)].join(', ')}` : ''})`);
+  }
+  const keep = [];
+  for (let i = 0; i < a.nAtoms; i += 1) if (keepChains.has(chainOf(i)) || keepCodes.has(String(a.res_name[i]).toUpperCase())) keep.push(i);
+  return keep;
+}
 
 const FOLD_OPTIONS = [
   ['1', 'mainly α'], ['2', 'mainly β'], ['3', 'α/β'],
@@ -315,7 +353,8 @@ export class DesignPanel {
     const wanted = chains.map((c) => String(c).toUpperCase());
     const has = (doc) => {
       const present = new Set(Array.from(doc.atoms.chain_id, (c) => String(c).toUpperCase()));
-      return wanted.every((c) => present.has(c));
+      const codes = new Set(Array.from(doc.atoms.res_name, (r) => String(r).toUpperCase()));
+      return wanted.every((c) => present.has(c) || codes.has(c));
     };
     const first = await createStudioDocWithCcd(text, name, { preset: 'rcsb', assembly: '1' });
     if (!wanted.length || has(first)) return first;
@@ -329,23 +368,35 @@ export class DesignPanel {
     return first;
   }
 
+  /** Keep only what `names` ("B", "LVY") names of an opened entry (`namedAtoms`); all of it when none are named. */
+  _keepNamed(doc, names) {
+    if (!names.length) return;
+    const keep = new Set(namedAtoms(doc, names));
+    const drop = [];
+    for (let i = 0; i < doc.atoms.nAtoms; i += 1) if (!keep.has(i)) drop.push(i);
+    if (drop.length) doc.deleteAtoms(drop);
+  }
+
   async _addStructure(text, name, chains, replace) {
     const { status } = this.addStructure;
     const doc = await this._openEntry(text, name, chains);
-    const a = doc.atoms;
-    const present = [...new Set(a.chain_id.map(String))];
-    const wanted = new Set(chains.map((c) => c.toUpperCase()));
-    const missing = [...wanted].filter((c) => !present.some((p) => p.toUpperCase() === c));
-    if (missing.length) throw new Error(`no chain ${missing.join(', ')} (it has ${present.join(', ')})`);
-    if (wanted.size) {
-      const drop = [];
-      for (let i = 0; i < a.nAtoms; i += 1) if (!wanted.has(String(a.chain_id[i]).toUpperCase())) drop.push(i);
-      if (drop.length) doc.deleteAtoms(drop);
-    }
+    this._keepNamed(doc, chains);
     if (!doc.atoms.nAtoms) throw new Error('nothing left to add');
-    if (replace?.length && !await this._mutate('/delete', { atom_indices: replace })) throw new Error(this.lastError ?? 'could not remove the old chains');
+    // Replaced: the new structure goes in first and the old one comes out after, so a job that was only the old one is
+    // never emptied (Studio refuses that; an example with one chain could not be replaced). The old atoms are found by
+    // chain afterwards, since merging can reorder atoms.
+    const a0 = this._inputDoc()?.atoms;
+    const oldChains = new Set((replace ?? []).map((i) => String(a0.chain_id[i])));
     // Opened as a plain structure, it is already fixed throughout, so adding it is one Undo step.
     const added = await this._combine(doc);
+    if (oldChains.size) {
+      const a = this._inputDoc().atoms;
+      const addedSet = new Set(added);
+      const old = [];
+      for (let i = 0; i < a.nAtoms; i += 1) if (!addedSet.has(i) && oldChains.has(String(a.chain_id[i]))) old.push(i);
+      if (old.length && !await this._mutate('/delete', { atom_indices: old })) throw new Error(this.lastError ?? 'could not remove the old chains');
+      added.splice(0, added.length, ...this._chainAtoms(new Set(added.map((i) => String(a.chain_id[i])))));
+    }
     const newChains = [...new Set(added.map((i) => String(this._inputDoc().atoms.chain_id[i])))];
     const original = chains.length === 1 ? ` chain ${chains[0].toUpperCase()}` : '';
     this._rememberSource(newChains, /^[0-9][A-Za-z0-9]{3}$/.test(name) ? `PDB ${name}${original}` : `${name}${original}`);
@@ -363,6 +414,14 @@ export class DesignPanel {
   }
 
   /** Merge a document into the job (one undo step); resolves to the added atoms' indices (the chains that are new). */
+  /** Atom indices of the input in these chains. */
+  _chainAtoms(chains) {
+    const a = this._inputDoc()?.atoms;
+    const out = [];
+    for (let i = 0; i < (a?.nAtoms ?? 0); i += 1) if (chains.has(String(a.chain_id[i]))) out.push(i);
+    return out;
+  }
+
   async _combine(doc) {
     const store = getSharedStudioStore();
     const chainsOf = () => new Set(Array.from(this._inputDoc()?.atoms?.chain_id ?? [], String));
@@ -712,10 +771,19 @@ export class DesignPanel {
     const entry = g.label?.replace(/ chains? .*$/, '');
     const title = entry ? this.titles?.get(entry) : null;
     const text = entry ? `${entry} · ${g.chains.map((c) => c.id).join(' ')}` : null;
-    const caption = !g.label ? null : readonly
-      ? el('span', { class: 'rfd4p-source', title: title ?? null, text })
-      : el('button', { type: 'button', class: 'rfd4p-source', onclick: () => this._openAddStructure(g), text,
-        title: [title, `Click to replace ${g.label}`].filter(Boolean).join('\n') });
+    // Replace (another entry or file in its place) and × (take its chains out), in sight rather than behind a click
+    // on the caption: an example's structure is the first thing someone swaps for their own.
+    const atoms = g.chains.flatMap((c) => c.atomIndices);
+    const caption = !g.label ? null : el('div', { class: 'rfd4p-source-row' },
+      el('span', { class: 'rfd4p-source', title: title ?? null, text }),
+      readonly ? null : el('button', { type: 'button', class: 'secondary compact rfd4p-source-act', text: 'Replace',
+        title: `Put another PDB entry or file in place of ${g.label}`, onclick: () => this._openAddStructure(g) }),
+      readonly ? null : el('button', { type: 'button', class: 'rfd4p-x rfd4p-source-x', text: '×', title: `Remove ${g.label}`,
+        'aria-label': `Remove ${g.label}`, onclick: () => {
+          // The last thing in the job: removing it is Clear (the start screen, with Back), not an empty document.
+          if (atoms.length >= (this._inputDoc()?.atoms?.nAtoms ?? 0)) this.els.newDoc?.click();
+          else void this._mutate('/delete', { atom_indices: atoms });
+        } }));
     return el('div', { class: 'rfd4p-group' }, caption, ...g.chains.map((c) => this._chainRow(c, readonly)));
   }
 
@@ -1242,7 +1310,35 @@ export class DesignPanel {
       return { want, atomsOf, atoms, bad, missing: [...want].filter((id) => !byRes.has(id)) };
     };
 
+    // Residues typed that this piece cannot reach (they are another piece's): say whose, and offer to open it.
+    const elsewhere = () => {
+      const text = residuesText.value.replace(/\s*[-–]\s*/g, '-').trim();
+      const nums = [];
+      for (const tok of text.split(/[\s,;]+/).filter(Boolean)) {
+        const m = /^(?:[A-Za-z_]+)?(-?\d+)(?:-(-?\d+))?$/.exec(tok);
+        if (!m) return null;
+        nums.push(Number(m[1]), Number(m[2] ?? m[1]));
+      }
+      const out = nums.find((x) => x < reach.lo || x > reach.hi);
+      if (out == null) return null;
+      return { num: out, piece: c.pieces.find((q) => q !== p && q.kind === 'kept' && out >= q.start && out <= q.end) ?? null };
+    };
     const apply = async () => {
+      const away = !ranges() && elsewhere();
+      if (away) {
+        const name = (q) => `${c.id}${q.start}${q.end !== q.start ? `–${q.end}` : ''}`;
+        note.replaceChildren(away.piece
+          ? `${c.id}${away.num} is in ${name(away.piece)}, not this piece. `
+          : `${c.id}${away.num} is not in this piece (${name(p)}).`);
+        if (away.piece) {
+          note.append(el('button', { type: 'button', class: 'rfd4p-link-btn', text: `Open ${name(away.piece)}`, onclick: () => {
+            const card = [...(this.els.chainList?.querySelectorAll('.rfd4p-sub') ?? [])].find((x) => x.rfd4pAtoms?.[0] === away.piece.atomIndices[0]);
+            this._closePop?.();
+            card?.querySelector('.rfd4p-sub-open')?.click();
+          } }));
+        }
+        return;
+      }
       if (!ranges()) { note.textContent = 'Residues as ranges, e.g. 1–40, 60–115'; return; }
       // Hotspots are the chain's, whichever of its pieces the popup was opened from.
       const hotspots = residuesIn(hot.value, c.polymerAtomIndices);
@@ -2155,13 +2251,7 @@ export class DesignPanel {
       // Opened here rather than by Studio's file loader, so the chains named come from an assembly that has them.
       const doc = await this._openEntry(text, id, chains);
       if (chains.length) {
-        const a = doc.atoms;
-        const present = [...new Set(Array.from(a.chain_id, String))];
-        const missing = chains.filter((c) => !present.some((p) => p.toUpperCase() === c));
-        if (missing.length) throw new Error(`no chain ${missing.join(', ')} (it has ${present.join(', ')})`);
-        const drop = [];
-        for (let i = 0; i < a.nAtoms; i += 1) if (!chains.includes(String(a.chain_id[i]).toUpperCase())) drop.push(i);
-        if (drop.length) doc.deleteAtoms(drop);
+        this._keepNamed(doc, chains);
         doc.undoStack = [];
       }
       const sid = `rfd4p_fetch_${id}_${Date.now().toString(36)}`;

@@ -1187,3 +1187,11 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 #atomworks-studio-popover::-webkit-scrollbar-thumb:hover { background: var(--text-muted, #b1b3b9); }
 .rfd4p-generate-row .rfd4p-generate-btn { width: auto; }
 .rfd4p-generate-row .rfd4p-designs-field input { height: 34px; box-sizing: border-box; }
+#rfd4p-studio-card .rfd4p-link-btn, .rfd4p-piece-pop .rfd4p-link-btn {
+  min-height: 0; padding: 0; border: 0; background: none; color: var(--accent, #82aaff); font: inherit; text-decoration: underline; cursor: pointer;
+}
+/* A source's caption with Replace and × beside it. */
+#rfd4p-studio-card .rfd4p-source-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+#rfd4p-studio-card .rfd4p-source-row .rfd4p-source { flex: 1; min-width: 0; }
+#rfd4p-studio-card .rfd4p-source-act { min-height: 0; height: 20px; padding: 0 7px; font-size: 11px; }
+#rfd4p-studio-card .rfd4p-source-x { flex: none; }

@@ -63,8 +63,8 @@
   <p>A job is built from parts. Start with one, then add more the same way:</p>
   <ul>
     <li><span class="ui">+ seq</span>: a new chain for the model to design, 60–100 residues to start.</li>
-    <li><span class="ui">+ pdb</span>: chains from a PDB entry (<code>5O45</code>, or <code>1J79 A C</code> for some chains) or a file,
-      kept as they are.</li>
+    <li><span class="ui">+ pdb</span>: chains from a PDB entry (<code>5O45</code>, or <code>1J79 A C</code> for some chains, with the
+      ligands filed under them; <code>9FJX B LVY</code> names a ligand by its code) or a file, kept as they are.</li>
     <li><span class="ui">+ lig</span>: a small molecule by its PDB code (<code>HEM</code>, <code>ATP</code>, <code>ZN</code>), placed by the model.</li>
   </ul>
   <figure class="narrow"><img src="img/start.webp" alt="The start screen: + seq, + pdb, + lig, and the examples" loading="lazy"><figcaption>Start from parts, or from an example.</figcaption></figure>
@@ -78,7 +78,8 @@
     <li>Click a piece to change it. Its residues are selected in the viewer while its popup is open, and brought to the
       middle of the view.</li>
     <li><span class="ui">+</span> between pieces inserts new residues there; <span class="ui">×</span> removes a piece.</li>
-    <li>Chains are grouped under the structure they came from (<code>PDB 5O45 · A</code>); click that caption to swap the structure.</li>
+    <li>Chains are grouped under the structure they came from (<code>PDB 5O45 · A</code>). <span class="ui">Replace</span> beside it
+      puts your own entry or file in its place (an example's structure, say); <span class="ui">×</span> takes it out.</li>
     <li><span class="ui">Undo</span> steps back through every edit.</li>
   </ul>
   <figure class="narrow"><img src="img/card.webp" alt="The protein binder example: PD-L1 in the viewer, its sequence above, and the card with chain A fixed with 3 hotspots and chain B as 50–120 new residues" loading="lazy"><figcaption>The binder example's card: the target kept with three hotspots, a new chain of 50–120 residues to design.</figcaption></figure>
