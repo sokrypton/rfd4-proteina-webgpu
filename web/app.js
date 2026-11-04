@@ -41,7 +41,7 @@ import { openGuide } from './guide-dialog.js';
 import { resultsFiles } from './results-zip.js';
 import {
   REFOLD_MODELS, criteriaKind, describeRefold, designedChains, motifSlots, partialTemplates, passes, pdbToCif,
-  polymerChains, rankKey, refoldLigandCif, refoldMetrics, refoldOverlayCif,
+  polymerChains, refoldLigandCif, refoldMetrics, refoldOverlayCif,
 } from './refold-view.js';
 
 /** An element: attributes (`text`, `class`, `style`, `on…` handlers; null or false left out), then its children. */
@@ -562,6 +562,8 @@ class Rfd4pStudioApp {
       modelLoadText: document.getElementById('rfd4p-model-load-text'),
       progress: document.getElementById('rfd4p-progress'),
       designResultsRow: document.getElementById('design-results'),
+      jobBox: document.getElementById('rfd4p-job'),
+      jobTabs: document.getElementById('rfd4p-tabs'),
       designViewRadios: document.getElementById('design-view-radios'),
       downloadsBox: document.getElementById('downloads'),
       downloadAllBtn: document.getElementById('download-all-btn'),
@@ -1064,6 +1066,7 @@ class Rfd4pStudioApp {
         if (input && input.name === 'design-view-radio' && input.checked) {
           const sid = input.value;
           this.studioSessionId = sid;
+          if (sid !== this.inputSessionId) this.lastDesignSid = sid;
           this._syncRefoldUi();
           const viewInfo = this.generatedViews.get(sid);
           this._navigateStudioToSession(sid, {
@@ -1140,13 +1143,12 @@ class Rfd4pStudioApp {
       ] : []),
     ];
     const value = (v, key) => (Number.isFinite(v.metrics?.[key]) ? v.metrics[key] : null);
-    const sort = this.designSort ?? (designs.some((v) => v.metrics) ? { ...rankKey(kind), passFirst: true } : null);
-    const verdict = (v) => (v.pass === true ? 0 : v.pass === false ? 2 : 1);
+    // In the order made until a column head is clicked.
+    const sort = this.designSort ?? null;
     const order = (sids) => {
       const list = sids.map((sid) => [sid, views.get(sid)]).filter(([, v]) => v);
       if (!sort) return list;
       return list.sort(([, a], [, b]) => {
-        if (sort.passFirst && verdict(a) !== verdict(b)) return verdict(a) - verdict(b);
         const x = value(a, sort.key);
         const y = value(b, sort.key);
         if (x === null || y === null) return (x === null) - (y === null) || a.designIndex - b.designIndex;
@@ -1157,26 +1159,22 @@ class Rfd4pStudioApp {
     const busy = Boolean(this.refoldAbort);
     const thead = () => h('thead', {}, h('tr', {},
       h('th', { class: 'rfd4p-dt-name', title: 'Each design is named by its seed: the same seed and settings make it again', text: 'Seed' }),
-      h('th', { class: 'rfd4p-dt-mark' }),
       ...cols.map((c) => h('th', { class: 'rfd4p-dt-num', title: c.title }, h('button', {
         type: 'button', class: `rfd4p-design-sort${sort?.key === c.key ? ' is-sorted' : ''}`,
         text: `${c.label}${sort?.key === c.key ? (sort.dir === c.dir ? '▾' : '▴') : ''}`,
         onclick: () => {
-          this.designSort = sort?.key === c.key && !sort.passFirst ? { key: c.key, dir: -sort.dir } : { key: c.key, dir: c.dir };
+          this.designSort = sort?.key === c.key ? { key: c.key, dir: -sort.dir } : { key: c.key, dir: c.dir };
           this._renderDesigns();
         },
       }))),
       h('th', { class: 'rfd4p-dt-act' })));
     const row = (sid, v, inputTitle = null) => {
       const isInputRow = v.isInput;
-      const cls = [isInputRow ? 'rfd4p-design-input' : '', v.pass === true ? 'rfd4p-design-pass' : '',
-        v.pass === false ? 'rfd4p-design-fail' : ''].filter(Boolean).join(' ');
-      const tr = h('tr', { class: cls || null, title: isInputRow ? inputTitle : null });
+      const tr = h('tr', { class: isInputRow ? 'rfd4p-design-input' : null, title: isInputRow ? inputTitle : null });
       const radio = h('input', { type: 'radio', name: 'design-view-radio', value: sid });
       radio.checked = sid === this.studioSessionId;
       tr.append(
-        h('td', { class: 'rfd4p-dt-name' }, h('label', {}, radio, h('span', { text: isInputRow ? 'Input' : this._designName(v) }))),
-        h('td', { class: 'rfd4p-dt-mark', text: v.pass === true ? '✓' : '' }));
+        h('td', { class: 'rfd4p-dt-name' }, h('label', {}, radio, h('span', { text: isInputRow ? 'Input' : this._designName(v) }))));
       const state = isInputRow ? '' : this.refoldSid === sid ? 'refolding…' : this.refoldQueue?.includes(sid) ? 'queued'
         : v.refoldError ? 'refold failed' : null;
       if (state !== null) tr.append(h('td', { class: 'rfd4p-dt-state', colspan: cols.length, text: state }));
@@ -1197,13 +1195,24 @@ class Rfd4pStudioApp {
       tr.addEventListener('click', (ev) => { if (!ev.target.closest('button, label, input')) radio.click(); });
       return tr;
     };
-    const table = (rows) => h('table', { class: 'rfd4p-dtable' }, thead(), h('tbody', {}, ...rows));
-    // One table: the input, then the designs.
+    // One box, two tabs once there are designs: Input (the design being edited) and Outputs (this table). The structure
+    // shown says which is open, and opening a tab shows its structure (Outputs: the design last looked at).
     const input = views.get(this.inputSessionId);
-    const rows = [input?.isInput ? row(this.inputSessionId, input, 'The input the designs were made from') : null,
-      ...order(runs[0]?.designs ?? []).map(([sid, v]) => row(sid, v))].filter(Boolean);
-    const parts = [table(rows)];
-    box.replaceChildren(...(designs.length ? parts : []));
+    const designSids = runs[0]?.designs ?? [];
+    const onInput = !designs.length || this.studioSessionId === this.inputSessionId;
+    const tab = (label, on, sid) => h('button', {
+      type: 'button', role: 'tab', class: `rfd4p-dtab${on ? ' is-on' : ''}`, 'aria-selected': String(on), text: label,
+      onclick: () => { if (!on && sid) void this._selectDesign(sid); },
+    });
+    const lastSeen = designSids.includes(this.lastDesignSid) ? this.lastDesignSid : designSids[0];
+    if (this.els.jobTabs) {
+      this.els.jobTabs.replaceChildren(tab('Input', onInput, input?.isInput ? this.inputSessionId : null),
+        tab(`Outputs (${designSids.length})`, !onInput, lastSeen));
+      this.els.jobTabs.hidden = !designs.length;
+    }
+    if (this.els.jobBox) this.els.jobBox.dataset.tab = onInput ? 'input' : 'outputs';
+    const table = h('table', { class: 'rfd4p-dtable' }, thead(), h('tbody', {}, ...order(designSids).map(([sid, v]) => row(sid, v))));
+    box.replaceChildren(...(designs.length ? [table] : []));
     box.classList.toggle('rfd4p-designs-busy', Boolean(this.activeAbortController));
     if (this.els.downloadsBox) this.els.downloadsBox.hidden = designs.length < 1;
     this.els.designResultsRow.hidden = designs.length < 1;
@@ -1213,6 +1222,7 @@ class Rfd4pStudioApp {
   /** Select a row of the Designs table and show it. */
   async _selectDesign(sid) {
     this.studioSessionId = sid;
+    if (sid !== this.inputSessionId) this.lastDesignSid = sid;
     this._renderDesigns();
     await this._navigateStudioToSession(sid, { withTrajectory: Boolean(this.generatedViews.get(sid)?.hasTrajectory) });
   }

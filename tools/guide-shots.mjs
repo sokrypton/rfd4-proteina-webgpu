@@ -156,7 +156,7 @@ const SCENES = {
       for (let i = 0; i < 12000 && app.refoldAbort; i++) await sleep(100);
       await sleep(3000);
     }`);
-    await shot('designs', await around(['#design-results']));
+    await shot('designs', await around(['#rfd4p-job']));
   },
 };
 

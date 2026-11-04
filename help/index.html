@@ -149,8 +149,9 @@
 
   <h2 id="run">Running</h2>
   <ul>
-    <li><span class="ui">Designs</span>: how many (1–8). <span class="ui">Seed</span>: the same seed and settings give the same design;
-      🎲 draws a new one, and a new seed is drawn after each run unless you type one.</li>
+    <li><span class="ui">Designs</span>, beside Generate: how many (1–8). <span class="ui">Seed</span>, under More settings: the
+      same seed and settings give the same design; 🎲 draws a new one, and a new seed is drawn after each run unless you type
+      one.</li>
     <li><span class="ui">Thinking</span>, above Generate: extra recycling passes per step (none, low, medium, high). None is the
       default, for speed; medium is the model's own default, about three times slower, and may give better designs (fewer
       binders clashing with their target).</li>
@@ -172,7 +173,9 @@
     back exactly as given.</p>
 
   <h2 id="designs">Designs</h2>
-  <p>Every design is a row, named by its seed (the same seed and settings make it again); click one to see it, or Input to go back to editing. Generate again with the input unchanged
+  <p>Two tabs: <span class="ui">Input</span>, the structure the designs were made from (open it to go back to editing), and
+    <span class="ui">Outputs</span>, the designs. Every design is a row, named by its seed (the same seed and settings make it
+    again); click one to see it. A new Generate shows its first design, and a refold the design it refolded. Generate again with the input unchanged
     and the new designs join the list; change the input and the next Generate starts a new list (save what you want to
     keep first).</p>
   <ul>
@@ -180,11 +183,11 @@
       back. <span class="ui">↻</span> refolds one design; <span class="ui">⤓</span> downloads it. The
       <span class="ui">Refold</span> box holds its settings: model, seed, recycles (3) and diffusion steps (25; AlphaFold 3 was
       trained with 200). Change any of them and Refold all folds every design again with the new ones.</li>
-    <li>Click a column head to sort by it. By default, designs that pass come first, then the rest by the job's main number.</li>
+    <li>Rows are in the order made; click a column head to sort by it.</li>
     <li><span class="ui">Save all (.zip)</span>: the input, every design with its trajectory, every refold, and the table as
       <code>summary.csv</code>.</li>
   </ul>
-  <figure class="narrow"><img src="img/designs.webp" alt="Three designs refolded and ranked in the Designs table" loading="lazy"><figcaption>Three designs from scratch, each named by its seed, refolded and ranked; designs that pass carry a ✓, the others are greyed out.</figcaption></figure>
+  <figure class="narrow"><img src="img/designs.webp" alt="Three designs refolded, in the Outputs tab" loading="lazy"><figcaption>Three designs from scratch, each named by its seed, refolded.</figcaption></figure>
   <div class="table-wrap"><table>
     <tr><th>Column</th><th>Meaning</th><th>Better</th></tr>
     <tr><td>RMSD</td><td>Å between the design and its refold. For a binder or antibody, after fitting on the target, so where it sits counts.</td><td>lower</td></tr>
@@ -192,15 +195,14 @@
     <tr><td>ipTM</td><td>Its confidence in the interface, 0–1.</td><td>higher</td></tr>
     <tr><td>iPAE</td><td>Å: the lowest predicted error between a designed residue and the rest.</td><td>lower</td></tr>
   </table></div>
-  <p><span style="color: var(--pass); font-weight: 700">✓</span> marks designs that meet the model's own pass criteria; designs
-    that miss them are greyed out.</p>
+  <p>The <code>passes</code> column of <code>summary.csv</code> says whether a design meets the model's own pass criteria:</p>
   <div class="table-wrap"><table>
     <tr><th>Job</th><th>Passes when</th></tr>
     <tr><td>Monomer</td><td>RMSD ≤ 1.5 Å</td></tr>
     <tr><td>Binder</td><td>the binder's pTM ≥ 0.80, iPAE ≤ 1.5, RMSD on the target ≤ 2.5 Å</td></tr>
     <tr><td>Antibody</td><td>iPAE ≤ 2.0, RMSD on the target ≤ 2.0 Å</td></tr>
   </table></div>
-  <p>Motif, enzyme and small-molecule jobs get the numbers but no ✓: their criteria also need motif and ligand RMSDs not
+  <p>Motif, enzyme and small-molecule jobs get the numbers but no verdict: their criteria also need motif and ligand RMSDs not
     computed here. Passing is a computational check; binding still needs an experiment.</p>
   <p class="note">AlphaFold 3's parameters are Google DeepMind's, for non-commercial use under a prohibited-use policy. The page
     asks once before using them; OpenBind-0 (same architecture, Apache 2.0) is the alternative.</p>

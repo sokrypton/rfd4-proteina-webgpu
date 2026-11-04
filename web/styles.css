@@ -579,6 +579,12 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   font-size: 11.5px;
 }
 
+/* Designs (how many) beside Generate. */
+.rfd4p-generate-row { display: flex; align-items: flex-end; gap: 8px; }
+.rfd4p-generate-row .rfd4p-generate-btn { flex: 1; min-width: 0; margin: 0; }
+.rfd4p-section > .rfd4p-generate-row { margin: 0; }
+.rfd4p-sampling-body > .rfd4p-settings-row { margin: 0; }
+
 .rfd4p-designs-field input {
   width: 56px;
 }
@@ -1015,7 +1021,7 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
   cursor: pointer;
 }
 .rfd4p-piece-pop .rfd4p-pop-x:hover { color: var(--text, #f1f1f2); }
-.rfd4p-starting #design-results, .rfd4p-starting #generation-status { display: none; }
+.rfd4p-starting #design-results, .rfd4p-starting #generation-status, .rfd4p-starting #rfd4p-tabs { display: none; }
 
 /* The Designs table (web/app.js _renderDesigns): one row a design, its refold's numbers, sortable by column. */
 /* "Designs", its tables, then the Refold box: everything refolding takes, in one bordered square. */
@@ -1036,7 +1042,6 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 .rfd4p-dtable .rfd4p-dt-name { width: 100%; text-align: left; }
 .rfd4p-dtable .rfd4p-dt-name label { display: block; margin: 0; cursor: pointer; }
 .rfd4p-dtable .rfd4p-dt-name input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.rfd4p-dtable .rfd4p-dt-mark { width: 12px; padding: 0 2px; color: var(--success, #45b99a); font-weight: 700; text-align: center; }
 .rfd4p-dtable .rfd4p-dt-num { text-align: right; font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; }
 .rfd4p-dtable th.rfd4p-dt-num { font-family: inherit; font-size: 10.5px; }
 .rfd4p-dtable .rfd4p-dt-state { text-align: right; color: var(--text-muted, #b1b3b9); font-style: italic; }
@@ -1045,7 +1050,23 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 .rfd4p-dtable tbody tr:hover td { background: var(--surface-hover, rgba(255, 255, 255, 0.05)); }
 /* Selected: the outline every view uses for a selection. */
 .rfd4p-dtable tbody tr:has(input:checked) td { border-color: var(--text, #ededef); }
-.rfd4p-design-fail .rfd4p-dt-name, .rfd4p-design-fail .rfd4p-dt-num { opacity: 0.45; }
+/* The job box: Input (the design) and Outputs (the designs) under tabs, one shown at a time; empty, not drawn. */
+.rfd4p-job > .rfd4p-design { display: grid; gap: 8px; }
+.rfd4p-job > .rfd4p-design[hidden], .rfd4p-job > #design-results[hidden] { display: none; }
+.rfd4p-design > .rfd4p-chain-actions { margin: 0; }
+.rfd4p-job[data-tab="input"] > #design-results, .rfd4p-job[data-tab="outputs"] > .rfd4p-design { display: none; }
+#rfd4p-studio-card .rfd4p-job:not(:has(> .rfd4p-design:not([hidden]))):not(:has(> #design-results:not([hidden]))) { display: none; }
+/* Input / Outputs tabs over the box's content. */
+.rfd4p-dtabs[hidden] { display: none; }
+.rfd4p-dtabs { display: flex; gap: 2px; margin-bottom: 0; border-bottom: 1px solid var(--border, #383a3f); }
+#rfd4p-studio-card .rfd4p-dtab {
+  min-height: 0; padding: 5px 10px; margin-bottom: -1px; border: 1px solid transparent; border-radius: 5px 5px 0 0;
+  background: none; color: var(--text-muted, #b1b3b9); font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+#rfd4p-studio-card .rfd4p-dtab:hover { color: var(--text, #ededef); }
+#rfd4p-studio-card .rfd4p-dtab.is-on {
+  color: var(--text, #ededef); border-color: var(--border, #383a3f); border-bottom-color: var(--surface-panel, #222326);
+}
 /* A list: framed, a line under the header and between rows (shadows, so the selection's border stays its own). */
 .rfd4p-dtable { border: 1px solid var(--border, #383a3f); border-radius: 5px; background: var(--surface-recessed, #191a1c); }
 .rfd4p-dtable th { padding: 4px; box-shadow: inset 0 -1px 0 var(--border, #383a3f); }
@@ -1129,3 +1150,5 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
   background: color-mix(in srgb, var(--text-muted, #b1b3b9) 55%, transparent); border: 2px solid var(--surface-recessed, #1b1c1e); border-radius: 5px;
 }
 #atomworks-studio-popover::-webkit-scrollbar-thumb:hover { background: var(--text-muted, #b1b3b9); }
+.rfd4p-generate-row .rfd4p-generate-btn { width: auto; }
+.rfd4p-generate-row .rfd4p-designs-field input { height: 34px; box-sizing: border-box; }
