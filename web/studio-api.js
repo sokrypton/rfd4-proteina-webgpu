@@ -21,7 +21,7 @@ import {
 } from '../shared/rfd4p/pipeline/cif.js';
 import { toPdbString } from '../shared/rfd4p/output.js';
 import { decodeTextOrZstd } from '../shared/rfd4p/pipeline/zstd.js';
-import { prepareRcsbStructure, removeResidues } from '../shared/rfd4p/pipeline/prepare.js';
+import { prepareRcsbStructure, removeResidues, removeUnresolvedResidues } from '../shared/rfd4p/pipeline/prepare.js';
 import { componentsNeedingCcd, fetchCcdComponents, mergeCcdIntoBlock } from '../shared/rfd4p/pipeline/ccd.js';
 import { evalPathSelection, evalSelection } from '../shared/rfd4p/pipeline/spec.js';
 
@@ -385,6 +385,9 @@ export class StudioDoc {
       const prepared = prepareRcsbStructure(this.atoms, this.cifBlock, { assemblyId: opts.assembly ?? '1' });
       // Beyond AtomWorks' additive list: sodium and chloride from the crystallisation buffer, never part of a design.
       this.atoms = removeResidues(prepared.atoms, BUFFER_IONS);
+      // Residues the entry did not resolve go too (`keepUnresolved` keeps them: the example recipes, which reproduce
+      // upstream's examples as they were set up).
+      if (!opts.keepUnresolved) this.atoms = removeUnresolvedResidues(this.atoms);
       this.importNotes = prepared.notes;
       computeIdAndEntityAnnotations(this.atoms);
       // Prepared (water, additives and other chains gone, the assembly built, all fixed), it is no longer the file:

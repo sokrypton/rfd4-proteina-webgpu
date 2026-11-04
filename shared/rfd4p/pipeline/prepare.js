@@ -307,6 +307,26 @@ export function removeResidues(atoms, ccds) {
   return keep.length === atoms.nAtoms ? atoms : sliceAtomArray(atoms, keep);
 }
 
+/**
+ * Residues no atom of which has coordinates (a deposited entry's unmodelled ends and loops): dropped from a structure
+ * loaded to design with, where they would otherwise be built by the model as part of a chain held fixed.
+ */
+export function removeUnresolvedResidues(atoms) {
+  const keep = [];
+  let start = 0;
+  const has = (i) => { const c = atoms.coord[i]; return Boolean(c) && Number.isFinite(c[0]) && Number.isFinite(c[1]) && Number.isFinite(c[2]); };
+  for (let i = 1; i <= atoms.nAtoms; i += 1) {
+    const same = i < atoms.nAtoms && atoms.chain_id[i] === atoms.chain_id[start] && atoms.res_id[i] === atoms.res_id[start]
+      && (atoms.ins_code?.[i] ?? '') === (atoms.ins_code?.[start] ?? '');
+    if (same) continue;
+    let any = false;
+    for (let k = start; k < i && !any; k += 1) any = has(k);
+    if (any) for (let k = start; k < i; k += 1) keep.push(k);
+    start = i;
+  }
+  return keep.length === atoms.nAtoms ? atoms : sliceAtomArray(atoms, keep);
+}
+
 /** `convert_mse_to_met`: MSE -> MET, SE -> SD (sulfur), as a standard polymer residue. In place. */
 export function convertMseToMet(atoms) {
   for (let i = 0; i < atoms.nAtoms; i += 1) {

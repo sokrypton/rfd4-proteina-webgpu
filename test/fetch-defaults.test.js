@@ -38,3 +38,20 @@ test('"rigid" twice is one rigid group when the group is given', () => {
   assert.deepEqual(groups(5, 6), [group]);
   assert.notDeepEqual(groups(3, 3), [group]);
 });
+
+test('residues an entry did not resolve are dropped on loading, kept for the example recipes', () => {
+  // Residues 1 and 4 of 6 with no coordinates (CIF "?"): an unmodelled end and loop.
+  const unresolved = new Set([1, 4]);
+  let n = 0;
+  const rows = [];
+  for (let r = 1; r <= 6; r += 1) {
+    for (const [name, el] of [['N', 'N'], ['CA', 'C'], ['C', 'C'], ['O', 'O']]) {
+      const row = atom(++n, 'ATOM', el, name, 'ALA', 'A', r, r * 4 + n % 4);
+      rows.push(unresolved.has(r) ? row.replace(/ -?\d+\.000 0\.000 0\.000 /, ' ? ? ? ') : row);
+    }
+  }
+  const text = [...header, ...rows, ''].join('\n');
+  const ids = (doc) => [...new Set(Array.from(doc.atoms.res_id, Number))];
+  assert.deepEqual(ids(new StudioDoc(text, 't', { preset: 'rcsb' })), [2, 3, 5, 6]);
+  assert.deepEqual(ids(new StudioDoc(text, 't', { preset: 'rcsb', keepUnresolved: true })), [1, 2, 3, 4, 5, 6]);
+});

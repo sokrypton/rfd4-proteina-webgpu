@@ -349,20 +349,20 @@ export class DesignPanel {
    * An entry opened as AtomWorks does (rcsb preset), in its first biological assembly that has all of `chains` (3EAK's
    * chain B is in assembly 2); the first assembly when no chains are named or none has them all.
    */
-  async _openEntry(text, name, chains = []) {
+  async _openEntry(text, name, chains = [], extra = {}) {
     const wanted = chains.map((c) => String(c).toUpperCase());
     const has = (doc) => {
       const present = new Set(Array.from(doc.atoms.chain_id, (c) => String(c).toUpperCase()));
       const codes = new Set(Array.from(doc.atoms.res_name, (r) => String(r).toUpperCase()));
       return wanted.every((c) => present.has(c) || codes.has(c));
     };
-    const first = await createStudioDocWithCcd(text, name, { preset: 'rcsb', assembly: '1' });
+    const first = await createStudioDocWithCcd(text, name, { preset: 'rcsb', assembly: '1', ...extra });
     if (!wanted.length || has(first)) return first;
     const gen = first.cifBlock?.pdbx_struct_assembly_gen;
     const raw = gen?.assembly_id ?? gen?.columns?.assembly_id ?? [];
     const ids = [...new Set((Array.isArray(raw) ? raw : [raw]).map(String))].filter((id) => id !== '1');
     for (const id of ids) {
-      const doc = await createStudioDocWithCcd(text, name, { preset: 'rcsb', assembly: id });
+      const doc = await createStudioDocWithCcd(text, name, { preset: 'rcsb', assembly: id, ...extra });
       if (has(doc)) return doc;
     }
     return first;
@@ -2317,7 +2317,8 @@ export class DesignPanel {
             return false;
           }
           this._rememberTitle(`PDB ${id}`, text);
-          const doc = await this._openEntry(text, id, chains);
+          // As upstream's example was set up: its unresolved residues kept, unlike a structure someone loads.
+          const doc = await this._openEntry(text, id, chains, { keepUnresolved: true });
           if (chains.length) {
             const drop = [];
             for (let i = 0; i < doc.atoms.nAtoms; i += 1) if (!chains.includes(String(doc.atoms.chain_id[i]))) drop.push(i);
