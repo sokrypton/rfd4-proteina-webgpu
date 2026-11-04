@@ -121,6 +121,9 @@
                             <option value="af3" selected>AlphaFold 3</option>
                             <option value="openbind0">OpenBind-0</option>
                         </select>
+                        <label class="rfd4p-refold-seed" title="The refold model's seed: another seed, another sample of the fold">seed
+                            <input id="rfd4p-refold-seed" type="number" min="0" max="4294967295" step="1" value="0" aria-label="Refold seed" />
+                        </label>
                         <button id="rfd4p-refold-btn" class="secondary compact" type="button"
                                 title="Fold each design's sequence again with a structure prediction model and score it">Refold all</button>
                     </div>
