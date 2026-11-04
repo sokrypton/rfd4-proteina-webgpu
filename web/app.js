@@ -1241,6 +1241,7 @@ class Rfd4pStudioApp {
 
   _applyTheme() {
     const light = this.theme === 'light';
+    document.documentElement.dataset.hostTheme = light ? 'light' : 'dark';
     document.body.dataset.hostTheme = light ? 'light' : 'dark';
     window.atomworksStudio?.setTheme?.(this.theme);
     const btn = document.getElementById('rfd4p-theme-btn');

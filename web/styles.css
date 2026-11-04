@@ -32,7 +32,8 @@ body.studio-fullscreen-body {
   --rfd4p-sunk: #1a1b1e;
   --rfd4p-hover: rgba(255, 255, 255, 0.05);
 }
-body:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]) {
+body:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]),
+:root:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]) {
   --rfd4p-sidebar: #eceef1;
   --rfd4p-box: #ffffff;
   --rfd4p-box-border: #d3d7dd;
@@ -352,16 +353,22 @@ body:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]) {
   display: none;
 }
 
+/* Every layer behind the viewer is the background it draws, so nothing flashes before its first frame (Mol*'s
+   stylesheet makes its canvas near-white): black, or white in light mode. */
+#viewer, #viewer .msp-plugin, #viewer .msp-viewport, #viewer .msp-canvas { background: #000 !important; }
+[data-host-theme="light"] #viewer, [data-host-theme="light"] #viewer .msp-plugin,
+[data-host-theme="light"] #viewer .msp-viewport, [data-host-theme="light"] #viewer .msp-canvas { background: #fff !important; }
+
 /* Mol*'s own stylesheet is dark only: in light mode its viewer buttons take the page's colours. */
-body[data-host-theme="light"] #viewer .msp-btn,
-body[data-host-theme="light"] #viewer .msp-btn-icon,
-body[data-host-theme="light"] #viewer .msp-btn-icon-small {
+[data-host-theme="light"] #viewer .msp-btn,
+[data-host-theme="light"] #viewer .msp-btn-icon,
+[data-host-theme="light"] #viewer .msp-btn-icon-small {
   background: var(--surface-card, #fff) !important;
   color: var(--text-muted, #59626d) !important;
   border-color: var(--border, #d6dae0) !important;
 }
-body[data-host-theme="light"] #viewer .msp-btn:hover,
-body[data-host-theme="light"] #viewer .msp-btn-icon:hover { color: var(--text, #1f2328) !important; }
+[data-host-theme="light"] #viewer .msp-btn:hover,
+[data-host-theme="light"] #viewer .msp-btn-icon:hover { color: var(--text, #1f2328) !important; }
 
 /* Hide redundant / layout-breaking Mol* internal buttons */
 #viewer .msp-viewport-controls-buttons > div:has(> button[title="Toggle Controls Panel"]),
