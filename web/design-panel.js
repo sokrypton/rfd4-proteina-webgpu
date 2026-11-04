@@ -349,47 +349,17 @@ export class DesignPanel {
     const newChains = [...new Set(added.map((i) => String(this._inputDoc().atoms.chain_id[i])))];
     const original = chains.length === 1 ? ` chain ${chains[0].toUpperCase()}` : '';
     this._rememberSource(newChains, /^[0-9][A-Za-z0-9]{3}$/.test(name) ? `PDB ${name}${original}` : `${name}${original}`);
-    // Added beside a chain the job designs from scratch (a binder), the structure is its target, set up as upstream's.
-    const binder = (this._spec()?.chains ?? []).some((c) => !newChains.includes(c.id) && c.role === 'new');
-    if (binder) await this._makeTargets(this._asLoaded(newChains));
     this.addStructure.form.hidden = true;
     this.addStructure.replace = null;
     this.render();
   }
 
-  /** + seq: a new chain to design, 60–100 residues; structures kept as loaded beside it become its targets. */
+  /** + seq: a new chain to design, 60–100 residues. */
   async _addSeq() {
-    const targets = this._asLoaded();
-    if (!await this._mutate('/segments', {
+    await this._mutate('/segments', {
       minimum: 60, maximum: 100, atom_index: null, before: false, new_chain: true, chain_id: null,
       chain_type: 'polypeptide(L)',
-    })) return;
-    if (targets.length) await this._makeTargets(targets);
-  }
-
-  /**
-   * Chains still as loaded (`ids`, or all of the job's): every piece fixed, all atoms, in place, but for residues the
-   * entry has no coordinates for, which come in with their sequence only.
-   */
-  _asLoaded(ids = null) {
-    const fixedAll = (now) => now.structure === 'fixed' && now.atoms === 'all' && now.sequence === 'fixed' && now.position === 'fixed';
-    const seqOnly = (now) => now.structure === 'designed' && now.sequence === 'fixed' && now.position === 'fixed';
-    return (this._spec()?.chains ?? []).filter((c) => (!ids || ids.includes(c.id)) && c.role !== 'ligand' && c.pieces.length
-      && c.pieces.every((p) => p.kind === 'kept' && (fixedAll(this._properties(p)) || seqOnly(this._properties(p))))
-      && c.pieces.some((p) => fixedAll(this._properties(p)))).map((c) => c.id);
-  }
-
-  /**
-   * A binder's targets as upstream sets them up by default (its binder cookbook and guide): the backbone held as one
-   * rigid body, so its shape is kept and the model places it with the binder; the sequence fixed; hotspots as they
-   * are. One Undo step per edit, shown on the card ("backbone rigid").
-   */
-  async _makeTargets(ids) {
-    const parts = (this._spec()?.chains ?? []).filter((c) => ids.includes(c.id))
-      .flatMap((c) => c.pieces.filter((p) => p.kind === 'kept').map((p) => ({
-        p, atoms: p.atomIndices, want: { structure: 'rigid', atoms: 'backbone', sequence: 'fixed', position: 'fixed' },
-      })));
-    if (parts.length) await this._applyPieces(parts);
+    });
   }
 
   /** Merge a document into the job (one undo step); resolves to the added atoms' indices (the chains that are new). */

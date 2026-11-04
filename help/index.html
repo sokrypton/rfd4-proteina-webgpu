@@ -108,9 +108,9 @@
   </table></div>
   <p>Chains from the same structure that are rigid move as one body, so an antibody's heavy and light chains keep their pairing.</p>
   <p class="note">Designing a binder: crop the target to the domain around the site (the crop bar), give it two or three
-    hotspots, and add the binder with <span class="ui">+ seq</span>. A structure loaded as it is becomes the binder's target the way
-    the model's own recipe sets one up: backbone rigid (its shape kept, placed by the model with the binder), sequence fixed.
-    There is no need to centre it.</p>
+    hotspots, and add the binder with <span class="ui">+ seq</span>. The target can stay fixed, or be made rigid with Atoms
+    backbone, as the model's own binder recipe does (its shape kept, placed by the model with the binder). There is no
+    need to centre it.</p>
   <h3>More</h3>
   <ul>
     <li><span class="ui">Shape</span>: helix, strand or loop. <span class="ui">Exposure</span>: buried, intermediate or exposed.</li>
@@ -204,8 +204,7 @@
     <tr><th>Example</th><th>Set-up</th></tr>
     <tr><td>Protein from scratch</td><td>One free chain of 250 residues.</td></tr>
     <tr><td>Blueprint</td><td>A ferredoxin-like fold drawn as blocks: strand, loop, helix, … each a block of new residues with its shape.</td></tr>
-    <tr><td>Protein binder</td><td>PD-L1 (5O45): its backbone rigid, sequence fixed, three hotspots; a new binder of 50–120
-      residues. The model's own default set-up for binders.</td></tr>
+    <tr><td>Protein binder</td><td>PD-L1 (5O45) fixed with three hotspots; a new binder of 50–120 residues.</td></tr>
     <tr><td>Small-molecule binder</td><td>SAM (1XVA), placed by the model; a 150-residue protein around it.</td></tr>
     <tr><td>Motif scaffolding</td><td>Three residues of 1QJG fixed; the rest rebuilt as four stretches of new residues.</td></tr>
     <tr><td>Enzyme</td><td>A catalytic Asp's tip atoms (position free), Zn and part of orotate (1J79) fixed; 180 new residues.</td></tr>
