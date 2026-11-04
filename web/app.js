@@ -1054,7 +1054,7 @@ class Rfd4pStudioApp {
     const views = [...this.generatedViews.entries()];
     const input = views.find(([, v]) => v.isInput)?.[1];
     const store = getSharedStudioStore();
-    const designs = views.filter(([, v]) => !v.isInput && !v.isRefold && !v.isSnapshot && v.cif)
+    const designs = views.filter(([, v]) => !v.isInput && !v.isRefold && v.cif)
       .map(([sid, v]) => ({
         index: v.designIndex ?? 1, label: v.label, seed: v.seed, stepsRun: v.stepsRun, nsteps: v.nsteps,
         cif: v.cif, pdb: v.pdb, trajectoryCif: store.getSession(sid)?.trajectoryCif ?? null,
@@ -1139,7 +1139,7 @@ class Rfd4pStudioApp {
       }))),
       h('th', { class: 'rfd4p-dt-act' })));
     const row = (sid, v, inputTitle = null) => {
-      const isInputRow = v.isInput || v.isSnapshot;
+      const isInputRow = v.isInput;
       const cls = [isInputRow ? 'rfd4p-design-input' : '', v.pass === true ? 'rfd4p-design-pass' : '',
         v.pass === false ? 'rfd4p-design-fail' : ''].filter(Boolean).join(' ');
       const tr = h('tr', { class: cls || null, title: isInputRow ? inputTitle : `seed ${v.seed}` });
@@ -1168,30 +1168,12 @@ class Rfd4pStudioApp {
       tr.addEventListener('click', (ev) => { if (!ev.target.closest('button, label, input')) radio.click(); });
       return tr;
     };
-    const table = (rows, withHead = true) => h('table', { class: 'rfd4p-dtable' }, withHead ? thead() : null, h('tbody', {}, ...rows));
-    // Each run's own input first in its table: the input itself while it is unchanged since the newest run, else the
-    // run's read-only copy. The input as it is now heads the list only once it has changed since that run.
+    const table = (rows) => h('table', { class: 'rfd4p-dtable' }, thead(), h('tbody', {}, ...rows));
+    // One table: the input, then the designs.
     const input = views.get(this.inputSessionId);
-    const revisionNow = getSharedStudioStore().getSession(this.inputSessionId)?.revision ?? null;
-    const parts = [];
-    const newest = runs.at(-1);
-    const unchanged = (r) => r === newest && r.inputRevision === revisionNow;
-    if (input?.isInput && (!newest || !unchanged(newest))) parts.push(table([row(this.inputSessionId, input, 'The input as it is now (editable)')], false));
-    for (const [k, r] of runs.entries()) {
-      const own = unchanged(r) && input?.isInput ? [this.inputSessionId, input, 'The input these designs were made from (editable)']
-        : r.inputSnapshot && views.get(r.inputSnapshot) ? [r.inputSnapshot, views.get(r.inputSnapshot), `The input run ${r.index} was made from (read-only)`] : null;
-      const rows = [own ? row(...own) : null, ...order(r.designs).map(([sid, v]) => row(sid, v))].filter(Boolean);
-      if (runs.length === 1) { parts.push(table(rows)); continue; }
-      const group = h('details', { class: 'rfd4p-run' },
-        h('summary', { text: `Run ${r.index} · ${r.designs.length} design${r.designs.length === 1 ? '' : 's'}` }), table(rows));
-      // Open or closed as the reader left it, across redraws (a refold redraws the table); until then, the newest run
-      // and the one holding what is shown are open.
-      this.runOpen ??= new Map();
-      group.open = this.runOpen.has(r.index) ? this.runOpen.get(r.index)
-        : k === runs.length - 1 || r.designs.includes(this.studioSessionId) || r.inputSnapshot === this.studioSessionId;
-      group.addEventListener('toggle', () => this.runOpen.set(r.index, group.open));
-      parts.push(group);
-    }
+    const rows = [input?.isInput ? row(this.inputSessionId, input, 'The input the designs were made from') : null,
+      ...order(runs[0]?.designs ?? []).map(([sid, v]) => row(sid, v))].filter(Boolean);
+    const parts = [table(rows)];
     box.replaceChildren(...(designs.length ? parts : []));
     box.classList.toggle('rfd4p-designs-busy', Boolean(this.activeAbortController));
     if (this.els.downloadsBox) this.els.downloadsBox.hidden = designs.length < 1;
@@ -1516,28 +1498,17 @@ class Rfd4pStudioApp {
           revision: inputRevision,
         });
       }
-      // Earlier runs on the same input stay, folded away under the new one; a different input starts over.
-      if (this.runsInput !== this.inputSessionId || !this.runs) {
+      // One list of designs: generated again from the input unchanged, the new designs join it, numbered on; from an
+      // edited or another input, it starts over.
+      const last = this.runs?.[0];
+      if (this.runsInput !== this.inputSessionId || !last || last.inputRevision !== inputRevision) {
         for (const sid of this.generatedViews.keys()) if (sid !== this.inputSessionId) this.generatedViews.delete(sid);
-        this.runs = [];
+        this.runs = [{ designs: [], inputRevision }];
         this.designCounter = 0;
         this.designSort = null;
-        this.runOpen = new Map();
         this.runsInput = this.inputSessionId;
       }
-      const run = { index: (this.runs.at(-1)?.index ?? 0) + 1, seeds: [baseSeed, baseSeed + numSamples - 1], designs: [], inputRevision };
-      // The input as this run had it, kept read-only beside its designs: edits after it do not change what it was.
-      const inputNow = store.getSession(this.inputSessionId);
-      if (inputNow) {
-        const cif = inputNow.toCif();
-        const { sessionId: snapshotSid } = store.createSession(cif, `input-run-${run.index}.cif`);
-        this.generatedViews.set(snapshotSid, {
-          label: 'Input', cif, pdb: null, isInput: false, isSnapshot: true, hasTrajectory: false,
-          filenameStem: `input-run-${run.index}`, runIndex: run.index,
-        });
-        run.inputSnapshot = snapshotSid;
-      }
-      this.runs.push(run);
+      const run = this.runs[0];
       this._renderDesigns();
 
       const t0 = performance.now();
@@ -1724,7 +1695,6 @@ class Rfd4pStudioApp {
           refoldText: null,
           // For "Save results": which design, how it ran, and every refold made of it.
           designIndex,
-          runIndex: run.index,
           // Which of upstream's pass criteria apply: the task, and whether everything the refold folds was designed.
           kind: criteriaKind(taskKey, {
             designedAll: polymerChains(result.pdb ?? '').every((c) => designed.includes(c.letter)),

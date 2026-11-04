@@ -32,7 +32,7 @@
             </div>
 
             <!-- Design: what will be generated, read from the open document. -->
-            <div id="rfd4p-design" class="rfd4p-design" hidden>
+            <div id="rfd4p-design" class="rfd4p-design rfd4p-section" hidden>
                 <div class="rfd4p-task-head">
                     <strong id="rfd4p-task-label"></strong>
                     <span class="rfd4p-task-buttons">
@@ -50,7 +50,8 @@
                 <div id="rfd4p-warnings" class="rfd4p-warnings"></div>
             </div>
 
-            <div id="rfd4p-run-settings" class="rfd4p-run-settings" hidden>
+            <div id="rfd4p-run-settings" class="rfd4p-run-settings rfd4p-section" hidden>
+            <strong class="rfd4p-section-title">Run</strong>
             <div class="rfd4p-settings-row">
                 <label for="samples-input" class="rfd4p-designs-field">Designs
                     <input type="number" id="samples-input" value="1" min="1" max="8" step="1" />
@@ -102,8 +103,6 @@
             <button id="predict" class="primary rfd4p-generate-btn" type="button" disabled>
                 Generate design
             </button>
-            </div>
-
             <div id="generation-status" class="rfd4p-status-box" hidden>
                 <p id="rfd4p-status-message" class="inline-feedback muted" aria-live="polite"></p>
                 <div id="rfd4p-model-load" class="rfd4p-model-load" hidden>
@@ -111,10 +110,12 @@
                 </div>
                 <progress id="rfd4p-progress" class="rfd4p-progress" max="1" value="0" data-state="idle" hidden></progress>
             </div>
+            </div>
+
 
             <!-- Every design of the runs on this input, one row each with its refold's numbers (web/app.js _renderDesigns). -->
-            <div id="design-results" class="rfd4p-results-box" hidden>
-                <strong class="rfd4p-results-title">Designs</strong>
+            <div id="design-results" class="rfd4p-results-box rfd4p-section" hidden>
+                <strong class="rfd4p-section-title">Designs</strong>
                 <div id="design-view-radios" class="rfd4p-designs" role="radiogroup" aria-label="Designs"></div>
                 <!-- Refold: fold each design's sequence again and score how it comes back (web/app.js _refoldDesigns). -->
                 <div id="rfd4p-refold" class="rfd4p-refold-box" hidden>

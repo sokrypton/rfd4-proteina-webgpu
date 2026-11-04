@@ -649,10 +649,7 @@ export class DesignPanel {
     const viewingDesign = this._viewingDesign();
     els.design.classList.toggle('rfd4p-readonly', viewingDesign);
     els.taskLabel.textContent = spec.task.label;
-    const snapshot = viewingDesign && this.app.generatedViews?.get(this.app.studioSessionId)?.isSnapshot;
-    els.taskDetail.textContent = !viewingDesign ? '' : snapshot
-      ? 'The input of an earlier run (read-only). Select the editable Input under Designs to edit.'
-      : 'A generated design (read-only). Select Input under Designs to edit.';
+    els.taskDetail.textContent = viewingDesign ? 'A generated design (read-only). Select Input under Designs to edit.' : '';
     els.taskDetail.hidden = !viewingDesign;
     if (els.newDoc) els.newDoc.hidden = viewingDesign;
     const actions = els.addSeq?.parentElement;

@@ -164,13 +164,7 @@ body.studio-fullscreen-body {
   font-weight: 600;
 }
 
-.rfd4p-results-box {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border, #383a3f);
-  display: grid;
-  gap: 6px;
-}
+.rfd4p-results-box { display: grid; gap: 8px; }
 
 .rfd4p-view-group {
   margin: 0;
@@ -498,9 +492,7 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
 }
 
 /* Design panel */
-.rfd4p-design {
-  margin-bottom: 10px;
-}
+.rfd4p-design { margin-bottom: 0; }
 
 .rfd4p-design.rfd4p-busy {
   opacity: 0.6;
@@ -562,12 +554,18 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
 }
 
 /* Run settings: designs, seed and its dice on one line */
-/* The run (designs, seed, partial diffusion, Generate) set apart from what is being designed. */
-.rfd4p-run-settings {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 2px solid var(--border, #383a3f);
+/* The card in three sections, each a bordered box under its heading: the design (headed by its task), Run
+   (designs, seed, settings, Generate and what it says), and Designs (the results, their refold, Save all). */
+#rfd4p-studio-card .rfd4p-section {
+  display: grid; gap: 8px; margin: 10px 0 0; padding: 10px;
+  border: 1px solid var(--border, #383a3f); border-radius: 8px;
 }
+#rfd4p-studio-card .rfd4p-section[hidden] { display: none; }
+.rfd4p-section-title, .rfd4p-task-head strong { font-size: 13px; font-weight: 650; }
+.rfd4p-section > .rfd4p-settings-row,
+.rfd4p-section > .rfd4p-sampling-details,
+.rfd4p-section > .rfd4p-chain-actions,
+.rfd4p-section > .rfd4p-status-box { margin: 0; }
 
 .rfd4p-settings-row {
   display: flex;
@@ -1019,8 +1017,8 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 
 /* The Designs table (web/app.js _renderDesigns): one row a design, its refold's numbers, sortable by column. */
 /* "Designs", its tables, then the Refold box: everything refolding takes, in one bordered square. */
-.rfd4p-results-title { font-size: 12.5px; }
-.rfd4p-refold-box { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--border, #383a3f); border-radius: 6px; }
+/* Inside Designs, the Refold box is tinted rather than bordered: part of that section, not a section of its own. */
+.rfd4p-refold-box { display: grid; gap: 6px; padding: 8px; border-radius: 6px; background: var(--surface-recessed, #191a1c); }
 .rfd4p-refold-box > strong { font-size: 12px; }
 .rfd4p-refold-grid { display: grid; grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr)); gap: 6px; }
 .rfd4p-refold-grid label { display: grid; gap: 2px; margin: 0; font-size: 10.5px; color: var(--text-muted, #b1b3b9); }
