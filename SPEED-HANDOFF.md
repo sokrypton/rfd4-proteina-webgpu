@@ -680,3 +680,24 @@ visitor pays nothing), the weights load and go to the GPU before Generate. A ret
 step 1 in 1.8-2.1 s instead of 2.5-2.8 s (binder example, interleaved, M2). On `localhost` the weight cache is off by
 design; tests turn it on with `globalThis.__rfd4pCacheWeights = true`. Also tried: a tiny warm-up design (8 residues,
 2 steps) to compile the pipelines ahead: 1.26-1.40 s vs 1.41 s, within noise, not shipped.
+
+## 15. 2026-11-03: kernel research, first pass (owner chose "new kernel research" for default Chrome)
+
+State of the evidence before writing a new kernel class, so the next session starts here:
+
+- **The M2's stock ceilings** (`../localfold/docs/PERF.md`, `probe-alu.js`): ~1.24 TFLOP/s scalar f32 FMA, ~4.9 vec4;
+  f16 issues at 1.7x f32 for the same instruction; ~400 G workgroup reads/s. Our stock GEMMs run at ~1.1 TFLOP/s:
+  a quarter of the vec4 ceiling, so they are not bound on FMA issue alone (occupancy/latency, barriers, staging).
+- **Already lost or flat, here and in localfold** (do not repeat without a new reason): f32 staging, 8x8 per thread,
+  f16 partials (0.89x), f16 accumulators (1.03x, drift x2), register prefetch variants, shuffle/broadcast of A
+  (register cliff at 64/thread), single-barrier epilogue (occupancy 4 -> 3 wg/core), small tiles (no pair epilogues),
+  compiled-in sizes beyond K, localfold's f16 multiply-adds in runs (~10% of one kernel), interleaved vec4 reads,
+  smaller token tiles, split-K.
+- **Not tried, with reasons to expect a loss:** K-tile 32 (doubles workgroup memory: 4 -> 2 workgroups per core).
+- **Most promising narrow lead:** f16 accumulation only for triProjG's sigmoid-gate columns (a_g, b_g and the 384-wide
+  output gate, 896 of 1408 = 63.6%; localfold PERF "What is left"). The gate's slope is at most 1/4, so its error is
+  damped; the projection columns stay f32. From acc16's 1.07x on the whole kernel, about 1.045x on it, ~2% a pass.
+  Needs the column layout of `triProjG`'s weight (which tiles hold gates) and the parity gates on both flag sets.
+- **A step change needs a new kernel shape**, not a knob: e.g. a thread-to-output map that keeps more of one operand in
+  registers without crossing the 64-register cliff, chosen from a register/occupancy model of the M2 first, then
+  prototyped on triProjG alone (45% of a pass) behind `gemmVariant` and measured with `bench-kernels.js`.
