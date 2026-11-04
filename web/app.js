@@ -1180,7 +1180,12 @@ class Rfd4pStudioApp {
       if (runs.length === 1) { parts.push(...rows); continue; }
       const group = h('details', { class: 'rfd4p-run' },
         h('summary', { text: `Run ${r.index} · ${seedText(r)} · ${r.designs.length} design${r.designs.length === 1 ? '' : 's'}` }), ...rows);
-      group.open = k === runs.length - 1 || r.designs.includes(this.studioSessionId) || r.inputSnapshot === this.studioSessionId;
+      // Open or closed as the reader left it, across redraws (a refold redraws the table); until then, the newest run
+      // and the one holding what is shown are open.
+      this.runOpen ??= new Map();
+      group.open = this.runOpen.has(r.index) ? this.runOpen.get(r.index)
+        : k === runs.length - 1 || r.designs.includes(this.studioSessionId) || r.inputSnapshot === this.studioSessionId;
+      group.addEventListener('toggle', () => this.runOpen.set(r.index, group.open));
       parts.push(group);
     }
     box.replaceChildren(...(designs.length ? parts : []));
@@ -1509,6 +1514,7 @@ class Rfd4pStudioApp {
         this.runs = [];
         this.designCounter = 0;
         this.designSort = null;
+        this.runOpen = new Map();
         this.runsInput = this.inputSessionId;
       }
       const run = { index: (this.runs.at(-1)?.index ?? 0) + 1, seeds: [baseSeed, baseSeed + numSamples - 1], designs: [], inputRevision };
