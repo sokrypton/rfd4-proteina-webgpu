@@ -1364,7 +1364,7 @@ export class StudioDoc {
    * before the one after them, else in source order among the chain's residues. A chain renumbered by an ordered motif
    * is numbered 1, 2, 3… again; peptide and new-residue bonds are rebuilt. One undo step.
    */
-  insertResiduesFrom(other, chainId, srcChain) {
+  insertResiduesFrom(other, chainId, srcChain, at = null) {
     const cid = String(chainId);
     const SRC = 'annotation_src-component_1_atom';
     const numOf = (label) => {
@@ -1395,7 +1395,10 @@ export class StudioDoc {
         const s0 = starts[r];
         const atoms = [];
         for (let i = s0; i < starts[r + 1]; i += 1) atoms.push(i);
-        residues.push({ atoms, chain: String(a.chain_id[s0]), added: s0 >= before, segment: this._isSegmentAtom(s0), num: numOf(src[s0]), key: resKey(s0) });
+        // A residue with no source label is where it was loaded (a chain not renumbered): its number is its source's.
+        const seg = this._isSegmentAtom(s0);
+        const num = numOf(src[s0]) ?? (s0 < before && !seg && !renumbered ? Number(a.res_id[s0]) : null);
+        residues.push({ atoms, chain: String(a.chain_id[s0]), added: s0 >= before, segment: seg, num, key: resKey(s0) });
       }
       const mine = residues.filter((r) => r.chain === cid);
       const old = mine.filter((r) => !r.added);
@@ -1405,8 +1408,21 @@ export class StudioDoc {
         const run = runs.at(-1);
         if (run && r.num === run.at(-1).num + 1) run.push(r); else runs.push([r]);
       }
-      // Where each run goes: an index into `old` to insert before.
+      // Where each run goes: an index into `old` to insert before. With `at` ({ atom, before }: the "+" pressed), all of
+      // them go there, in source order, beside the residue holding that atom.
       const placed = old.slice();
+      if (at && Number.isInteger(at.atom)) {
+        const k = placed.findIndex((r) => r.atoms.includes(at.atom));
+        placed.splice(k < 0 ? placed.length : (at.before ? k : k + 1), 0, ...added);
+        runs.length = 0;
+        // Out of source order now (a motif in its own order): each residue keeps its source name and the chain is
+        // numbered again, as the motif set-up does.
+        const nums = placed.filter((r) => !r.segment && r.num !== null).map((r) => r.num);
+        if (nums.some((n, i) => i > 0 && n <= nums[i - 1])) {
+          for (const r of placed) if (!r.segment && r.num !== null && !src[r.atoms[0]]) for (const i of r.atoms) src[i] = `${srcChain}${r.num}`;
+          renumbered = true;
+        }
+      }
       for (const run of runs) {
         const lo = run[0].num;
         const hi = run.at(-1).num;
@@ -3600,7 +3616,8 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
       if (subpath === '/residues/insert' && method === 'POST') {
         const other = store.sessions.get(body.from_session_id);
         if (!other) return jsonResponse({ detail: 'no such session to take residues from' }, 404);
-        const editResult = doc.insertResiduesFrom(other, body.chain_id, body.source_chain);
+        const editResult = doc.insertResiduesFrom(other, body.chain_id, body.source_chain,
+          Number.isInteger(body.at_atom) ? { atom: body.at_atom, before: Boolean(body.before) } : null);
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
       if (subpath === '/coordinates/clear' && method === 'POST') {

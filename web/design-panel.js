@@ -816,11 +816,17 @@ export class DesignPanel {
     const items = [];
     // A slot between any two pieces and at both ends: new residues next to new residues are a block of their own, so
     // a free chain can be built as blocks of different shapes (a helix, a loop, a strand).
+    // A chain from a PDB entry: "+" asks whether to add new residues or bring back residues of the entry (a motif
+    // residue removed, say); otherwise it adds new residues straight away.
+    const entry = this._entryOf(c);
     const slot = (atom, before) => (readonly ? null : el('button', {
-      type: 'button', class: 'rfd4p-slot', title: 'New residues here', 'aria-label': 'New residues here',
-      onclick: () => void this._mutate('/segments', {
-        minimum: 5, maximum: 10, atom_index: atom, before, new_chain: false, chain_id: null, chain_type: 'polypeptide(L)',
-      }),
+      type: 'button', class: 'rfd4p-slot', title: entry ? 'Add residues here' : 'New residues here', 'aria-label': entry ? 'Add residues here' : 'New residues here',
+      onclick: (ev) => {
+        if (entry) { this._openPop(ev.currentTarget, () => this._slotPop(c, entry, atom, before)); return; }
+        void this._mutate('/segments', {
+          minimum: 5, maximum: 10, atom_index: atom, before, new_chain: false, chain_id: null, chain_type: 'polypeptide(L)',
+        });
+      },
     }, el('span', { text: '+' })));
     pieces.forEach((p, k) => {
       const prev = pieces[k - 1];
@@ -966,6 +972,89 @@ export class DesignPanel {
       this._selectFromCard(l.atomIndices);
       this._openPop(anchor, () => this._ligandPop(c, l));
     }, remove, l.atomIndices);
+  }
+
+  /** The PDB entry chain `c` came from, and its chain there ("1QJG", "A"); null when it did not come from one. */
+  _entryOf(c) {
+    const m = /^PDB (\w{4})(?: chains? (\S+))?/.exec(this._sourceOf(c) ?? '');
+    if (!m) return null;
+    const a = this._inputDoc()?.atoms;
+    const SRC = a?.annotations?.['annotation_src-component_1_atom'];
+    const label = c.atomIndices?.map((i) => String(SRC?.[i] ?? '')).find(Boolean);
+    const chain = /^([A-Za-z]+)/.exec(label ?? '')?.[1] ?? m[2] ?? c.id;
+    return { id: m[1].toUpperCase(), chain };
+  }
+
+  /** "+" in a chain from an entry: new residues of a length, or residues of the entry brought back where they belong. */
+  _slotPop(c, entry, atom, before) {
+    const lenMin = el('input', { type: 'number', min: 1, max: 1000, value: 5, 'aria-label': 'Fewest new residues' });
+    const lenMax = el('input', { type: 'number', min: 1, max: 1000, value: 10, 'aria-label': 'Most new residues' });
+    const from = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
+      placeholder: `${entry.chain}50, ${entry.chain}45–52`, 'aria-label': `Residues of PDB ${entry.id}` });
+    const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
+    const go = (fn) => async () => {
+      note.textContent = '';
+      try { await fn(); this._closePop(); } catch (err) { note.textContent = String(err?.message ?? err).replace(/^Error:\s*/, ''); }
+    };
+    const addNew = go(async () => {
+      const lo = Math.max(1, Number(lenMin.value) || 1);
+      const hi = Math.max(lo, Number(lenMax.value) || lo);
+      if (!await this._mutate('/segments', { minimum: lo, maximum: hi, atom_index: atom, before, new_chain: false, chain_id: null, chain_type: 'polypeptide(L)' })) {
+        throw new Error(this.lastError ?? 'could not add them');
+      }
+    });
+    const addBack = go(() => this._bringBack(c, entry, from.value, { atom, before }));
+    from.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); void addBack(); } });
+    const row = (label, ...kids) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...kids);
+    return [
+      this._popHead('Add here'),
+      row('New', el('span', { class: 'rfd4p-pop-inline' }, lenMin, el('span', { text: '–' }), lenMax),
+        el('button', { type: 'button', class: 'secondary compact', text: 'Add', onclick: addNew })),
+      row(`PDB ${entry.id}`, from, el('button', { type: 'button', class: 'secondary compact', text: 'Add', onclick: addBack })),
+      note,
+    ];
+  }
+
+  /**
+   * Residues of chain `c`'s entry (`text`: "A50, A45–52") brought back into it, fixed as loaded, where the "+" was
+   * pressed (`at`), or else next to their neighbours in the entry (`/residues/insert`); those already in the chain are
+   * left as they are. One Undo.
+   */
+  async _bringBack(c, entry, text, at = null) {
+    const { residues, bad } = parseResidueList(text, entry.chain);
+    if (bad.length) throw new Error(`Not understood: ${bad.join(' ')}`);
+    const want = new Set(residues.filter((r) => r.chain === entry.chain).map((r) => r.resId));
+    if (!want.size) throw new Error(`Residues of chain ${entry.chain}, e.g. ${entry.chain}50`);
+    const a = this._inputDoc().atoms;
+    const SRC = a.annotations?.['annotation_src-component_1_atom'];
+    const here = new Set();
+    for (const i of c.atomIndices) {
+      const m = /^[A-Za-z]+(-?\d+)$/.exec(String(SRC?.[i] ?? ''));
+      here.add(m ? Number(m[1]) : Number(a.res_id[i]));
+    }
+    for (const n of here) want.delete(n);
+    if (!want.size) throw new Error('Those residues are already in the chain');
+    const res = await fetch(`https://files.rcsb.org/download/${entry.id}.cif`);
+    if (!res.ok) throw new Error(`Could not fetch ${entry.id} (RCSB ${res.status})`);
+    const doc = await this._openEntry(await res.text(), entry.id, [entry.chain], { keepUnresolved: true });
+    const b = doc.atoms;
+    const drop = [];
+    for (let i = 0; i < b.nAtoms; i += 1) if (String(b.chain_id[i]) !== entry.chain || !want.has(Number(b.res_id[i]))) drop.push(i);
+    if (drop.length) doc.deleteAtoms(drop);
+    if (!doc.atoms.nAtoms) throw new Error(`PDB ${entry.id} chain ${entry.chain} has no such residues`);
+    const d = doc.atoms;
+    const src = doc._ensureAnnotationArray('annotation_src-component_1_atom', { default: '' });
+    for (let i = 0; i < d.nAtoms; i += 1) src[i] = `${entry.chain}${d.res_id[i]}`;
+    const sid = `rfd4p_back_${Date.now().toString(36)}`;
+    getSharedStudioStore().sessions.set(sid, doc);
+    try {
+      if (!await this._mutate('/residues/insert', { from_session_id: sid, chain_id: c.id, source_chain: entry.chain,
+        at_atom: at?.atom ?? null, before: Boolean(at?.before) })) {
+        throw new Error(this.lastError ?? 'could not bring them back');
+      }
+    } finally {
+      getSharedStudioStore().sessions.delete(sid);
+    }
   }
 
   /** Where a chain's coordinates come from, as the page knows it; null for chains made here (+ seq, + lig). */

@@ -64,3 +64,32 @@ test('a residue next to a kept one joins it', () => {
   assert.deepEqual(numbers(doc), [1, 2, 3, 4, 5, 6, 7]);
   assert.ok(peptide(doc, 6, 7));
 });
+
+test('residues brought back where the "+" was pressed: out of source order, the chain is renumbered and keeps their names', () => {
+  const doc = open();
+  const a = doc.atoms;
+  doc.deleteAtoms(Array.from({ length: a.nAtoms }, (_, i) => i).filter((i) => a.res_id[i] >= 4 && a.res_id[i] <= 9));
+  const back = open();
+  const b = back.atoms;
+  back.deleteAtoms(Array.from({ length: b.nAtoms }, (_, i) => i).filter((i) => b.res_id[i] !== 5));
+  // Before residue 2, as a motif in its own order would have it.
+  const atom = Array.from({ length: a.nAtoms }, (_, i) => i).find((i) => a.res_id[i] === 2);
+  doc.insertResiduesFrom(back, 'A', 'A', { atom, before: true });
+  const names = [];
+  const src = doc.atoms.annotations['annotation_src-component_1_atom'];
+  for (let i = 0; i < doc.atoms.nAtoms; i += 1) if (!names.length || names.at(-1) !== src[i]) names.push(src[i]);
+  assert.deepEqual(names, ['A1', 'A5', 'A2', 'A3', 'A10', 'A11', 'A12']);
+  assert.deepEqual(numbers(doc), [1, 2, 3, 4, 5, 6, 7]);
+});
+
+test('in source order where the "+" was pressed, the numbers stay the entry\'s', () => {
+  const doc = open();
+  const a = doc.atoms;
+  doc.deleteAtoms(Array.from({ length: a.nAtoms }, (_, i) => i).filter((i) => a.res_id[i] >= 4 && a.res_id[i] <= 9));
+  const back = open();
+  const b = back.atoms;
+  back.deleteAtoms(Array.from({ length: b.nAtoms }, (_, i) => i).filter((i) => b.res_id[i] !== 5));
+  const atom = Array.from({ length: a.nAtoms }, (_, i) => i).find((i) => a.res_id[i] === 3);
+  doc.insertResiduesFrom(back, 'A', 'A', { atom, before: false });
+  assert.deepEqual(numbers(doc), [1, 2, 3, 5, 10, 11, 12]);
+});
