@@ -631,8 +631,8 @@ class Rfd4pStudioApp {
 
   _getSelectedThinking() {
     const checked = this.els.thinkingRadioGroup?.querySelector('input[name="thinking-radio"]:checked');
-    // Upstream's default for every task (`inference.yaml`: thinking_medium; its binder cookbook too).
-    return checked?.value || 'medium';
+    // None by default, for speed (about 3x faster than upstream's medium, which its `inference.yaml` and binder cookbook use).
+    return checked?.value || 'none';
   }
 
   _syncThinkingRadios(val) {
@@ -683,7 +683,7 @@ class Rfd4pStudioApp {
     this._initStudioBridge();
     this.designPanel = new DesignPanel(this);
     await this._initWebGpu();
-    this._syncThinkingRadios('medium');
+    this._syncThinkingRadios('none');
     this.els.predictBtn.disabled = false;
     this.designPanel.render();
     const params = new URLSearchParams(window.location.search);
