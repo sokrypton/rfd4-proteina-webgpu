@@ -1128,7 +1128,8 @@ class Rfd4pStudioApp {
     // One table per run: its own header row over its own rows, so each number sits under its label.
     const busy = Boolean(this.refoldAbort);
     const thead = () => h('thead', {}, h('tr', {},
-      h('th', { class: 'rfd4p-dt-name' }), h('th', { class: 'rfd4p-dt-mark' }),
+      h('th', { class: 'rfd4p-dt-name', title: 'Each design is named by its seed: the same seed and settings make it again', text: 'Seed' }),
+      h('th', { class: 'rfd4p-dt-mark' }),
       ...cols.map((c) => h('th', { class: 'rfd4p-dt-num', title: c.title }, h('button', {
         type: 'button', class: `rfd4p-design-sort${sort?.key === c.key ? ' is-sorted' : ''}`,
         text: `${c.label}${sort?.key === c.key ? (sort.dir === c.dir ? '▾' : '▴') : ''}`,
@@ -1142,11 +1143,11 @@ class Rfd4pStudioApp {
       const isInputRow = v.isInput;
       const cls = [isInputRow ? 'rfd4p-design-input' : '', v.pass === true ? 'rfd4p-design-pass' : '',
         v.pass === false ? 'rfd4p-design-fail' : ''].filter(Boolean).join(' ');
-      const tr = h('tr', { class: cls || null, title: isInputRow ? inputTitle : `seed ${v.seed}` });
+      const tr = h('tr', { class: cls || null, title: isInputRow ? inputTitle : null });
       const radio = h('input', { type: 'radio', name: 'design-view-radio', value: sid });
       radio.checked = sid === this.studioSessionId;
       tr.append(
-        h('td', { class: 'rfd4p-dt-name' }, h('label', {}, radio, h('span', { text: isInputRow ? 'Input' : `Design ${v.designIndex}` }))),
+        h('td', { class: 'rfd4p-dt-name' }, h('label', {}, radio, h('span', { text: isInputRow ? 'Input' : this._designName(v) }))),
         h('td', { class: 'rfd4p-dt-mark', text: v.pass === true ? '✓' : '' }));
       const state = isInputRow ? '' : this.refoldSid === sid ? 'refolding…' : this.refoldQueue?.includes(sid) ? 'queued'
         : v.refoldError ? 'refold failed' : null;
@@ -1156,12 +1157,12 @@ class Rfd4pStudioApp {
       tr.append(h('td', { class: 'rfd4p-dt-act' },
         isInputRow || this.noWebGpu ? null : h('button', {
           type: 'button', class: 'rfd4p-design-act rfd4p-design-refold', text: '↻', disabled: busy,
-          title: v.metrics ? 'Refold this design again' : 'Refold this design', 'aria-label': `Refold Design ${v.designIndex}`,
+          title: v.metrics ? 'Refold this design again' : 'Refold this design', 'aria-label': `Refold seed ${this._designName(v)}`,
           onclick: stop(() => { void this._refoldDesigns([sid]); }),
         }),
         h('button', {
           type: 'button', class: 'rfd4p-design-act', text: '⤓', title: 'Download this structure (CIF)',
-          'aria-label': `Download ${isInputRow ? 'the input' : `Design ${v.designIndex}`}`,
+          'aria-label': `Download ${isInputRow ? 'the input' : `seed ${this._designName(v)}`}`,
           onclick: stop(() => this._downloadText(v.cif, `${v.filenameStem || 'design'}.cif`, 'chemical/x-mmcif')),
         })));
       // Anywhere on the row shows it.
@@ -1179,6 +1180,17 @@ class Rfd4pStudioApp {
     if (this.els.downloadsBox) this.els.downloadsBox.hidden = designs.length < 1;
     this.els.designResultsRow.hidden = designs.length < 1;
     this._syncRefoldUi();
+  }
+
+  /**
+   * A design's name: its seed, which makes it again ("163509"), with the order it was made in when a seed comes twice
+   * ("163509 (2)", a seed kept while a setting changed).
+   */
+  _designName(v) {
+    const same = [...this.generatedViews.values()].filter((x) => !x.isInput && !x.isRefold && x.seed === v.seed)
+      .sort((a, b) => a.designIndex - b.designIndex);
+    const k = same.indexOf(v);
+    return k > 0 ? `${v.seed} (${k + 1})` : String(v.seed);
   }
 
   /** The refold controls: Refold all (Stop while refolds run), and what the refolds are doing. */
@@ -1334,9 +1346,9 @@ class Rfd4pStudioApp {
         this.refoldSid = sid;
         this._renderDesigns();
         const tag = todo.length > 1 ? ` (${k + 1} of ${todo.length})` : '';
-        this._setRefoldStatus(`Refolding Design ${view.designIndex} with ${name}${tag}…`);
+        this._setRefoldStatus(`Refolding seed ${this._designName(view)} with ${name}${tag}…`);
         const ok = await this._refoldOne(sid, model, settings, abort, lf,
-          (text) => this._setRefoldStatus(`Design ${view.designIndex}${tag}: ${text}`));
+          (text) => this._setRefoldStatus(`Seed ${this._designName(view)}${tag}: ${text}`));
         if (ok) done += 1;
         else if (!abort.signal.aborted) failed += 1;
       }
@@ -1382,7 +1394,7 @@ class Rfd4pStudioApp {
     } catch (err) {
       if (abort.signal.aborted) return false;
       view.refoldError = true;
-      console.error(`Refold of Design ${view.designIndex} failed:`, err);
+      console.error(`Refold of seed ${this._designName(view)} failed:`, err);
       return false;
     }
   }
@@ -1673,14 +1685,14 @@ class Rfd4pStudioApp {
           UNIFIED_ATOM37_TOKENS,
         );
         const designIndex = (this.designCounter = (this.designCounter ?? 0) + 1);
-        const designName = `design-${designIndex}.cif`;
+        const designName = `seed-${sampleSeed}.cif`;
         const { sessionId: designSessionId } = store.createSession(result.cif, designName, {
           trajectoryCif,
         });
         markHotspots(store.getSession(designSessionId), hotspotResidueKeys(atoms));
         const designed = designedChains(atoms, result.structure?.atoms ?? []);
         this.generatedViews.set(designSessionId, {
-          label: `Design ${designIndex} · seed ${sampleSeed}`,
+          label: `seed ${sampleSeed}`,
           cif: result.cif,
           pdb: result.pdb,
           isInput: false,
