@@ -172,6 +172,9 @@ const INTERACTION_OPTIONS = [
   ['metal_coord:2', 'metal-coordinating'], ['', 'free'],
 ];
 // Folds a chain can be asked for, by name (CATH class, architecture, topology); "other" takes any code.
+/** What + pdb takes, the same on the start screen and under a job. */
+const STRUCTURE_NOTE = 'Its ID in the PDB, then any chains to keep (5O45 A, 1J79 A C), or a file. Its chains come in fixed; free what you want designed.';
+
 const FOLD_OPTIONS = [
   ['1', 'mainly α'], ['2', 'mainly β'], ['3', 'α/β'],
   ['1.10', 'helix bundle (orthogonal)'], ['1.20', 'up-down helix bundle'], ['2.40', 'β-barrel'], ['2.60', 'β-sandwich'], ['2.60.40', 'immunoglobulin-like'],
@@ -189,10 +192,7 @@ export class DesignPanel {
     this.els = {
       start: $('rfd4p-start'),
       taskGrid: $('rfd4p-task-grid'),
-      fetchForm: $('rfd4p-fetch-form'),
-      pdbId: $('rfd4p-pdb-id'),
       fetchStatus: $('rfd4p-fetch-status'),
-      openFile: $('rfd4p-open-file'),
       design: $('rfd4p-design'),
       taskLabel: $('rfd4p-task-label'),
       taskDetail: $('rfd4p-task-detail'),
@@ -216,6 +216,7 @@ export class DesignPanel {
     this._movable(this.pop);
     this.lastPointer = null;
     this._buildAddStructure();
+    this._buildStartStructure();
     this._buildTaskGrid();
     this._bind();
     this._applyAdvanced(this._readAdvanced());
@@ -230,28 +231,17 @@ export class DesignPanel {
   _buildAddStructure() {
     const actions = this.els.addPdb?.parentElement;
     if (!actions) return;
-    const id = el('input', {
-      type: 'text', class: 'rfd4p-add-id', spellcheck: 'false', autocomplete: 'off', maxlength: 40,
-      placeholder: 'PDB ID, then chains: 5O45 A', 'aria-label': 'PDB ID and chains',
-    });
-    const title = el('strong');
-    const fetchBtn = el('button', { type: 'submit', class: 'primary compact' });
+    const id = this._structureInput();
     const fileInput = el('input', { type: 'file', accept: '.cif,.mmcif,.pdb,.ent,.cif.zst', hidden: true });
     const fileBtn = el('button', { type: 'button', class: 'secondary compact', text: 'Open a file…', onclick: () => fileInput.click() });
-    const status = el('p', { class: 'rfd4p-add-status muted', 'aria-live': 'polite' });
-    const cancel = el('button', { type: 'button', class: 'secondary compact', text: 'Cancel', onclick: () => { form.hidden = true; } });
-    const form = el('form', { class: 'rfd4p-add-structure', hidden: true },
-      title,
-      el('div', { class: 'rfd4p-add-row' }, id, fetchBtn), el('div', { class: 'rfd4p-add-row' }, fileBtn, fileInput, cancel),
-      status);
-    this.addStructure = { form, title, fetchBtn, status, id, replace: null };
-    form.addEventListener('submit', (ev) => {
-      ev.preventDefault();
-      const m = /^\s*([0-9][A-Za-z0-9]{3})(?:[\s:_,]+(.*))?$/.exec(id.value);
-      if (!m) { status.textContent = 'Type a 4-character PDB ID, optionally followed by chains: 5O45 A'; return; }
-      const pdb = m[1].toUpperCase();
-      const chains = (m[2] ?? '').split(/[\s,;]+/).filter(Boolean);
-      void (async () => {
+    const { form, status, title, submit: fetchBtn } = this._addForm({
+      label: 'Add a structure', button: 'Add', input: id, extra: [fileBtn, fileInput], note: STRUCTURE_NOTE,
+      onClose: () => { form.hidden = true; },
+      onSubmit: async () => {
+        const m = /^\s*([0-9][A-Za-z0-9]{3})(?:[\s:_,]+(.*))?$/.exec(id.value);
+        if (!m) { status.textContent = 'Type a 4-character PDB ID, optionally followed by chains: 5O45 A'; return; }
+        const pdb = m[1].toUpperCase();
+        const chains = (m[2] ?? '').split(/[\s,;]+/).filter(Boolean);
         status.textContent = `Downloading ${pdb} from RCSB…`;
         try {
           const res = await fetch(`https://files.rcsb.org/download/${pdb}.cif`);
@@ -262,8 +252,10 @@ export class DesignPanel {
         } catch (err) {
           status.textContent = `Could not add ${pdb}: ${err?.message ?? err}`;
         }
-      })();
+      },
     });
+    form.hidden = true;
+    this.addStructure = { form, title, fetchBtn, status, id, replace: null };
     fileInput.addEventListener('change', () => {
       const file = fileInput.files?.[0];
       fileInput.value = '';
@@ -281,12 +273,29 @@ export class DesignPanel {
     actions.after(form);
   }
 
+  /** The start screen's + pdb: the same form, opening the structure as a new job. */
+  _buildStartStructure() {
+    const actions = this.els.startPdb?.parentElement;
+    if (!actions) return;
+    const id = this._structureInput();
+    const fileBtn = el('button', { type: 'button', class: 'secondary compact', text: 'Open a file…',
+      onclick: () => document.getElementById('file-input')?.click() });
+    const { form, status } = this._addForm({
+      label: 'Add a structure', button: 'Add', input: id, extra: [fileBtn], note: STRUCTURE_NOTE,
+      onClose: () => { form.hidden = true; },
+      onSubmit: (st) => this._fetchPdb(id.value, st),
+    });
+    form.hidden = true;
+    this.startStructure = { form, id, status };
+    actions.after(form);
+  }
+
   /** The + pdb form; with `group` (a source caption's chains), it replaces them. */
   _openAddStructure(group = null) {
     const { form, title, fetchBtn, status, id } = this.addStructure ?? {};
     if (!form) return;
     this.addStructure.replace = group ? group.chains.flatMap((c) => c.atomIndices) : null;
-    title.textContent = group ? `Replace ${group.label}` : 'Add chains from a structure';
+    title.textContent = group ? `Replace ${group.label}` : 'Add a structure';
     fetchBtn.textContent = group ? 'Replace' : 'Add';
     // The source's own ID and chains, ready to edit ("5O45 A" for "PDB 5O45 chain A").
     const m = group ? /^PDB (\S+)(?: chains? (.+))?$/.exec(group.label) : null;
@@ -399,39 +408,63 @@ export class DesignPanel {
     return code;
   }
 
-  /** A one-line "ligand code" form: [input] [button] and a status line. */
+  /**
+   * The one form + pdb and + lig open, on the start screen and under a job: a title with its × (as popups close), one
+   * line of what it takes, the input and its button (and any more, a file for a structure), and a status line.
+   */
+  _addForm({ label, note, input, button, extra = [], onSubmit, onClose }) {
+    const status = el('p', { class: 'rfd4p-add-status muted', 'aria-live': 'polite' });
+    const title = el('strong', { text: label });
+    const submit = el('button', { type: 'submit', class: 'primary compact', text: button });
+    const form = el('form', { class: 'rfd4p-add-structure' },
+      el('div', { class: 'rfd4p-add-head' }, title,
+        el('button', { type: 'button', class: 'rfd4p-pop-x', 'aria-label': 'Close', title: 'Close', text: '×', onclick: onClose })),
+      el('span', { class: 'muted', text: note }),
+      el('div', { class: 'rfd4p-add-row' }, input, submit),
+      extra.length ? el('div', { class: 'rfd4p-add-row' }, ...extra) : null,
+      status);
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      void onSubmit(status);
+    });
+    return { form, status, title, submit };
+  }
+
+  /** + lig's form: a ligand by its code. */
   _ligandCodeForm({ label, button, onSubmit, onCancel }) {
     const input = el('input', {
       type: 'text', class: 'rfd4p-add-id', spellcheck: 'false', autocomplete: 'off', maxlength: 5,
       placeholder: 'Code, e.g. HEM', 'aria-label': 'Ligand code',
     });
-    const status = el('p', { class: 'rfd4p-add-status muted', 'aria-live': 'polite' });
-    const form = el('form', { class: 'rfd4p-add-structure rfd4p-ligand-form' },
-      el('strong', { text: label }),
-      el('span', { class: 'muted', text: 'Its code in the PDB (HEM, ATP, NAD, ZN…). The model places it; fix its pose afterwards if you want it kept where it is.' }),
-      el('div', { class: 'rfd4p-add-row' }, input, el('button', { type: 'submit', class: 'primary compact', text: button }),
-        el('button', { type: 'button', class: 'secondary compact', text: 'Cancel', onclick: onCancel })),
-      status);
-    form.addEventListener('submit', (ev) => {
-      ev.preventDefault();
-      status.textContent = `Looking up ${input.value.trim().toUpperCase()}…`;
-      void onSubmit(input.value).then(() => { status.textContent = ''; }, (err) => {
-        status.textContent = `Could not add it: ${String(err?.message ?? err).replace(/^Error:\s*/, '')}`;
-      });
+    const { form } = this._addForm({
+      label, button, input, onClose: onCancel,
+      note: 'Its code in the PDB (HEM, ATP, NAD, ZN…). The model places it; fix its pose afterwards to keep it where it is.',
+      onSubmit: async (status) => {
+        status.textContent = `Looking up ${input.value.trim().toUpperCase()}…`;
+        try {
+          await onSubmit(input.value);
+          status.textContent = '';
+        } catch (err) {
+          status.textContent = `Could not add it: ${String(err?.message ?? err).replace(/^Error:\s*/, '')}`;
+        }
+      },
     });
     queueMicrotask(() => input.focus());
     return form;
+  }
+
+  /** + pdb's input: a PDB ID, then any chains. */
+  _structureInput() {
+    return el('input', {
+      type: 'text', class: 'rfd4p-add-id', spellcheck: 'false', autocomplete: 'off', maxlength: 40,
+      placeholder: 'ID, then chains: 5O45 A', 'aria-label': 'PDB ID and chains',
+    });
   }
 
   // ---- wiring -------------------------------------------------------------------------------------------------
 
   _bind() {
     const { els } = this;
-    els.fetchForm?.addEventListener('submit', (ev) => {
-      ev.preventDefault();
-      void this._fetchPdb(els.pdbId.value);
-    });
-    els.openFile?.addEventListener('click', () => document.getElementById('file-input')?.click());
     // The start screen's parts start a new job: a free chain, a structure (the form below), or a ligand.
     els.startSeq?.addEventListener('click', () => void this._startNew(async () => {
       const res = await fetch(new URL('./studio/examples/unconditional.cif', import.meta.url));
@@ -442,12 +475,15 @@ export class DesignPanel {
       return doc;
     }));
     els.startPdb?.addEventListener('click', () => {
-      const form = els.fetchForm;
+      const { form, id } = this.startStructure ?? {};
       if (!form) return;
-      form.hidden = !form.hidden;
-      if (!form.hidden) els.pdbId?.focus();
+      this.startLigandForm?.remove();
+      this.startLigandForm = null;
+      form.hidden = false;
+      id.focus();
     });
     els.startLig?.addEventListener('click', () => {
+      if (this.startStructure) this.startStructure.form.hidden = true;
       this.startLigandForm?.remove();
       this.startLigandForm = this._ligandCodeForm({
         label: 'Add a ligand',
@@ -484,8 +520,13 @@ export class DesignPanel {
       minimum: 60, maximum: 100, atom_index: null, before: false, new_chain: true, chain_id: null,
       chain_type: 'polypeptide(L)',
     }));
-    els.addPdb?.addEventListener('click', () => this._openAddStructure());
+    els.addPdb?.addEventListener('click', () => {
+      this.addLigandForm?.remove();
+      this.addLigandForm = null;
+      this._openAddStructure();
+    });
     els.addLig?.addEventListener('click', () => {
+      if (this.addStructure) this.addStructure.form.hidden = true;
       this.addLigandForm?.remove();
       this.addLigandForm = this._ligandCodeForm({
         label: 'Add a ligand',
@@ -2068,7 +2109,7 @@ export class DesignPanel {
       getSharedStudioStore().sessions.set(sid, doc);
       this.startLigandForm?.remove();
       this.startLigandForm = null;
-      if (this.els.fetchForm) this.els.fetchForm.hidden = true;
+      if (this.startStructure) this.startStructure.form.hidden = true;
       const opened = await window.atomworksStudio?.openSession?.(sid);
       if (opened !== false) this.showStart = false;
     } catch (err) {
@@ -2079,9 +2120,8 @@ export class DesignPanel {
     }
   }
 
-  async _fetchPdb(raw) {
+  async _fetchPdb(raw, status = this.els.fetchStatus) {
     const [id = '', ...chains] = String(raw ?? '').trim().toUpperCase().split(/[\s,;]+/).filter(Boolean);
-    const status = this.els.fetchStatus;
     if (!/^[0-9][A-Z0-9]{3}$/.test(id)) {
       status.textContent = 'Enter a 4-character PDB ID, e.g. 1QYS, optionally followed by chains: 1J79 A C E.';
       return;

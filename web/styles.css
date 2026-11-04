@@ -750,6 +750,8 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   font-size: 11.5px;
 }
 
+.rfd4p-add-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
 .rfd4p-add-row {
   display: flex;
   flex-wrap: wrap;
