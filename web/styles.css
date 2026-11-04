@@ -359,16 +359,6 @@ body:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]),
 [data-host-theme="light"] #viewer, [data-host-theme="light"] #viewer .msp-plugin,
 [data-host-theme="light"] #viewer .msp-viewport, [data-host-theme="light"] #viewer .msp-canvas { background: #fff !important; }
 
-/* Mol*'s own stylesheet is dark only: in light mode its viewer buttons take the page's colours. */
-[data-host-theme="light"] #viewer .msp-btn,
-[data-host-theme="light"] #viewer .msp-btn-icon,
-[data-host-theme="light"] #viewer .msp-btn-icon-small {
-  background: var(--surface-card, #fff) !important;
-  color: var(--text-muted, #59626d) !important;
-  border-color: var(--border, #d6dae0) !important;
-}
-[data-host-theme="light"] #viewer .msp-btn:hover,
-[data-host-theme="light"] #viewer .msp-btn-icon:hover { color: var(--text, #1f2328) !important; }
 
 /* Hide redundant / layout-breaking Mol* internal buttons */
 #viewer .msp-viewport-controls-buttons > div:has(> button[title="Toggle Controls Panel"]),
