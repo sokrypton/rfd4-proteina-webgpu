@@ -959,7 +959,9 @@ export class DesignPanel {
   }
 
   _ligandCard(c, l, readonly, remove) {
-    const status = l.pose === 'fixed' ? 'fixed' : l.pose === 'predicted' ? 'free' : `${l.fixedAtoms} of ${l.atoms} atoms fixed`;
+    // Some atoms held: named, as a residue's are ("N1, C2, N3, C4 fixed"), or counted when the names would not fit.
+    const part = l.heldNames && l.heldNames.length <= 24 ? `${l.heldNames} fixed` : `${l.fixedAtoms} of ${l.atoms} atoms fixed`;
+    const status = l.pose === 'fixed' ? 'fixed' : l.pose === 'predicted' ? 'free' : part;
     return this._card(l.name, status, 'rfd4p-sub-ligand', readonly, (anchor) => {
       this._selectFromCard(l.atomIndices);
       this._openPop(anchor, () => this._ligandPop(c, l));
