@@ -235,7 +235,6 @@ export class DesignPanel {
       taskLabel: $('rfd4p-task-label'),
       taskDetail: $('rfd4p-task-detail'),
       newDoc: $('rfd4p-new'),
-      back: $('rfd4p-back'),
       chainList: $('rfd4p-chain-list'),
       addSeq: $('rfd4p-add-seq'),
       startSeq: $('rfd4p-start-seq'),
@@ -568,20 +567,20 @@ export class DesignPanel {
       els.startLig.parentElement.after(this.startLigandForm);
     });
     // Clear empties the viewer and the sequence and shows the start screen; opening anything from it replaces the
-    // document, and Back brings back what was shown (the session is kept).
+    // document, and Undo there brings back what was shown (the session is kept).
     els.newDoc?.addEventListener('click', () => {
       this.closedSession = this.app.studioSessionId ?? this.app.inputSessionId;
       this.showStart = true;
       this.render();
       void window.atomworksStudio?.closeDocument?.();
     });
-    els.back?.addEventListener('click', () => {
+    const back = () => {
       const sid = this.closedSession;
       this.closedSession = null;
       this.showStart = false;
       this.render();
       if (sid) void window.atomworksStudio?.openSession?.(sid);
-    });
+    };
     document.getElementById('file-input')?.addEventListener('change', () => { this.showStart = false; });
     // Kept as the pending edit, so an example being built waits for the whole of it (the chain and its targets).
     els.addSeq?.addEventListener('click', () => { this.applying = this._addSeq(); });
@@ -605,7 +604,11 @@ export class DesignPanel {
       });
       els.addLig.parentElement.after(this.addLigandForm);
     });
-    els.undo?.addEventListener('click', () => document.getElementById('undo')?.click());
+    // Undo on the start screen undoes Clear; otherwise it is Studio's Undo.
+    els.undo?.addEventListener('click', () => {
+      if (this.showStart && this.closedSession) back();
+      else document.getElementById('undo')?.click();
+    });
     els.advanced?.addEventListener('change', () => this._applyAdvanced(els.advanced.checked, true));
     window.addEventListener('atomworks-studio', (ev) => {
       if (ev.detail?.type === 'selection') return;
@@ -698,13 +701,17 @@ export class DesignPanel {
     // An example being built keeps the start screen up; its chains are laid out (hidden) for the build to use.
     const starting = !hasDoc || Boolean(this.showStart) || Boolean(this.building);
     if (els.start) els.start.hidden = !starting;
-    if (els.back) els.back.hidden = !hasDoc;
     if (els.design) els.design.hidden = starting;
     if (els.runSettings) els.runSettings.hidden = starting;
     // A run's results and status belong to the document, so they go with it.
     els.start?.closest('#rfd4p-studio-card')?.classList.toggle('rfd4p-starting', starting);
     if (!hasDoc || (starting && !this.building)) {
-      // The start screen sits under the Input tab too.
+      // The start screen sits under the Input tab too, with no Clear, and Undo only when there is a job to go back to.
+      if (els.newDoc) els.newDoc.hidden = true;
+      if (els.undo) {
+        els.undo.hidden = !this.closedSession;
+        els.undo.disabled = !this.closedSession;
+      }
       this.app._renderDesigns?.();
       return;
     }

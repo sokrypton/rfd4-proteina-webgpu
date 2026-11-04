@@ -1099,7 +1099,11 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 .rfd4p-job[data-tab="input"] > #design-results, .rfd4p-job[data-tab="outputs"] > .rfd4p-design { display: none; }
 /* Input / Outputs tabs over the box's content. */
 .rfd4p-dtabs[hidden] { display: none; }
-.rfd4p-dtabs { display: flex; gap: 2px; margin-bottom: 0; border-bottom: 1px solid var(--border, #383a3f); }
+.rfd4p-dtabs { display: flex; gap: 2px; margin-bottom: 0; }
+/* Tabs on the left, Clear and Undo on the right, one line under both. */
+.rfd4p-tabrow { display: flex; align-items: flex-end; gap: 8px; border-bottom: 1px solid var(--border, #383a3f); }
+.rfd4p-tabrow .rfd4p-task-buttons { margin: 0 0 4px auto; }
+
 #rfd4p-studio-card .rfd4p-dtab {
   min-height: 0; padding: 5px 10px; margin-bottom: -1px; border: 1px solid transparent; border-radius: 5px 5px 0 0;
   background: none; color: var(--text-muted, #b1b3b9); font-size: 12.5px; font-weight: 600; cursor: pointer;
@@ -1196,7 +1200,7 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 }
 #atomworks-studio-popover::-webkit-scrollbar-thumb:hover { background: var(--text-muted, #b1b3b9); }
 .rfd4p-generate-row .rfd4p-generate-btn { width: auto; }
-.rfd4p-generate-row .rfd4p-designs-field input { height: 34px; box-sizing: border-box; }
+.rfd4p-generate-row .rfd4p-designs-count { width: 56px; height: 34px; box-sizing: border-box; }
 #rfd4p-studio-card .rfd4p-link-btn, .rfd4p-piece-pop .rfd4p-link-btn {
   min-height: 0; padding: 0; border: 0; background: none; color: var(--accent, #82aaff); font: inherit; text-decoration: underline; cursor: pointer;
 }

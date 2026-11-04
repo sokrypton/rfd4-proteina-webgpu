@@ -110,7 +110,7 @@ const SCENES = {
   // The binder example: the card's pieces beside the target, hotspots in amber.
   async card() {
     await openExample('protein_binder');
-    await shot('card', await around(['#rfd4p-design']));
+    await shot('card', await around(['#rfd4p-job']));
   },
   // A piece's popup, its crop bar dragged in: the residues to be cut fade in the structure.
   async piece() {

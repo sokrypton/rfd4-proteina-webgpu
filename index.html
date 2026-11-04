@@ -10,7 +10,7 @@
     <!-- This site serves the Studio bundle itself; its offline cache would pin stale assets on Pages. -->
     <meta name="atomworks-studio-service-worker" content="off" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="./web/styles.css?v=d1e1bc4a78" />
+    <link rel="stylesheet" href="./web/styles.css?v=6bc3b398a1" />
     <!-- Light or dark before anything draws, so the viewer never flashes the other colour (web/app.js _initTheme keeps it). -->
     <script>
       try {
@@ -46,7 +46,7 @@
           "./shared/rfd4p/safetensors.js": "./shared/rfd4p/safetensors.js?v=c238bc6559",
           "./shared/rfd4p/vendor/fzstd.js": "./shared/rfd4p/vendor/fzstd.js?v=e6cdba40d4",
           "./web/app.js": "./web/app.js?v=ca69527ea4",
-          "./web/design-panel.js": "./web/design-panel.js?v=0063c956b5",
+          "./web/design-panel.js": "./web/design-panel.js?v=a014bfa130",
           "./web/design-spec.js": "./web/design-spec.js?v=5b8999f1bb",
           "./web/guide-dialog.js": "./web/guide-dialog.js?v=df4c3ca412",
           "./web/ligand-ccd.js": "./web/ligand-ccd.js?v=b937ddbebf",
@@ -83,7 +83,14 @@
 
             <!-- One box, two tabs: Input (the start screen, then the design) and Outputs (the designs, once there are some). -->
             <div id="rfd4p-job" class="rfd4p-job rfd4p-section" data-tab="input">
-            <div id="rfd4p-tabs" class="rfd4p-dtabs" role="tablist"></div>
+            <!-- The tabs, and at their right Clear and Undo (the job's, whichever tab is open). -->
+            <div class="rfd4p-tabrow">
+                <div id="rfd4p-tabs" class="rfd4p-dtabs" role="tablist"></div>
+                <span class="rfd4p-task-buttons">
+                    <button id="rfd4p-new" type="button" class="secondary compact" title="Start over with an example, a PDB ID or your own file">Clear</button>
+                    <button id="rfd4p-undo" type="button" class="secondary compact" title="Undo the last change" disabled>Undo</button>
+                </span>
+            </div>
             <!-- Start: nothing open yet. Each task opens a ready-made input (web/design-panel.js). -->
             <div id="rfd4p-start" class="rfd4p-start">
                 <!-- A new job from its parts, as the design view adds them; or an example below. -->
@@ -93,18 +100,12 @@
                     <button id="rfd4p-start-lig" type="button" class="secondary compact" title="A small molecule by its PDB code (HEM, ATP, ZN…)">+ lig</button>
                 </div>
                 <p id="rfd4p-fetch-status" class="inline-feedback muted" aria-live="polite"></p>
-                <button id="rfd4p-back" type="button" class="secondary compact" hidden>← Back to the current design</button>
             </div>
 
             <!-- Design: what will be generated, read from the open document. -->
             <div id="rfd4p-design" class="rfd4p-design" hidden>
-                <div class="rfd4p-task-head">
-                    <strong id="rfd4p-task-label"></strong>
-                    <span class="rfd4p-task-buttons">
-                        <button id="rfd4p-new" type="button" class="secondary compact" title="Start over with an example, a PDB ID or your own file">Clear</button>
-                        <button id="rfd4p-undo" type="button" class="secondary compact" title="Undo the last change" disabled>Undo</button>
-                    </span>
-                </div>
+                <!-- What the job is ("Binder design"), read from its chains: kept for the guide's pictures and tests, not shown. -->
+                <strong id="rfd4p-task-label" hidden></strong>
                 <p id="rfd4p-task-detail" class="rfd4p-task-detail muted"></p>
                 <div id="rfd4p-chain-list" class="rfd4p-chain-list"></div>
                 <div class="rfd4p-chain-actions" role="group" aria-label="Add to the design">
@@ -179,7 +180,6 @@
             </div>
 
             <div id="rfd4p-run-settings" class="rfd4p-run-settings rfd4p-section" hidden>
-            <strong class="rfd4p-section-title">Run</strong>
 
             <fieldset class="representation-mode rfd4p-thinking-group" id="thinking-radio-group" aria-label="Thinking">
                 <legend title="Extra recycling passes: slower, sometimes better designs">Thinking</legend>
@@ -190,9 +190,8 @@
             </fieldset>
             <!-- How many designs, beside the button that makes them. -->
             <div class="rfd4p-generate-row">
-                <label for="samples-input" class="rfd4p-designs-field" title="How many designs to make, one after another">Designs
-                    <input type="number" id="samples-input" value="1" min="1" max="8" step="1" />
-                </label>
+                <input type="number" id="samples-input" class="rfd4p-designs-count" value="1" min="1" max="8" step="1"
+                    title="How many designs to make, one after another" aria-label="How many designs" />
                 <button id="predict" class="primary rfd4p-generate-btn" type="button" disabled>
                     Generate design
                 </button>
