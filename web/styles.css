@@ -1040,7 +1040,7 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 /* Selected: the outline every view uses for a selection. */
 .rfd4p-design-row:has(input:checked) { border-color: var(--text, #ededef); }
 .rfd4p-design-row input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.rfd4p-design-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.rfd4p-design-name { white-space: nowrap; }
 .rfd4p-design-mark { color: var(--success, #45b99a); font-weight: 700; }
 .rfd4p-design-num { text-align: right; font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; }
 .rfd4p-design-state { color: var(--text-muted, #b1b3b9); text-align: right; font-style: italic; }

@@ -1123,7 +1123,8 @@ class Rfd4pStudioApp {
         return (x - y) * sort.dir || a.designIndex - b.designIndex;
       });
     };
-    const grid = `minmax(0, 1fr) 12px repeat(${cols.length}, 40px) 52px`;
+    // The name never shrinks below itself ("Design 12", not "Design…"); the numbers take what they need.
+    const grid = `minmax(max-content, 1fr) 12px repeat(${cols.length}, 34px) 48px`;
     const busy = Boolean(this.refoldAbort);
     const head = h('div', { class: 'rfd4p-design-head', style: `grid-template-columns: ${grid}` },
       h('span'), h('span'),
