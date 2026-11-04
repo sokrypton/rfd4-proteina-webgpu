@@ -1025,35 +1025,37 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 .rfd4p-results-head .rfd4p-refold-model { flex: 1 1 auto; min-width: 0; }
 .rfd4p-refold-seed { display: flex; align-items: center; gap: 4px; margin: 0; font-size: 11px; color: var(--text-muted, #b1b3b9); }
 .rfd4p-refold-seed input { width: 52px; height: 26px; padding: 2px 4px; font-size: 11.5px; }
-.rfd4p-designs { display: grid; gap: 1px; font-size: 11.5px; }
-.rfd4p-design-head,
-.rfd4p-design-row { display: grid; align-items: center; column-gap: 4px; padding: 0 4px; }
-.rfd4p-design-head { color: var(--text-muted, #b1b3b9); font-size: 10.5px; }
+.rfd4p-designs { display: grid; gap: 4px; font-size: 11.5px; }
+/* One table per run: header labels over right-aligned numbers, the name taking the rest of the width. */
+.rfd4p-dtable { width: 100%; border-collapse: separate; border-spacing: 0; }
+.rfd4p-dtable th { padding: 2px 4px; font-size: 10.5px; font-weight: 500; color: var(--text-muted, #b1b3b9); text-align: right; white-space: nowrap; }
+.rfd4p-dtable td { padding: 3px 4px; white-space: nowrap; border-top: 1px solid transparent; border-bottom: 1px solid transparent; }
+.rfd4p-dtable td:first-child { border-left: 1px solid transparent; border-radius: 4px 0 0 4px; }
+.rfd4p-dtable td:last-child { border-right: 1px solid transparent; border-radius: 0 4px 4px 0; }
+.rfd4p-dtable .rfd4p-dt-name { width: 100%; text-align: left; }
+.rfd4p-dtable .rfd4p-dt-name label { display: block; margin: 0; cursor: pointer; }
+.rfd4p-dtable .rfd4p-dt-name input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.rfd4p-dtable .rfd4p-dt-mark { width: 12px; padding: 0 2px; color: var(--success, #45b99a); font-weight: 700; text-align: center; }
+.rfd4p-dtable .rfd4p-dt-num { text-align: right; font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; }
+.rfd4p-dtable th.rfd4p-dt-num { font-family: inherit; font-size: 10.5px; }
+.rfd4p-dtable .rfd4p-dt-state { text-align: right; color: var(--text-muted, #b1b3b9); font-style: italic; }
+.rfd4p-dtable .rfd4p-dt-act { text-align: right; }
+.rfd4p-dtable tbody tr { cursor: pointer; }
+.rfd4p-dtable tbody tr:hover td { background: var(--surface-hover, rgba(255, 255, 255, 0.05)); }
+/* Selected: the outline every view uses for a selection. */
+.rfd4p-dtable tbody tr:has(input:checked) td { border-color: var(--text, #ededef); }
+.rfd4p-design-fail .rfd4p-dt-name, .rfd4p-design-fail .rfd4p-dt-num { opacity: 0.45; }
 #rfd4p-studio-card .rfd4p-design-sort {
-  min-height: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: right; cursor: pointer;
+  min-height: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; white-space: nowrap;
 }
 #rfd4p-studio-card .rfd4p-design-sort.is-sorted { color: var(--text, #ededef); }
-.rfd4p-design-row {
-  position: relative; min-height: 26px; margin: 0; border: 1px solid transparent; border-radius: 4px; cursor: pointer;
-}
-.rfd4p-design-row:hover { background: var(--surface-hover, rgba(255, 255, 255, 0.05)); }
-/* Selected: the outline every view uses for a selection. */
-.rfd4p-design-row:has(input:checked) { border-color: var(--text, #ededef); }
-.rfd4p-design-row input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.rfd4p-design-name { white-space: nowrap; }
-.rfd4p-design-mark { color: var(--success, #45b99a); font-weight: 700; }
-.rfd4p-design-num { text-align: right; font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; }
-.rfd4p-design-state { color: var(--text-muted, #b1b3b9); text-align: right; font-style: italic; }
-.rfd4p-design-fail .rfd4p-design-name,
-.rfd4p-design-fail .rfd4p-design-num { opacity: 0.45; }
-.rfd4p-design-actions { display: flex; justify-content: flex-end; gap: 2px; }
 #rfd4p-studio-card .rfd4p-design-act {
   min-height: 0; padding: 0 3px; border: 0; background: none; color: var(--text-muted, #b1b3b9); font-size: 15px; line-height: 1; cursor: pointer;
 }
 #rfd4p-studio-card .rfd4p-design-act:hover:not(:disabled) { color: var(--text, #ededef); }
 #rfd4p-studio-card .rfd4p-design-refold { font-size: 17px; }
 .rfd4p-run > summary { margin: 4px 0 2px; font-size: 11px; color: var(--text-muted, #b1b3b9); cursor: pointer; }
-.rfd4p-designs-busy .rfd4p-design-row,
+.rfd4p-designs-busy .rfd4p-dtable tbody tr,
 .rfd4p-designs-busy .rfd4p-design-sort { pointer-events: none; opacity: 0.6; }
 
 /* A run's progress fills its button (Stop, while it runs). */

@@ -1123,35 +1123,35 @@ class Rfd4pStudioApp {
         return (x - y) * sort.dir || a.designIndex - b.designIndex;
       });
     };
-    // The name never shrinks below itself ("Design 12", not "Design…"); the numbers take what they need.
-    const grid = `minmax(max-content, 1fr) 12px repeat(${cols.length}, 34px) 48px`;
+    // One table per run: its own header row over its own rows, so each number sits under its label.
     const busy = Boolean(this.refoldAbort);
-    const head = h('div', { class: 'rfd4p-design-head', style: `grid-template-columns: ${grid}` },
-      h('span'), h('span'),
-      ...cols.map((c) => h('button', {
-        type: 'button', class: `rfd4p-design-sort${sort?.key === c.key ? ' is-sorted' : ''}`, title: c.title,
-        text: `${c.label}${sort?.key === c.key ? (sort.dir === c.dir ? ' ▾' : ' ▴') : ''}`,
+    const thead = () => h('thead', {}, h('tr', {},
+      h('th', { class: 'rfd4p-dt-name' }), h('th', { class: 'rfd4p-dt-mark' }),
+      ...cols.map((c) => h('th', { class: 'rfd4p-dt-num', title: c.title }, h('button', {
+        type: 'button', class: `rfd4p-design-sort${sort?.key === c.key ? ' is-sorted' : ''}`,
+        text: `${c.label}${sort?.key === c.key ? (sort.dir === c.dir ? '▾' : '▴') : ''}`,
         onclick: () => {
           this.designSort = sort?.key === c.key && !sort.passFirst ? { key: c.key, dir: -sort.dir } : { key: c.key, dir: c.dir };
           this._renderDesigns();
         },
-      })),
-      h('span'));
+      }))),
+      h('th', { class: 'rfd4p-dt-act' })));
     const row = (sid, v, inputTitle = null) => {
-      const cls = ['rfd4p-design-row', v.isInput ? 'rfd4p-design-input' : '',
-        v.pass === true ? 'rfd4p-design-pass' : '', v.pass === false ? 'rfd4p-design-fail' : ''].filter(Boolean).join(' ');
       const isInputRow = v.isInput || v.isSnapshot;
-      const label = h('label', { class: cls, style: `grid-template-columns: ${grid}`, title: isInputRow ? inputTitle : `seed ${v.seed}` });
+      const cls = [isInputRow ? 'rfd4p-design-input' : '', v.pass === true ? 'rfd4p-design-pass' : '',
+        v.pass === false ? 'rfd4p-design-fail' : ''].filter(Boolean).join(' ');
+      const tr = h('tr', { class: cls || null, title: isInputRow ? inputTitle : `seed ${v.seed}` });
       const radio = h('input', { type: 'radio', name: 'design-view-radio', value: sid });
       radio.checked = sid === this.studioSessionId;
-      label.append(radio, h('span', { class: 'rfd4p-design-name', text: isInputRow ? 'Input' : `Design ${v.designIndex}` }),
-        h('span', { class: 'rfd4p-design-mark', text: v.pass === true ? '✓' : '' }));
+      tr.append(
+        h('td', { class: 'rfd4p-dt-name' }, h('label', {}, radio, h('span', { text: isInputRow ? 'Input' : `Design ${v.designIndex}` }))),
+        h('td', { class: 'rfd4p-dt-mark', text: v.pass === true ? '✓' : '' }));
       const state = isInputRow ? '' : this.refoldSid === sid ? 'refolding…' : this.refoldQueue?.includes(sid) ? 'queued'
         : v.refoldError ? 'refold failed' : null;
-      if (state !== null) label.append(h('span', { class: 'rfd4p-design-state', text: state, style: `grid-column: span ${cols.length}` }));
-      else for (const c of cols) { const x = value(v, c.key); label.append(h('span', { class: 'rfd4p-design-num', text: x === null ? '' : c.fmt(x) })); }
+      if (state !== null) tr.append(h('td', { class: 'rfd4p-dt-state', colspan: cols.length, text: state }));
+      else for (const c of cols) { const x = value(v, c.key); tr.append(h('td', { class: 'rfd4p-dt-num', text: x === null ? '' : c.fmt(x) })); }
       const stop = (fn) => (ev) => { ev.preventDefault(); ev.stopPropagation(); fn(); };
-      label.append(h('span', { class: 'rfd4p-design-actions' },
+      tr.append(h('td', { class: 'rfd4p-dt-act' },
         isInputRow || this.noWebGpu ? null : h('button', {
           type: 'button', class: 'rfd4p-design-act rfd4p-design-refold', text: '↻', disabled: busy,
           title: v.metrics ? 'Refold this design again' : 'Refold this design', 'aria-label': `Refold Design ${v.designIndex}`,
@@ -1162,24 +1162,26 @@ class Rfd4pStudioApp {
           'aria-label': `Download ${isInputRow ? 'the input' : `Design ${v.designIndex}`}`,
           onclick: stop(() => this._downloadText(v.cif, `${v.filenameStem || 'design'}.cif`, 'chemical/x-mmcif')),
         })));
-      return label;
+      // Anywhere on the row shows it.
+      tr.addEventListener('click', (ev) => { if (!ev.target.closest('button, label, input')) radio.click(); });
+      return tr;
     };
-    // Each run's own input first in its group: the input itself while it is unchanged since the newest run, else the
-    // run's read-only copy. The input as it is now heads the table only once it has changed since that run.
+    const table = (rows, withHead = true) => h('table', { class: 'rfd4p-dtable' }, withHead ? thead() : null, h('tbody', {}, ...rows));
+    // Each run's own input first in its table: the input itself while it is unchanged since the newest run, else the
+    // run's read-only copy. The input as it is now heads the list only once it has changed since that run.
     const input = views.get(this.inputSessionId);
     const revisionNow = getSharedStudioStore().getSession(this.inputSessionId)?.revision ?? null;
-    const parts = [head];
+    const parts = [];
     const newest = runs.at(-1);
     const unchanged = (r) => r === newest && r.inputRevision === revisionNow;
-    if (input?.isInput && (!newest || !unchanged(newest))) parts.push(row(this.inputSessionId, input, 'The input as it is now (editable)'));
-    const seedText = (r) => (r.seeds[0] === r.seeds[1] ? `seed ${r.seeds[0]}` : `seeds ${r.seeds[0]}–${r.seeds[1]}`);
+    if (input?.isInput && (!newest || !unchanged(newest))) parts.push(table([row(this.inputSessionId, input, 'The input as it is now (editable)')], false));
     for (const [k, r] of runs.entries()) {
       const own = unchanged(r) && input?.isInput ? [this.inputSessionId, input, 'The input these designs were made from (editable)']
         : r.inputSnapshot && views.get(r.inputSnapshot) ? [r.inputSnapshot, views.get(r.inputSnapshot), `The input run ${r.index} was made from (read-only)`] : null;
       const rows = [own ? row(...own) : null, ...order(r.designs).map(([sid, v]) => row(sid, v))].filter(Boolean);
-      if (runs.length === 1) { parts.push(...rows); continue; }
+      if (runs.length === 1) { parts.push(table(rows)); continue; }
       const group = h('details', { class: 'rfd4p-run' },
-        h('summary', { text: `Run ${r.index} · ${seedText(r)} · ${r.designs.length} design${r.designs.length === 1 ? '' : 's'}` }), ...rows);
+        h('summary', { text: `Run ${r.index} · ${r.designs.length} design${r.designs.length === 1 ? '' : 's'}` }), table(rows));
       // Open or closed as the reader left it, across redraws (a refold redraws the table); until then, the newest run
       // and the one holding what is shown are open.
       this.runOpen ??= new Map();
