@@ -1183,7 +1183,7 @@ class Rfd4pStudioApp {
       tr.append(h('td', { class: 'rfd4p-dt-act' },
         isInputRow || this.noWebGpu ? null : h('button', {
           type: 'button', class: 'rfd4p-design-act rfd4p-design-refold', text: '↻', disabled: busy,
-          title: v.metrics ? 'Refold this design again' : 'Refold this design', 'aria-label': `Refold seed ${this._designName(v)}`,
+          title: 'Refold this design with the settings below (shown again if it was already refolded with them)', 'aria-label': `Refold seed ${this._designName(v)}`,
           onclick: stop(() => { void this._refoldDesigns([sid]); }),
         }),
         h('button', {
@@ -1380,11 +1380,23 @@ class Rfd4pStudioApp {
     const all = (this.runs ?? []).flatMap((r) => r.designs);
     // Refold all skips designs already refolded with these settings: another seed, recycles or steps folds them again.
     const same = (r) => r.model === model && (r.seed ?? 0) === seed && (r.recycles ?? 0) === recycles && (r.steps ?? 25) === steps;
-    const todo = (sids ?? all.filter((sid) => !this.generatedViews.get(sid)?.refolds?.some(same)))
-      .filter((sid) => this.generatedViews.get(sid)?.pdb);
+    // A design refolded before with these settings is not folded again: that refold is shown (its numbers back in the
+    // table), and every other refold of it is kept for the zip.
+    const asked = (sids ?? all).filter((sid) => this.generatedViews.get(sid)?.pdb);
+    const todo = [];
+    let shown = null;
+    for (const sid of asked) {
+      const view = this.generatedViews.get(sid);
+      const kept = view.refolds?.findLast(same);
+      if (!kept) todo.push(sid);
+      else if (view.refoldShown !== kept) { this._showRefold(view, kept); shown = sid; }
+    }
     if (!todo.length) {
       this._setRefoldStatus(null);
-      this._flashRefoldNote('All refolded with these settings');
+      this._renderDesigns();
+      if (shown) await this._selectDesign(sids ? sids[0] : shown);
+      else if (sids && this.studioSessionId !== sids[0]) await this._selectDesign(sids[0]);
+      this._flashRefoldNote(sids ? 'Already refolded with these settings' : 'All refolded with these settings');
       return;
     }
     const abort = new AbortController();
@@ -1453,17 +1465,15 @@ class Rfd4pStudioApp {
         partial: view.partialTemplates ?? [],
         status: (text) => status(text.replace(/^refolding with \S+( · )?/, '') || `refolding with ${name}`),
       });
-      view.metrics = refoldMetrics(result, view.designedChains, view.pdb);
-      view.pass = passes(view.metrics, view.kind);
-      view.refoldText = describeRefold(model, result, view.designedChains, view.partialTemplates ?? []);
-      (view.refolds ??= []).push({
+      const metrics = refoldMetrics(result, view.designedChains, view.pdb);
+      const record = {
         model, seed, recycles, steps, pdb: result.refold, cif: pdbToCif(result.refold), rmsd: result.rmsd, confidence: result.confidence,
-        templated: result.templated, partial: result.partial, text: view.refoldText, metrics: view.metrics, pass: view.pass,
-      });
+        templated: result.templated, partial: result.partial, text: describeRefold(model, result, view.designedChains, view.partialTemplates ?? []),
+        metrics, pass: passes(metrics, view.kind),
+      };
+      (view.refolds ??= []).push(record);
       view.refoldError = false;
-      const cif = refoldOverlayCif(result.refold);
-      const ligandCif = refoldLigandCif(result.refold);
-      view.overlays = { ...view.overlays, refold: cif ? { cif, ligandCif, label: `${name} refold` } : null };
+      this._showRefold(view, record);
       // The design just refolded is shown, its refold over it.
       if (this.studioSessionId === sid) await showDesignOverlays(view.overlays);
       else if (!abort.signal.aborted) await this._selectDesign(sid);
@@ -1474,6 +1484,17 @@ class Rfd4pStudioApp {
       console.error(`Refold of seed ${this._designName(view)} failed:`, err);
       return false;
     }
+  }
+
+  /** Show one of a design's refolds: its numbers in the table, its trace over the design (once the design is shown). */
+  _showRefold(view, record) {
+    view.refoldShown = record;
+    view.metrics = record.metrics;
+    view.pass = record.pass;
+    view.refoldText = record.text;
+    const cif = refoldOverlayCif(record.pdb);
+    const ligandCif = refoldLigandCif(record.pdb);
+    view.overlays = { ...view.overlays, refold: cif ? { cif, ligandCif, label: `${REFOLD_MODELS[record.model] ?? record.model} refold` } : null };
   }
 
   _downloadText(text, filename, mime) {
