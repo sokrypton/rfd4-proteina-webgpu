@@ -439,6 +439,9 @@ body:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]),
 
 /* ---- Simple mode (default): only the RFD4-Proteina card, the viewer, the sequence and Open/Style/picking.
    "Advanced editor" (body.rfd4p-advanced, web/design-panel.js) brings back every AtomWorks Studio tool. ---- */
+/* Studio's status bar: its loader's notes ("Mol* loaded 1823 atoms…") and a second Guide. The card has its own status
+   and Guide, and Studio's errors have their banner, so it shows only with the advanced editor. */
+body:not(.rfd4p-advanced) .status-bar { display: none; }
 body:not(.rfd4p-advanced) .header-actions .load-options,
 body:not(.rfd4p-advanced) .header-actions label.file-button,
 body:not(.rfd4p-advanced) .header-actions label.file-button.secondary,
