@@ -1210,6 +1210,13 @@ class Rfd4pStudioApp {
     this._syncRefoldUi();
   }
 
+  /** Select a row of the Designs table and show it. */
+  async _selectDesign(sid) {
+    this.studioSessionId = sid;
+    this._renderDesigns();
+    await this._navigateStudioToSession(sid, { withTrajectory: Boolean(this.generatedViews.get(sid)?.hasTrajectory) });
+  }
+
   /**
    * A design's name: its seed, which makes it again ("163509"), with the order it was made in when a seed comes twice
    * ("163509 (2)", a seed kept while a setting changed).
@@ -1417,7 +1424,9 @@ class Rfd4pStudioApp {
       const cif = refoldOverlayCif(result.refold);
       const ligandCif = refoldLigandCif(result.refold);
       view.overlays = { ...view.overlays, refold: cif ? { cif, ligandCif, label: `${name} refold` } : null };
+      // The design just refolded is shown, its refold over it.
       if (this.studioSessionId === sid) await showDesignOverlays(view.overlays);
+      else if (!abort.signal.aborted) await this._selectDesign(sid);
       return true;
     } catch (err) {
       if (abort.signal.aborted) return false;
@@ -1549,6 +1558,7 @@ class Rfd4pStudioApp {
         this.runsInput = this.inputSessionId;
       }
       const run = this.runs[0];
+      const firstNew = run.designs.length;
       this._renderDesigns();
 
       const t0 = performance.now();
@@ -1752,14 +1762,9 @@ class Rfd4pStudioApp {
       const elapsedS = ((performance.now() - t0) / 1000).toFixed(2);
       this.runCounter += 1;
 
-      const firstDesign = run.designs[0];
-      if (firstDesign) {
-        this.studioSessionId = firstDesign;
-        this._renderDesigns();
-        await this._navigateStudioToSession(firstDesign, {
-          withTrajectory: Boolean(this.generatedViews.get(firstDesign)?.hasTrajectory),
-        });
-      }
+      // Shown: this Generate's first design, also when it joined earlier ones.
+      const firstDesign = run.designs[firstNew];
+      if (firstDesign) await this._selectDesign(firstDesign);
 
       this.setProgress(1, 'idle');
       // There is now something to refold, and the Refold button has just appeared. Start pulling the folding

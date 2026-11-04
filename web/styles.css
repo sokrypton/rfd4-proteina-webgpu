@@ -1046,6 +1046,13 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 /* Selected: the outline every view uses for a selection. */
 .rfd4p-dtable tbody tr:has(input:checked) td { border-color: var(--text, #ededef); }
 .rfd4p-design-fail .rfd4p-dt-name, .rfd4p-design-fail .rfd4p-dt-num { opacity: 0.45; }
+/* A list: framed, a line under the header and between rows (shadows, so the selection's border stays its own). */
+.rfd4p-dtable { border: 1px solid var(--border, #383a3f); border-radius: 5px; background: var(--surface-recessed, #191a1c); }
+.rfd4p-dtable th { padding: 4px; box-shadow: inset 0 -1px 0 var(--border, #383a3f); }
+.rfd4p-dtable td { padding: 4px; }
+.rfd4p-dtable tbody tr + tr td { box-shadow: inset 0 1px 0 var(--border, #383a3f); }
+.rfd4p-dtable td:first-child, .rfd4p-dtable td:last-child { border-radius: 0; }
+.rfd4p-dtable tbody tr:has(input:checked) td, .rfd4p-dtable tbody tr:has(input:checked) + tr td { box-shadow: none; }
 #rfd4p-studio-card .rfd4p-design-sort {
   min-height: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; white-space: nowrap;
 }
