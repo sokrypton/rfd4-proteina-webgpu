@@ -652,3 +652,21 @@ The repo had no workflow at all; the `pages-build-deployment` runs are GitHub's 
 `.github/workflows/ci.yaml` now runs, on every push and PR, what needs no GPU: `npm test` on node 22 and 24,
 a parse of every shipped module, `tools/check-page-integrity.mjs`, and a stamp-drift check. The GPU gates in
 section 7 remain local.
+
+## 14. 2026-11-03: where a design's time goes now, and K compiled into the stock GEMM (M2, Chrome 156, stock flags)
+
+**End to end, binder example (n = 223, Thinking none, 46 steps):** 38.0 s. Per step 814 ms on the GPU (trunk pass and
+the live-frame decode) against 7 ms in `onStep` (frame building, Mol*, the card): the page's own per-frame work is
+negligible. Same design with Mol*'s frame drawing stubbed: 37.3 s (2%); with the per-step decode off: 34.5 s (9%).
+The decode is 124 dispatches, 73.8 ms of kernels against 68.8 ms wall: real work (swiglu 25.8, qkv 14.5, out 14.1 ms),
+its GEMMs at ~0.9-1.0 TFLOP/s, the same stock ceiling as the trunk. Every frame stays shown (owner's decision).
+
+**Shipped: K as a WGSL constant in `gemmSource`** (`gemm()`, `shapeKey`): 1.016x / 1.014x a trunk pass at n = 100 / 208,
+3 interleaved rounds, `sRel` = `zRel` = 0; `check-rfd4p --half=1` and `check-generate uncond_short` pass on both flag
+sets with the same RMSDs as before (0.0377 / 0.03954 A, bit-identical), `check-webapp` ok. Compiling every size and
+stride in as well (`constAll`) measured 1.004x / 1.023x, no steadier, so not shipped (variant kept for measurement;
+`{constK: false}` measures without).
+
+**Not repeated, already ruled out:** the pair-bias norm is already folded into its projection at load (MLX's trick).
+The stock path is at the M2's f32 ceiling for its class; the large levers left are the subgroup-matrix flag (2.2x,
+the card's notice), fewer passes (quality), and shorter jobs (crop the target).

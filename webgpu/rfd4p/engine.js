@@ -2738,11 +2738,21 @@ export class Rfd4pEngine {
     if (spec.inNorm === 'ln' && !inLn) throw new Error(`gemm ${m}x${n}x${k}: inNorm 'ln' is not supported by the kernel this shape selects`);
     const vKey = !submat && !small && this.gemmVariant ? `-v${JSON.stringify(this.gemmVariant)}` : '';
     const key = `${small ? 'gemm-s' : 'gemm'}${submat ? `-sm${this.submat8 ? '8' : ''}${half ? '-h' : '-f'}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${vecIO ? '-v' : (vecB ? '-vb' : '')}${vecEpilogue ? '-ve' : ''}${inLn ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate && addOnly ? '-ga' : (hasGate && !gSigm ? '-gns' : '')}` : `${wordB ? '-h' : ''}${b16 ? '-b16' : ''}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${fullK ? '-fk' : ''}${vecAStock ? '-va' : ''}${vecBStock ? '-vb' : ''}${vecEpilogue ? '-ve' : ''}${inLn ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate && addOnly ? '-ga' : (hasGate && !gSigm ? '-gns' : '')}${vKey}`}${spec.pair ? `-p-${spec.pair.key}` : ''}${hasGate ? `-g${gF16 ? '16' : ''}` : ''}`;
-    const src = submat
+    let src = submat
       ? gemmSubmatSource(spec.pair ?? null, hasGate, half, small ? 32 : 64, vecIO, aF16, gF16, cF16, addOnly, gSigm, hasAlpha, hasBias, actType, acc === 1, vecIO || vecB, vecEpilogue, inLn, this.submat8)
       : (small ? gemmSmallSource(wordB, b16, hasGate, aF16, cF16, gF16) : gemmSource(wordB, b16, spec.pair ?? null, hasGate, aF16, cF16, gF16, fullK, vecEpilogue, addOnly, gSigm, hasAlpha, hasBias, actType, acc === 1, inLn, this.gemmVariant, vecAStock, vecBStock));
+    // The call's K compiled in rather than read from the uniform block: 1.014-1.016x a stock trunk pass at n = 100 / 208,
+    // bit-identical (bench-kernels, 3 interleaved rounds, M2). `constAll` (every size and stride) was no steadier; a
+    // variant `{constK: false}` measures without it.
+    let shapeKey = '';
+    if (!submat && !small && fullK && ((this.gemmVariant?.constK ?? true) || this.gemmVariant?.constAll)) {
+      const lit = { k };
+      if (this.gemmVariant?.constAll) Object.assign(lit, { m, n, sAm: A.m, sAk: A.k, sBn: B.n, sBk: B.k, sCm: C.m, sCn: C.n });
+      for (const [f, v] of Object.entries(lit)) src = src.replace(new RegExp(`\\bp\\.${f}\\b`, 'g'), `${v >>> 0}u`);
+      shapeKey = `-shape${JSON.stringify(lit)}`;
+    }
     const bufs = [spec.a, spec.b, spec.c, spec.bias ?? this.dummy, ...(hasGate ? [spec.gate.sc] : []), ...(spec.pair?.buffers ?? [])];
-    return this.step(key, src, groups, bufs, u,
+    return this.step(key + shapeKey, src, groups, bufs, u,
       spec.label ?? `gemm ${m}x${n}x${k}${B0 * B1 > 1 ? `[${B0 * B1}]` : ''}`);
   }
 
