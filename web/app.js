@@ -1120,7 +1120,7 @@ class Rfd4pStudioApp {
         return (x - y) * sort.dir || a.designIndex - b.designIndex;
       });
     };
-    const grid = `minmax(0, 1fr) 12px repeat(${cols.length}, 40px) 46px`;
+    const grid = `minmax(0, 1fr) 12px repeat(${cols.length}, 40px) 52px`;
     const busy = Boolean(this.refoldAbort);
     const head = h('div', { class: 'rfd4p-design-head', style: `grid-template-columns: ${grid}` },
       h('span'), h('span'),
@@ -1148,7 +1148,7 @@ class Rfd4pStudioApp {
       const stop = (fn) => (ev) => { ev.preventDefault(); ev.stopPropagation(); fn(); };
       label.append(h('span', { class: 'rfd4p-design-actions' },
         v.isInput || this.noWebGpu ? null : h('button', {
-          type: 'button', class: 'rfd4p-design-act', text: '⟳', disabled: busy,
+          type: 'button', class: 'rfd4p-design-act rfd4p-design-refold', text: '↻', disabled: busy,
           title: v.metrics ? 'Refold this design again' : 'Refold this design', 'aria-label': `Refold Design ${v.designIndex}`,
           onclick: stop(() => { void this._refoldDesigns([sid]); }),
         }),

@@ -1045,9 +1045,10 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 .rfd4p-design-fail .rfd4p-design-num { opacity: 0.45; }
 .rfd4p-design-actions { display: flex; justify-content: flex-end; gap: 2px; }
 #rfd4p-studio-card .rfd4p-design-act {
-  min-height: 0; padding: 0 3px; border: 0; background: none; color: var(--text-muted, #b1b3b9); font-size: 12px; cursor: pointer;
+  min-height: 0; padding: 0 3px; border: 0; background: none; color: var(--text-muted, #b1b3b9); font-size: 15px; line-height: 1; cursor: pointer;
 }
 #rfd4p-studio-card .rfd4p-design-act:hover:not(:disabled) { color: var(--text, #ededef); }
+#rfd4p-studio-card .rfd4p-design-refold { font-size: 17px; }
 .rfd4p-run > summary { margin: 4px 0 2px; font-size: 11px; color: var(--text-muted, #b1b3b9); cursor: pointer; }
 .rfd4p-designs-busy .rfd4p-design-row,
 .rfd4p-designs-busy .rfd4p-design-sort { pointer-events: none; opacity: 0.6; }
