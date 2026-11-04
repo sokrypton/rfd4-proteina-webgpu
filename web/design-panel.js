@@ -771,19 +771,20 @@ export class DesignPanel {
     const entry = g.label?.replace(/ chains? .*$/, '');
     const title = entry ? this.titles?.get(entry) : null;
     const text = entry ? `${entry} · ${g.chains.map((c) => c.id).join(' ')}` : null;
-    // Replace (another entry or file in its place) and × (take its chains out), in sight rather than behind a click
-    // on the caption: an example's structure is the first thing someone swaps for their own.
+    // The caption replaces its structure (another entry or file in its place) when clicked, and × beside it, shown
+    // while the caption is pointed at, takes its chains out.
     const atoms = g.chains.flatMap((c) => c.atomIndices);
-    const caption = !g.label ? null : el('div', { class: 'rfd4p-source-row' },
-      el('span', { class: 'rfd4p-source', title: title ?? null, text }),
-      readonly ? null : el('button', { type: 'button', class: 'secondary compact rfd4p-source-act', text: 'Replace',
-        title: `Put another PDB entry or file in place of ${g.label}`, onclick: () => this._openAddStructure(g) }),
-      readonly ? null : el('button', { type: 'button', class: 'rfd4p-x rfd4p-source-x', text: '×', title: `Remove ${g.label}`,
-        'aria-label': `Remove ${g.label}`, onclick: () => {
-          // The last thing in the job: removing it is Clear (the start screen, with Back), not an empty document.
-          if (atoms.length >= (this._inputDoc()?.atoms?.nAtoms ?? 0)) this.els.newDoc?.click();
-          else void this._mutate('/delete', { atom_indices: atoms });
-        } }));
+    const caption = !g.label ? null : readonly
+      ? el('span', { class: 'rfd4p-source', title: title ?? null, text })
+      : el('div', { class: 'rfd4p-source-row' },
+        el('button', { type: 'button', class: 'rfd4p-source', onclick: () => this._openAddStructure(g), text,
+          title: [title, `Click to replace ${g.label}`].filter(Boolean).join('\n') }),
+        el('button', { type: 'button', class: 'rfd4p-x rfd4p-source-x', text: '×', title: `Remove ${g.label}`,
+          'aria-label': `Remove ${g.label}`, onclick: () => {
+            // The last thing in the job: removing it is Clear (the start screen, with Back), not an empty document.
+            if (atoms.length >= (this._inputDoc()?.atoms?.nAtoms ?? 0)) this.els.newDoc?.click();
+            else void this._mutate('/delete', { atom_indices: atoms });
+          } }));
     return el('div', { class: 'rfd4p-group' }, caption, ...g.chains.map((c) => this._chainRow(c, readonly)));
   }
 
