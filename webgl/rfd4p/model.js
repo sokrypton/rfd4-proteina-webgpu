@@ -24,12 +24,14 @@ export class Rfd4pModelGL {
     this.cache = new Map();
     // Normalised pair activations feeding the big matmuls and the triangle contractions held in float16.
     this.halfPair = true;
-    // The pair representation z in float16 (RGBA16F) from n = `zHalfMinN` on, as WebGPU's half mode holds it
-    // (`triF16`): off. A trunk pass at n = 208 is ~4% faster, but here z in float16 loses far more than WebGPU's does
-    // (motif_idx_1prw: Cα 6e-3 relative against WebGPU half's 8e-4 and float32's 5e-4), and whole designs drift (sm_sam,
-    // n = 181: 2.7 A from the oracle and 15 residues changed, against 0.017 A and none in float32; WebGPU half 1.7 A, 6).
-    this.zHalf = false;
-    this.zHalfMinN = 160;
+    // The pair representation z in float16 (RGBA16F), as WebGPU's half mode holds it (`triF16`): as accurate as float32
+    // here once float16 targets are written rounded to nearest (`gl.js`, `R16`; truncated, z lost 6e-3 relative on
+    // motif_idx_1prw and a whole sm_sam design drifted 2.7 A).
+    this.zHalf = true;
+    this.zHalfMinN = 0;
+    // The triangle contraction's result (the batched matmul's planes, the gather's j-planes) in float16 too (WebGPU's
+    // `x` under `triF16`).
+    this.xHalf = true;
   }
 
   get backendName() {
@@ -1152,7 +1154,7 @@ float cmv(int e) {
     const B = cm(b, Ip);
     const rowsAll = cH * Ip;
     const rq = rowsAll / 4;
-    const qs = [0, 1, 2, 3].map(() => c.tensor(rq * Ip));
+    const qs = [0, 1, 2, 3].map(() => c.tensor(rq * Ip, Boolean(this.xHalf)));
     c.kernel('bmm4x4pk', `
 uniform highp usampler2D X; uniform highp usampler2D Wt; uniform int uIn; uniform int uOut; uniform int uIp;
 void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
@@ -1197,7 +1199,7 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     // row i * Jq + (j >> 2), which the LayerNorm after it reads (`jplanes`).
     if (TW % (cH / 4) === 0 && !this.noJPlanes) {
       const Jq = Ip / 4;
-      const jplanes = [0, 1, 2, 3].map(() => c.tensor(n * Jq * cH));
+      const jplanes = [0, 1, 2, 3].map(() => c.tensor(n * Jq * cH, Boolean(this.xHalf)));
       c.kernel('tri-gather4', `
 uniform sampler2D Q0; uniform sampler2D Q1; uniform sampler2D Q2; uniform sampler2D Q3; uniform int uC; uniform int uIp;
 vec4 pl(int p, int t) { return p == 0 ? tx(Q0, t) : p == 1 ? tx(Q1, t) : p == 2 ? tx(Q2, t) : tx(Q3, t); }

@@ -41,6 +41,13 @@ float elp(highp usampler2D s, int e) {
 }
 `;
 
+/** To the nearest float16 value, ties to even, as a float (normal range; written to a float16 target, it is exact). */
+const R16 = `vec4 r16(vec4 x) {
+  uvec4 u = floatBitsToUint(x);
+  u = (u + uvec4(0xFFFu) + ((u >> 13u) & uvec4(1u))) & uvec4(0xFFFFE000u);
+  return uintBitsToFloat(u);
+}`;
+
 export function webgl2Available() {
   try {
     const c = document.createElement('canvas');
@@ -243,12 +250,18 @@ export class GLContext {
     const outs = Array.isArray(out) ? out : [out];
     const mrt = outs.length > 1;
     const ot = outs[0].half === 'packed' ? 'uvec4' : 'vec4';
-    const p = this._program(mrt ? `${key}#mrt` : key, mrt ? `${outs.map((_, i) => `layout(location = ${i}) out ${ot} f${i};`).join('\n')}
+    // A float16 target is written rounded to the nearest float16 value, ties to even, first: the conversion on writing
+    // truncates (Apple M2, ANGLE Metal), and truncation's bias added up over a trunk pass (z in float16 then lost 6e-3
+    // relative on motif_idx_1prw, 4e-4 rounded).
+    const h16 = outs[0].half === true && !this.noR16;
+    const p = this._program(`${mrt ? `${key}#mrt` : key}${h16 ? ':h16' : ''}`, mrt ? `${outs.map((_, i) => `layout(location = ${i}) out ${ot} ${h16 ? 'g' : 'f'}${i};`).join('\n')}
+${h16 ? `${R16}
+vec4 ${outs.map((_, i) => `f${i}`).join(', ')};` : ''}
 ${body}
 void main() {
   int t = int(gl_FragCoord.y) * uOutW + int(gl_FragCoord.x);
-  if (t >= uOutTexels) { ${outs.map((_, i) => `f${i} = ${ot}(0);`).join(' ')} return; }
-  compute4(t, ${outs.map((_, i) => `f${i}`).join(', ')});
+  if (t >= uOutTexels) { ${outs.map((_, i) => `${h16 ? 'g' : 'f'}${i} = ${ot}(0);`).join(' ')} return; }
+  compute4(t, ${outs.map((_, i) => `f${i}`).join(', ')});${h16 ? `\n  ${outs.map((_, i) => `g${i} = r16(f${i});`).join(' ')}` : ''}
 }` : outs[0].half === 'packed' ? `out uvec4 fragOut;
 ${body}
 void main() {
@@ -256,11 +269,12 @@ void main() {
   if (t >= uOutTexels) { fragOut = uvec4(0u); return; }
   fragOut = compute(t);
 }` : `out vec4 fragOut;
+${h16 ? R16 : ''}
 ${body}
 void main() {
   int t = int(gl_FragCoord.y) * uOutW + int(gl_FragCoord.x);
   if (t >= uOutTexels) { fragOut = vec4(0.0); return; }
-  fragOut = compute(t);
+  fragOut = ${h16 ? 'r16(compute(t))' : 'compute(t)'};
 }`);
     out = outs[0];
     gl.useProgram(p.prog);
