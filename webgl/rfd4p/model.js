@@ -24,8 +24,11 @@ export class Rfd4pModelGL {
     this.cache = new Map();
     // Normalised pair activations feeding the big matmuls and the triangle contractions held in float16.
     this.halfPair = true;
-    // The pair representation z itself in float16 (RGBA16F), as WebGPU's half mode holds it (`triF16`).
+    // The pair representation z itself in float16 (RGBA16F), as WebGPU's half mode holds it (`triF16`), from n =
+    // `zHalfMinN` on: at n = 208 a whole design is 13% faster and as close to the oracle (0.004 A); at n = 100 it is 4%
+    // faster but ends 0.18 A from the oracle against float32's 0.05 (WebGPU half: 0.04).
     this.zHalf = true;
+    this.zHalfMinN = 160;
   }
 
   get backendName() {
@@ -681,7 +684,7 @@ vec4 compute(int t) {
   ${pw ? `if (el(PM, r) != 0.0) { int pi = r / uN; int pj = r - pi * uN; int d4 = (e0 - r * uOut) / 4;
     zv += tx(PIJ, (pj * 2 * uOut) / 4 + d4) * tx(PIJ, (pi * 2 * uOut + uOut) / 4 + d4); }` : ''}
   return zv + (el(PM, r) != 0.0 ? d : vec4(0.0));
-}`, c.tensor(rows * outD, this.zHalf), { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3], Z: z, PM: mask, G: gq ? z : gate ?? z,
+}`, c.tensor(rows * outD, this.zh), { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3], Z: z, PM: mask, G: gq ? z : gate ?? z,
       ...(gq ? { G0: gate.planes[0], G1: gate.planes[1], G2: gate.planes[2], G3: gate.planes[3] } : {}), ...(pw ? { PIJ: pw.pij } : {}) },
     ints: { uOut: outD, ...(pw ? { uN: pw.n } : {}) } });
     qs.forEach((t) => t.free());
@@ -1278,7 +1281,7 @@ vec4 compute(int t) {
   int i = r / uN;
   int j = r - i * uN;
   return tx(Z, t) + tx(PIJ, (j * 2 * uP + d) / 4) * tx(PIJ, (i * 2 * uP + uP + d) / 4);
-}`, this.ctx.tensor(n * n * P, this.zHalf), { inputs: { Z: z, PIJ: pij, PM: pm }, ints: { uN: n, uP: P } });
+}`, this.ctx.tensor(n * n * P, this.zh), { inputs: { Z: z, PIJ: pij, PM: pm }, ints: { uN: n, uP: P } });
   }
 
   /**
@@ -1487,6 +1490,7 @@ vec4 compute(int t) {
     const TRI = cfg.tri_mult_c ?? 256;
     const H = cfg.nheads ?? 12;
     const norm = 'rmsnorm_torch';
+    this.zh = Boolean(this.zHalf) && n >= this.zHalfMinN;
     const { m, pm } = this._masks(mask, n);
     const condC = (feats) => {
       const ft = this._padFeats(feats, n, 'nn.cond_factory.linear_out.weight', C);
@@ -1536,7 +1540,7 @@ vec4 compute(int t) {
     pcT.free();
     const zCond = this.norm(zcLin, 1, PC, norm, this.W('nn.pair_repr_builder.cond_factory.ln_out.weight'));
     zcLin.free();
-    const zInit = this.adaLN(zMasked, zCond, pm, n * n, P, 1, PC, norm, 'nn.pair_repr_builder.adaln', 1e-5, null, this.zHalf && !this.zInit32);
+    const zInit = this.adaLN(zMasked, zCond, pm, n * n, P, 1, PC, norm, 'nn.pair_repr_builder.adaln', 1e-5, null, this.zh && !this.zInit32);
     zMasked.free();
     zCond.free();
 
@@ -1548,7 +1552,7 @@ vec4 compute(int t) {
         // s and z start at zero, so their recycle terms (a weight-only norm, a bias-free projection) are zero too.
         s = c.elementwise('copy', 'el(A, e)', n * D, { inputs: { A: sInit } });
         if (nRecycle > 1) {
-          z = c.elementwise('copy', 'el(A, e)', n * n * P, { inputs: { A: zInit }, half: this.zHalf && !this.zInit32 });
+          z = c.elementwise('copy', 'el(A, e)', n * n * P, { inputs: { A: zInit }, half: this.zh && !this.zInit32 });
         } else if (this.zInit32) {
           z = c.elementwise('copy', 'el(A, e)', n * n * P, { inputs: { A: zInit } });
         } else {
@@ -1565,7 +1569,7 @@ vec4 compute(int t) {
         s.free();
         z.free();
         s = c.elementwise('add', 'el(A, e) + el(B, e)', n * D, { inputs: { A: sInit, B: sd } });
-        z = c.elementwise('add', 'el(A, e) + el(B, e)', n * n * P, { inputs: { A: zInit, B: zd }, half: this.zHalf });
+        z = c.elementwise('add', 'el(A, e) + el(B, e)', n * n * P, { inputs: { A: zInit, B: zd }, half: this.zh });
         sd.free();
         zd.free();
       }
