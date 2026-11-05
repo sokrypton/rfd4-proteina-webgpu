@@ -78,7 +78,7 @@ export class Rfd4pModelGL {
    * `resid`: { z, mask, gate? } makes the result `z + mask[r] * Y * sigmoid(gate)` (a residual update, gated or not),
    * fused into the packed matmul's epilogue.
    */
-  linear(x, rows, inD, w, outD, bias = null, act = null, half = false, resid = null) {
+  linear(x, rows, inD, w, outD, bias = null, act = null, half = false, resid = null, fold = null) {
     const c = this.ctx;
     // The output of the paths that write one tensor, made when one of them is taken.
     let outT = null;
@@ -104,6 +104,7 @@ export class Rfd4pModelGL {
       return y;
     }
     if ((resid?.z.zplanes || resid?.z.pw?.z.zplanes) && !go48) throw new Error('linear: a z-planes residual needs the 4 x 8 path');
+    if (fold && !(go48 && x.packedPlanes)) throw new Error('linear: a folded norm needs the 4 x 8 path on planes');
     if (resid?.gate?.packedPlanes && !go48) {
       // A gate left as planes, read by a path that takes a tensor.
       const g = this._repackPacked(resid.gate.planes, rows, outD, true, true);
@@ -155,8 +156,8 @@ float epi(float v) { return uAct == 1 ? max(v, 0.0) : uAct == 2 ? sigm(v) : v; }
       const zg = zv && resid.gate ? resid.gate : null;
       if (zg && !zg.packedPlanes) throw new Error('linear: a z-planes residual takes its gate as planes');
       const zkey = zv ? `-zr${zg ? 'g' : ''}${zpw ? 'p' : ''}` : '';
-      c.kernel(`linear4x8pk${xq ? '-xq' : ''}${zkey}`, `
-uniform highp usampler2D X; uniform highp usampler2D Wt; uniform sampler2D B;${xq ? ' uniform highp usampler2D X1; uniform highp usampler2D X2; uniform highp usampler2D X3;' : ''}
+      c.kernel(`linear4x8pk${xq ? '-xq' : ''}${zkey}${fold ? '-ln' : ''}`, `
+uniform highp usampler2D X; uniform highp usampler2D Wt; uniform sampler2D B;${xq ? ' uniform highp usampler2D X1; uniform highp usampler2D X2; uniform highp usampler2D X3;' : ''}${fold ? ' uniform sampler2D FS; uniform sampler2D FW;' : ''}
 ${zv ? `uniform highp usampler2D Z0; uniform highp usampler2D Z1; uniform highp usampler2D Z2; uniform highp usampler2D Z3; uniform sampler2D PM;
 ${zg ? 'uniform highp usampler2D G0; uniform highp usampler2D G1; uniform highp usampler2D G2; uniform highp usampler2D G3;' : ''}
 ${zpw ? 'uniform sampler2D PIJ; uniform int uN;' : ''}` : ''}
@@ -191,6 +192,13 @@ void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
       b[i] += xl * wlb + xh * whb;
     }`}
   }
+  ${fold ? `// The norm folded in: rstd * (x W'^T - mean * rowsum(W')), W' the weight times the norm's.
+  vec4 sl = tx(FW, o0 / 4), sh = tx(FW, o0 / 4 + 1);
+  for (int i = 0; i < 4; i++) {
+    vec4 st = tx(FS, min(q * 4 + i, uRows - 1));
+    a[i] = (a[i] - st.x * sl) * st.y;
+    b[i] = (b[i] - st.x * sh) * st.y;
+  }` : ''}
   vec4 ba = uBias == 1 ? tx(B, o0 / 4) : vec4(0.0), bbv = uBias == 1 ? tx(B, o0 / 4 + 1) : vec4(0.0);
   ${zv ? `int zw = textureSize(Z0, 0).x;
   ivec2 tc = ivec2(t % zw, t / zw);
@@ -219,7 +227,7 @@ void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
 }`, qs, { inputs: { X: xq ? x.planes[0] : xp, Wt: wp, B: bias ?? w, ...(xq ? { X1: x.planes[1], X2: x.planes[2], X3: x.planes[3] } : {}),
           ...(zv ? { Z0: zv.zplanes[0], Z1: zv.zplanes[1], Z2: zv.zplanes[2], Z3: zv.zplanes[3], PM: resid.mask } : {}),
           ...(zg ? { G0: zg.planes[0], G1: zg.planes[1], G2: zg.planes[2], G3: zg.planes[3] } : {}),
-          ...(zpw ? { PIJ: zpw.pij } : {}) },
+          ...(zpw ? { PIJ: zpw.pij } : {}), ...(fold ? { FS: fold.stats, FW: fold.S } : {}) },
         ints: { ...ints, ...(zpw ? { uN: zpw.n } : {}) }, work: inD * 3 });
       if (xp !== x) xp.free();
       if (wp !== w && !wp.weight) wp.free();
@@ -848,6 +856,7 @@ vec4 compute(int r) {
   float m2 = (s2.x + s2.y + s2.z + s2.w) / n;
   ${ln ? 'return vec4(k0 + m1, 1.0 / sqrt(max(m2 - m1 * m1, 0.0) + uEps), 0.0, 0.0);' : 'return vec4(0.0, 1.0 / sqrt(m2 + uEps), 0.0, 0.0);'}
 }`, c.tensor(rows * 4), { inputs: xin, ints: { uDim: dim, ...xints }, floats: { uEps: eps }, work: dim / 4 });
+    if (half === 'stats') return stats;
     const packed = half === 'packed';
     const outHalf = packed ? 'packed' : half && this.halfPair;
     const inputs = { ...xin, S: stats, Wn: w ?? stats, Bn: b ?? stats };
@@ -1155,10 +1164,8 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     k.free();
     if (!biasPre) bias?.free();
     // Row max and 1/sum of exp, per (h, i).
-    // The softmax online, in the same walk over the keys (a running max, the sums rescaled as it rises): no pass of
-    // its own over (h, i) rows, which had too few fragments to hide its serial walk.
-    const online = !this.noOnlineSoftmax;
-    const stats = online ? null : c.kernel('attstats', `
+    // Row max and 1/sum of exp, per (h, i).
+    const stats = c.kernel('attstats', `
 uniform sampler2D L; uniform int uN;
 vec4 compute(int row) {
   int base = row * uN;
@@ -1168,39 +1175,21 @@ vec4 compute(int row) {
   for (int j = 0; j < uN; j++) s += exp(el(L, base + j) - m);
   return vec4(m, s > 0.0 ? 1.0 / s : 0.0, 0.0, 0.0);
 }`, c.tensor(H * n * 4), { inputs: { L: logits }, ints: { uN: n }, work: 2 * n });
-    // Eight channels of one head a fragment, written as packed halves (the output projection's operand).
-    const gated = c.kernel(`attpv-pk${online ? '-ol' : ''}`, `
-uniform sampler2D L; uniform sampler2D S; uniform sampler2D V; uniform sampler2D G; uniform int uN; uniform int uD;
-uvec4 compute(int t) {
-  int e0 = t * 8;
+    // out[i, h*dh + d] = sigmoid(g) * sum_j p[h, i, j] v[j, h*dh + d], four channels of one head a texel.
+    const gated = c.kernel('attpv', `
+uniform sampler2D L; uniform sampler2D S; uniform sampler2D V; uniform sampler2D G; uniform int uN; uniform int uD; uniform int uDh;
+vec4 compute(int t) {
+  int e0 = t * 4;
   int i = e0 / uD;
   int c0 = e0 - i * uD;
-  int h = c0 / ${dh};
+  int h = c0 / uDh;
   int row = h * uN + i;
-  vec4 a = vec4(0.0), b = vec4(0.0);
-  ${online ? `float m = -3.4e38, sum = 0.0;
-  for (int j = 0; j < uN; j++) {
-    float l = el(L, row * uN + j);
-    float m2 = max(m, l);
-    float sc = exp(m - m2), p = exp(l - m2);
-    int vb = (j * uD + c0) / 4;
-    a = a * sc + p * tx(V, vb);
-    b = b * sc + p * tx(V, vb + 1);
-    sum = sum * sc + p;
-    m = m2;
-  }
-  float inv = sum > 0.0 ? 1.0 / sum : 0.0;` : `vec4 st = tx(S, row);
-  for (int j = 0; j < uN; j++) {
-    float p = exp(el(L, row * uN + j) - st.x);
-    int vb = (j * uD + c0) / 4;
-    a += p * tx(V, vb);
-    b += p * tx(V, vb + 1);
-  }
-  float inv = st.y;`}
-  a = a * inv / (vec4(1.0) + exp(-tx(G, e0 / 4)));
-  b = b * inv / (vec4(1.0) + exp(-tx(G, e0 / 4 + 1)));
-  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
-}`, c.tensor(n * D, 'packed'), { inputs: { L: logits, S: stats ?? logits, V: v, G: g }, ints: { uN: n, uD: D }, work: n });
+  vec4 st = tx(S, row);
+  vec4 acc = vec4(0.0);
+  for (int j = 0; j < uN; j++) acc += exp(el(L, row * uN + j) - st.x) * st.y * tx(V, (j * uD + c0) / 4);
+  vec4 gv = tx(G, t);
+  return acc / (vec4(1.0) + exp(-gv));
+}`, c.tensor(n * D), { inputs: { L: logits, S: stats, V: v, G: g }, ints: { uN: n, uD: D, uDh: dh }, work: n });
     [logits, stats, v, g].forEach((t) => t.free());
     // `opts.fused`: the output projection's planes, for the block's scale-and-add to read.
     const out = this.linear(gated, n, D, W('to_out_node.weight'), D, W('to_out_node.bias', true), null, opts.fused ? 'cmplanes' : false);
@@ -1268,7 +1257,10 @@ vec4 compute(int t) {
 }`, c.tensor(H * n * n), { inputs: { Q: q, K: k, WQK: wqk, SQ: sqk, SK: sqk, M: mask, ...(bq ? { AB0: bq[0], AB1: bq[1], AB2: bq[2], AB3: bq[3] } : {}) },
       ints: { uN: n, uD: D, ...(bias ? { uBS: biasPre.stride, uBO: biasPre.off } : {}) }, floats: { uScale: 1 / Math.sqrt(dh) }, work: dh });
     [q, k, sqk].forEach((t) => t.free());
-    const stats = c.kernel('attstats', `
+    // `onlineSoftmax`: the softmax online, in the same walk over the keys (a running max, the sums rescaled as it rises),
+    // with no statistics pass: no faster at n = 100, slower at n = 208 (two exps a key), so off.
+    const online = Boolean(this.onlineSoftmax);
+    const stats = online ? null : c.kernel('attstats', `
 uniform sampler2D L; uniform int uN;
 vec4 compute(int row) {
   int base = row * uN;
@@ -1279,7 +1271,7 @@ vec4 compute(int row) {
   return vec4(m, s > 0.0 ? 1.0 / s : 0.0, 0.0, 0.0);
 }`, c.tensor(H * n * 4), { inputs: { L: logits }, ints: { uN: n }, work: 2 * n });
     // Eight channels of one head a fragment, written as packed halves (the output projection's operand).
-    const gated = c.kernel('attpv-pk', `
+    const gated = c.kernel(`attpv-pk${online ? '-ol' : ''}`, `
 uniform sampler2D L; uniform sampler2D S; uniform sampler2D V; uniform sampler2D G; uniform int uN; uniform int uD;
 uvec4 compute(int t) {
   int e0 = t * 8;
@@ -1287,18 +1279,30 @@ uvec4 compute(int t) {
   int c0 = e0 - i * uD;
   int h = c0 / ${dh};
   int row = h * uN + i;
-  vec4 st = tx(S, row);
   vec4 a = vec4(0.0), b = vec4(0.0);
+  ${online ? `float m = -3.4e38, sum = 0.0;
+  for (int j = 0; j < uN; j++) {
+    float l = el(L, row * uN + j);
+    float m2 = max(m, l);
+    float sc = exp(m - m2), p = exp(l - m2);
+    int vb = (j * uD + c0) / 4;
+    a = a * sc + p * tx(V, vb);
+    b = b * sc + p * tx(V, vb + 1);
+    sum = sum * sc + p;
+    m = m2;
+  }
+  float inv = sum > 0.0 ? 1.0 / sum : 0.0;` : `vec4 st = tx(S, row);
   for (int j = 0; j < uN; j++) {
     float p = exp(el(L, row * uN + j) - st.x);
     int vb = (j * uD + c0) / 4;
     a += p * tx(V, vb);
     b += p * tx(V, vb + 1);
   }
-  a = a * st.y / (vec4(1.0) + exp(-tx(G, e0 / 4)));
-  b = b * st.y / (vec4(1.0) + exp(-tx(G, e0 / 4 + 1)));
+  float inv = st.y;`}
+  a = a * inv / (vec4(1.0) + exp(-tx(G, e0 / 4)));
+  b = b * inv / (vec4(1.0) + exp(-tx(G, e0 / 4 + 1)));
   return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
-}`, c.tensor(n * D, 'packed'), { inputs: { L: logits, S: stats, V: v, G: g }, ints: { uN: n, uD: D }, work: n });
+}`, c.tensor(n * D, 'packed'), { inputs: { L: logits, S: stats ?? logits, V: v, G: g }, ints: { uN: n, uD: D }, work: n });
     [logits, stats, v, g].forEach((t) => t?.free());
     const out = this.linear(gated, n, D, W('to_out_node.weight'), D, W('to_out_node.bias', true), null, 'cmplanes');
     gated.free();
@@ -1613,11 +1617,20 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     }
     pij.free();
     const tp = `${prefix}.transition_out`;
-    const zt = this.norm(zz, rows, P, 'layer_norm', this.W(`${tp}.layer_norm.weight`), this.W(`${tp}.layer_norm.bias`), eps, this.pk('zt'));
     const l1B = this.W(`${tp}.linear_1.bias`);
     const hidden = l1B.size;
-    const h = this.linear(zt, rows, P, this.W(`${tp}.linear_1.weight`), hidden, l1B, 'relu', 'planes');
-    zt.free();
+    let h;
+    if (zz.zplanes && !this.noLnFold) {
+      // The norm folded into linear_1, which reads z's planes itself: only the statistics pass.
+      const st = this.norm(zz, rows, P, 'layer_norm', null, null, eps, 'stats');
+      const f = this._lnFold(`${tp}#lnfold`, `${tp}.layer_norm.weight`, `${tp}.layer_norm.bias`, `${tp}.linear_1.weight`, `${tp}.linear_1.bias`, hidden, P);
+      h = this.linear({ planes: zz.zplanes, packedPlanes: true }, rows, P, f.w, hidden, f.b, 'relu', 'planes', null, { stats: st, S: f.S });
+      st.free();
+    } else {
+      const zt = this.norm(zz, rows, P, 'layer_norm', this.W(`${tp}.layer_norm.weight`), this.W(`${tp}.layer_norm.bias`), eps, this.pk('zt'));
+      h = this.linear(zt, rows, P, this.W(`${tp}.linear_1.weight`), hidden, l1B, 'relu', 'planes');
+      zt.free();
+    }
     const out = this.linear(h, rows, hidden, this.W(`${tp}.linear_2.weight`), P, this.W(`${tp}.linear_2.bias`), null, false, { z: zz, mask: pairMask });
     h.free();
     zz.free();
@@ -1633,6 +1646,51 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
   // ---- networks -----------------------------------------------------------------------------------------------
 
   /** As `forwardTrunkCpu(n, f, mask, weights, cfg, nRecycle, opts)`; returns `{bb_ca, local_latents, logits, insertion}`. */
+  /**
+   * A norm (weight `lnW`, bias `lnB` or none) folded into the linear after it: W' = W diag(lnW), b' = b + W lnB, and
+   * rowsum(W') from W' as the matmul holds it (packed halves), so the mean's term cancels what the matmul adds.
+   */
+  _lnFold(key, lnW, lnB, wName, bName, outD, inD) {
+    let f = this.cache.get(key);
+    if (!f) {
+      const raw = (nm) => { if (!nm) return null; const e = this.weights.tensors ? this.weights.tensors[nm] : this.weights[nm]; return e ? (e.data ?? e) : null; };
+      const g = raw(lnW);
+      const be = raw(lnB);
+      const wd = raw(wName);
+      const bd = raw(bName);
+      const w2 = new Float32Array(outD * inD);
+      const b2 = new Float32Array(outD);
+      for (let o = 0; o < outD; o += 1) {
+        let acc = bd ? bd[o] : 0;
+        for (let k = 0; k < inD; k += 1) {
+          const wv = wd[o * inD + k];
+          w2[o * inD + k] = g ? wv * g[k] : wv;
+          if (be) acc += wv * be[k];
+        }
+        b2[o] = acc;
+      }
+      const wt = this.ctx.upload(w2, { half: true, weight: true });
+      const wp = this._packWeight(wt);
+      const S = this.ctx.kernel('rowsum-pk', `
+uniform highp usampler2D Wt; uniform int uIn;
+float rs(int o) {
+  int ib = uIn / 8;
+  float sm = 0.0;
+  for (int k = 0; k < ib; k++) {
+    uvec4 u = texelFetch(Wt, ivec2((o * ib + k) % textureSize(Wt, 0).x, (o * ib + k) / textureSize(Wt, 0).x), 0);
+    vec2 a = unpackHalf2x16(u.x), b = unpackHalf2x16(u.y), c2 = unpackHalf2x16(u.z), d = unpackHalf2x16(u.w);
+    sm += a.x + a.y + b.x + b.y + c2.x + c2.y + d.x + d.y;
+  }
+  return sm;
+}
+vec4 compute(int t) { return vec4(rs(4 * t), rs(4 * t + 1), rs(4 * t + 2), rs(4 * t + 3)); }`, this.ctx.tensor(outD), { inputs: { Wt: wp }, ints: { uIn: inD } });
+      S.weight = true;
+      f = { w: wt, b: this.ctx.upload(b2, { weight: true }), S };
+      this.cache.set(key, f);
+    }
+    return f;
+  }
+
   /**
    * `[rows, P]` floats as z's packed planes: row r is row r >> 2 of plane r & 3, eight values a texel (the 4 x 8
    * matmul's output layout, so a residual update writes the new z in its epilogue). { zplanes, rows, P }.
@@ -2002,20 +2060,31 @@ vec4 compute(int t) {
         const sn = this.norm(s, n, D, norm, this.W('nn.s_cycle_norm.weight'));
         const sd = this.linear(sn, n, D, this.W('nn.s_cycle_proj.weight'), D);
         sn.free();
-        const zn = this.norm(z, n * n, P, norm, this.W('nn.z_cycle_norm.weight'), null, 1e-5, this.pk('zc'));
         s.free();
-        if (zp) {
-          // z = zInit + z_cycle_proj(zn), written as new planes by the projection's epilogue (masked pairs are zero on both sides).
-          const z2 = this.linear(zn, n * n, P, this.W('nn.z_cycle_proj.weight'), P, null, null, false, { z: zInit, mask: pm });
+        if (zp && !this.noLnFold) {
+          // z = zInit + z_cycle_proj(rmsnorm(z)), the norm folded into the projection, which reads z's planes, and the
+          // sum written as new planes by its epilogue (masked pairs are zero on both sides).
+          const st = this.norm(z, n * n, P, norm, null, null, 1e-5, 'stats');
+          const f = this._lnFold('nn.z_cycle#lnfold', 'nn.z_cycle_norm.weight', null, 'nn.z_cycle_proj.weight', null, P, P);
+          const z2 = this.linear({ planes: z.zplanes, packedPlanes: true }, n * n, P, f.w, P, null, null, false, { z: zInit, mask: pm }, { stats: st, S: f.S });
+          st.free();
           z.free();
           z = z2;
         } else {
-          const zd = this.linear(zn, n * n, P, this.W('nn.z_cycle_proj.weight'), P, null, null, true);
-          z.free();
-          z = c.elementwise('add', 'el(A, e) + el(B, e)', n * n * P, { inputs: { A: zInit, B: zd }, half: this.zh });
-          zd.free();
+          const zn = this.norm(z, n * n, P, norm, this.W('nn.z_cycle_norm.weight'), null, 1e-5, this.pk('zc'));
+          if (zp) {
+            // z = zInit + z_cycle_proj(zn), written as new planes by the projection's epilogue (masked pairs are zero on both sides).
+            const z2 = this.linear(zn, n * n, P, this.W('nn.z_cycle_proj.weight'), P, null, null, false, { z: zInit, mask: pm });
+            z.free();
+            z = z2;
+          } else {
+            const zd = this.linear(zn, n * n, P, this.W('nn.z_cycle_proj.weight'), P, null, null, true);
+            z.free();
+            z = c.elementwise('add', 'el(A, e) + el(B, e)', n * n * P, { inputs: { A: zInit, B: zd }, half: this.zh });
+            zd.free();
+          }
+          zn.free();
         }
-        zn.free();
         s = c.elementwise('add', 'el(A, e) + el(B, e)', n * D, { inputs: { A: sInit, B: sd } });
         sd.free();
       }
