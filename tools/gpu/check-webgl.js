@@ -60,8 +60,10 @@ export async function main(_device, args) {
     const depth = opt.depth ? Number(opt.depth) : meta.steps[0].n_recycle;
     if (opt.warm === '1' && opt.profile !== '1') await model.forwardTrunk(n, f, batch.padding_mask.data, nnCfg, 1);
     if (opt.profile === '1') { await model.forwardTrunk(n, f, batch.padding_mask.data, nnCfg, 1); model.ctx.profile = new Map(); model.ctx.lastT = performance.now(); }
+    if (opt.counts === '1') model.ctx.counts = new Map();
     const t0 = performance.now();
     const out = await model.forwardTrunk(n, f, batch.padding_mask.data, nnCfg, depth, { insertion: true });
+    if (model.ctx.counts) { const all = [...model.ctx.counts]; results.draws = all.reduce((a, [, v]) => a + v, 0); results.drawsTop = all.sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, v]) => `${v} ${k}`); model.ctx.counts = null; }
     const ms = Math.round(performance.now() - t0);
     const ctx = batch.is_in_context_conditioning.data;
     const lat = batch.supports_local_latent.data;

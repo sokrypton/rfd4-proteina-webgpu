@@ -42,6 +42,7 @@ export async function main(_device, args) {
   if (opt.packed === '1') results.packed = benchPacked(c, x32, w, b, rows, inD, outD, Number(opt.reps ?? 5));
   if (opt.packed === '1') results.packed4x8 = benchPacked48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5));
   if (opt.probe === '1') Object.assign(results, benchProbe(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5)));
+  if (opt.tf === '1') for (const [rb, cb] of [[4, 8], [8, 4], [8, 8], [4, 16]]) results[`tf${rb}x${cb}`] = benchTF(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5), rb, cb);
   model.destroy();
   return { rows, inD, outD, xHalf, renderer: c.renderer, results };
 }
@@ -219,4 +220,108 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     out[`probe-${mode}`] = { ms: Number(timeIt(c, run, reps).toFixed(1)) };
   }
   return out;
+}
+
+/**
+ * Transform feedback: a vertex shader per 8 x 8 output block (64 floats out, the guaranteed interleaved minimum),
+ * operands as packed halves, results into a buffer (no fragment output budget). Kernel only.
+ */
+function benchTF(c, x32, w32, rows, inD, outD, reps, RB = 8, CB = 8) {
+  const gl = c.gl;
+  const pack = (src, size) => c.kernel('tf-pack8', `
+uniform sampler2D S;
+uvec4 compute(int t) {
+  vec4 a = tx(S, 2 * t), b = tx(S, 2 * t + 1);
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
+}`, c.tensor(size, 'packed'), { inputs: { S: src } });
+  const wf = c.elementwise('tf-copyf', 'el(X, e)', outD * inD, { inputs: { X: w32 } });
+  const xp = pack(x32, rows * inD);
+  const wp = pack(wf, outD * inD);
+  const nOut = (RB * CB) / 4;
+  const outs = [...Array(nOut).keys()].map((i) => `tfo${i}`);
+  const vs = `#version 300 es
+precision highp float; precision highp int; precision highp usampler2D;
+uniform usampler2D X; uniform usampler2D Wt; uniform int uIn; uniform int uOut; uniform int uRows;
+${outs.map((o) => `flat out vec4 ${o};`).join('\n')}
+void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
+void main() {
+  int nb = uOut / ${CB};
+  int blk = gl_VertexID;
+  int qr = blk / nb;
+  int o0 = (blk - qr * nb) * ${CB};
+  int ib = uIn / 8;
+  int xw = textureSize(X, 0).x;
+  int ww = textureSize(Wt, 0).x;
+  ivec2 xc[${RB}];
+  for (int i = 0; i < ${RB}; i++) { int r = min(qr * ${RB} + i, uRows - 1); int xt = r * ib; xc[i] = ivec2(xt % xw, xt / xw); }
+  ivec2 wc[${CB}];
+  for (int j = 0; j < ${CB}; j++) { int wt = (o0 + j) * ib; wc[j] = ivec2(wt % ww, wt / ww); }
+  vec4 acc[${RB * CB / 4}];
+  for (int i = 0; i < ${RB * CB / 4}; i++) acc[i] = vec4(0.0);
+  for (int k = 0; k < ib; k++) {
+    ivec2 dk = ivec2(k, 0);
+    vec4 l[${CB}], h[${CB}];
+    for (int j = 0; j < ${CB}; j++) unpack8(texelFetch(Wt, wc[j] + dk, 0), l[j], h[j]);
+    for (int i = 0; i < ${RB}; i++) {
+      vec4 xl, xh;
+      unpack8(texelFetch(X, xc[i] + dk, 0), xl, xh);
+      for (int g = 0; g < ${CB / 4}; g++) acc[i * ${CB / 4} + g] += xl * mat4(l[4 * g], l[4 * g + 1], l[4 * g + 2], l[4 * g + 3]) + xh * mat4(h[4 * g], h[4 * g + 1], h[4 * g + 2], h[4 * g + 3]);
+    }
+  }
+  ${[...Array(nOut).keys()].map((i) => `tfo${i} = acc[${i}];`).join(' ')}
+  gl_Position = vec4(0.0);
+  gl_PointSize = 1.0;
+}`;
+  const fs = `#version 300 es
+precision highp float; out vec4 f; void main() { f = vec4(0.0); }`;
+  const compile = (type, src) => { const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; };
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
+  gl.transformFeedbackVaryings(prog, outs, gl.INTERLEAVED_ATTRIBS);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  const blocks = Math.ceil(rows / RB) * (outD / CB);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.TRANSFORM_FEEDBACK_BUFFER, buf);
+  gl.bufferData(gl.TRANSFORM_FEEDBACK_BUFFER, blocks * RB * CB * 4, gl.DYNAMIC_COPY);
+  gl.bindBuffer(gl.TRANSFORM_FEEDBACK_BUFFER, null);
+  const tfo = gl.createTransformFeedback();
+  const vao = gl.createVertexArray();
+  const run = () => {
+    gl.useProgram(prog);
+    gl.bindVertexArray(vao);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, xp.tex); gl.uniform1i(gl.getUniformLocation(prog, 'X'), 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, wp.tex); gl.uniform1i(gl.getUniformLocation(prog, 'Wt'), 1);
+    gl.uniform1i(gl.getUniformLocation(prog, 'uIn'), inD);
+    gl.uniform1i(gl.getUniformLocation(prog, 'uOut'), outD);
+    gl.uniform1i(gl.getUniformLocation(prog, 'uRows'), rows);
+    gl.enable(gl.RASTERIZER_DISCARD);
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, tfo);
+    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, buf);
+    gl.beginTransformFeedback(gl.POINTS);
+    gl.drawArrays(gl.POINTS, 0, blocks);
+    gl.endTransformFeedback();
+    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, null);
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+    gl.disable(gl.RASTERIZER_DISCARD);
+    gl.bindVertexArray(null);
+    return [];
+  };
+  const ms = timeIt(c, run, reps);
+  // Correctness of one block against a CPU dot product.
+  const got = new Float32Array(RB * CB);
+  gl.bindBuffer(gl.COPY_READ_BUFFER, buf);
+  gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, got);
+  gl.bindBuffer(gl.COPY_READ_BUFFER, null);
+  const xs = c.read(x32, RB * inD);
+  const ws = c.read(w32, CB * inD);
+  let err = 0;
+  for (let i = 0; i < RB; i += 1) for (let j = 0; j < CB; j += 1) {
+    let d = 0; for (let k = 0; k < inD; k += 1) d += xs[i * inD + k] * ws[j * inD + k];
+    const g = got[i * CB + j];
+    err = Math.max(err, Math.abs(g - d) / (Math.abs(d) + 1));
+  }
+  return { ms: Number(ms.toFixed(1)), gflops: Number(((2 * rows * inD * outD) / ms / 1e6).toFixed(0)), maxRelErr: Number(err.toExponential(2)),
+    maxComponents: gl.getParameter(gl.MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS), note: `kernel only, ${RB}x${CB} via transform feedback` };
 }

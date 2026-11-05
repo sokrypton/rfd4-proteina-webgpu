@@ -237,6 +237,7 @@ void main() {
 }`);
     out = outs[0];
     gl.useProgram(p.prog);
+    if (this.counts) this.counts.set(key, (this.counts.get(key) ?? 0) + 1);
     let unit = 0;
     for (const [name, t] of Object.entries(inputs)) {
       if (!t?.tex) throw new Error(`kernel ${key}: input ${name} is missing`);
@@ -279,8 +280,18 @@ void main() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     // Profiling (`this.profile = new Map()`): each kernel waited for and timed, by key.
     if (this.profile) {
-      // A one-texel read waits for the draw (Chrome's finish() does not).
-      this.read(out, 4);
+      // A one-texel read waits for the draw (Chrome's finish() does not); a float texture's (an integer one cannot be
+      // read as floats), drawn after it, since GL runs in order.
+      if (out.half === 'packed') {
+        this.syncT ??= this.tensor(4);
+        const prof = this.profile;
+        this.profile = null;
+        this.kernel('profile-sync', 'vec4 compute(int t) { return vec4(1.0); }', this.syncT);
+        this.profile = prof;
+        this.read(this.syncT, 4);
+      } else {
+        this.read(out, 4);
+      }
       const now = performance.now();
       const k = `${key} ${work}`;
       this.profile.set(k, (this.profile.get(k) ?? 0) + now - (this.lastT ?? now));

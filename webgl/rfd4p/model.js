@@ -340,6 +340,8 @@ float lin(int e) {
       return out;
     }
     const rq = Math.ceil(rows / 4);
+    // Also measured and slower or no better (M2, one warm pass at n = 208): the projection's and gate's weights
+    // interleaved into one texture (2.38 s vs 2.33), the two as separate 4 x 8 matmuls plus a combine pass (2.54 s).
     // (4 rows x 8 columns of both projections, packed outputs, measured 1.2x slower: register pressure, M2.)
     if (inD % 8 === 0 && TW % (inD / 8) === 0 && !this.noPacked) {
       const xp = this._pack(x, rows * inD);
