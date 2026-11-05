@@ -81,6 +81,8 @@ export class Rfd4pModelGL {
     // The output of the paths that write one tensor, made when one of them is taken.
     let outT = null;
     const out = { free() { outT?.free(); outT = null; }, get t() { return (outT ??= c.tensor(rows * outD)); } };
+    const keepCm = half === 'cmplanes';
+    if (keepCm) half = false;
     // `half` 'planes': packed halves, left as the 4 x 8 kernel's four planes (plane i holds rows 4q + i) when it runs,
     // for a consumer that reads them (a 4 x 8 matmul's x, `_repackResid`'s gate): { planes, packedPlanes: true }.
     // Otherwise float16 (`half` true), which every reader of a gate or an x takes.
@@ -209,7 +211,7 @@ void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
       c.kernel(`linear4x4pk${cm ? '-cm' : ''}${S > 1 ? '-sk' : ''}`, `
 uniform highp usampler2D X; uniform highp usampler2D Wt; uniform sampler2D B;
 uniform sampler2D Z; uniform sampler2D G; uniform sampler2D PM; uniform int uRes; uniform int uGate;
-uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows; uniform int uRq; uniform int uS;${epi}
+uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows; uniform int uRq; uniform int uS; uniform int uRaw;${epi}
 vec4 fin(vec4 v, int r, int o0) {
   if (uRes == 0) return v;
   int zt = (r * uOut + o0) / 4;
@@ -245,16 +247,18 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
       a[i] += xl * wl + xh * wh;
     }
   }
-  if (uS > 1) { r0 = a[0]; r1 = a[1]; r2 = a[2]; r3 = a[3]; return; }
+  if (uS > 1 || uRaw == 1) { r0 = a[0]; r1 = a[1]; r2 = a[2]; r3 = a[3]; return; }
   vec4 bv = uBias == 1 ? tx(B, o0 / 4) : vec4(0.0);
   r0 = live[0] ? fin(epi4(a[0] + bv), q * 4, o0) : vec4(0.0);
   r1 = live[1] ? fin(epi4(a[1] + bv), q * 4 + 1, o0) : vec4(0.0);
   r2 = live[2] ? fin(epi4(a[2] + bv), q * 4 + 2, o0) : vec4(0.0);
   r3 = live[3] ? fin(epi4(a[3] + bv), q * 4 + 3, o0) : vec4(0.0);
 }`, qs, { inputs: { X: xp, Wt: wp, B: bias ?? w, Z: resid?.z ?? w, G: resid?.gate ?? w, PM: resid?.mask ?? w },
-        ints: { ...ints, uRes: resid ? 1 : 0, uGate: resid?.gate ? 1 : 0, uRq: rq, uS: S }, work: (inD * 2) / S });
+        ints: { ...ints, uRes: resid ? 1 : 0, uGate: resid?.gate ? 1 : 0, uRq: rq, uS: S, uRaw: cm && keepCm ? 1 : 0 }, work: (inD * 2) / S });
       if (xp !== x) xp.free();
       if (wp !== w && !wp.weight) wp.free();
+      // `half` 'cmplanes': the planes as they are, for a fused reader (`_rowReader`); the bias and activation not yet applied.
+      if (cm && keepCm) return { cmPlanes: qs, rq, S, bias, act, outD, free() { qs.forEach((t) => t.free()); } };
       return cm ? this._repackCM(qs, rows, outD, outHalf, S > 1 ? { S, bias, act } : null) : this._repack(qs, rows, outD, resid ? this.zh : outHalf);
     }
     if (rows >= 64 && inD % 4 === 0 && outD % 4 === 0 && TW % (inD / 4) === 0 && !this.no4x4) {
@@ -569,7 +573,7 @@ vec4 compute(int t) {
   }
 
   /** Four planes of a 4-row block kernel (plane i holds rows 4q + i) into one row-major tensor. */
-  _repack(qs, rows, outD, half) {
+  _repack(qs, rows, outD, half, keep = false) {
     if (half === 'packed') {
       const res = this.ctx.elementwise('repack4', 'rp(e)', rows * outD, {
         inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3] }, ints: { uOut: outD }, half: 'packed',
@@ -580,7 +584,7 @@ vec4 compute(int t) {
   return i == 0 ? el(Q0, qe) : i == 1 ? el(Q1, qe) : i == 2 ? el(Q2, qe) : el(Q3, qe);
 }`,
       });
-      qs.forEach((t) => t.free());
+      if (!keep) qs.forEach((t) => t.free());
       return res;
     }
     const res = this.ctx.kernel('repack4', `
@@ -593,7 +597,7 @@ vec4 compute(int t) {
   if (i == 0) return tx(Q0, qt); if (i == 1) return tx(Q1, qt); if (i == 2) return tx(Q2, qt);
   return tx(Q3, qt);
 }`, this.ctx.tensor(rows * outD, half), { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3] }, ints: { uOut: outD } });
-    qs.forEach((t) => t.free());
+    if (!keep) qs.forEach((t) => t.free());
     return res;
   }
 
@@ -821,6 +825,105 @@ vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs,
   }
 
   /** AdaptiveLayerNorm (`adaptive_ln_scale.py`): per-row (`condRows === rows`) or broadcast (`condRows === 1`) cond. */
+  /**
+   * GLSL `vec4 NAME(int r, int c4)`, texel c4 of row r of a linear's result: from a float tensor, or summed from a
+   * token matmul's planes (`linear` 'cmplanes': S partial sums, bias and activation applied here). { glsl, inputs, key }.
+   */
+  _rowReader(name, src, outD) {
+    const o4 = outD / 4;
+    if (!src.cmPlanes) {
+      return { key: 't', inputs: { [`${name}T`]: src }, glsl: `uniform sampler2D ${name}T;
+vec4 ${name}(int r, int c4) { return tx(${name}T, r * ${o4} + c4); }` };
+    }
+    const { cmPlanes: q, rq, S, bias, act } = src;
+    const a = ACT[act] ?? 0;
+    return {
+      key: `p${rq}.${S}.${bias ? 1 : 0}.${a}.${o4}`,
+      inputs: { [`${name}0`]: q[0], [`${name}1`]: q[1], [`${name}2`]: q[2], [`${name}3`]: q[3], ...(bias ? { [`${name}B`]: bias } : {}) },
+      glsl: `uniform sampler2D ${name}0; uniform sampler2D ${name}1; uniform sampler2D ${name}2; uniform sampler2D ${name}3;${bias ? ` uniform sampler2D ${name}B;` : ''}
+vec4 ${name}(int r, int c4) {
+  int i = r & 3;
+  int qt = c4 * ${rq} + (r >> 2);
+  vec4 v = vec4(0.0);
+  for (int s = 0; s < ${S}; s++) {
+    int t = qt + s * ${o4 * rq};
+    v += i == 0 ? tx(${name}0, t) : i == 1 ? tx(${name}1, t) : i == 2 ? tx(${name}2, t) : tx(${name}3, t);
+  }
+  ${bias ? `v += tx(${name}B, c4);` : ''}
+  ${a === 1 ? 'v = max(v, 0.0);' : a === 2 ? 'v = vec4(1.0) / (vec4(1.0) + exp(-v));' : ''}
+  return v;
+}`,
+    };
+  }
+
+  /** Row statistics of `[rows, dim]` (mean, 1/std; RMS: 0, 1/rms) without applying them. */
+  _rowStats(x, rows, dim, ln, eps) {
+    return this.ctx.kernel(`rowstats-${ln ? 'ln' : 'rms'}`, `
+uniform sampler2D X0; uniform int uDim; uniform float uEps;
+vec4 compute(int r) {
+  int nb = uDim / 4;
+  int w = textureSize(X0, 0).x;
+  int base = r * nb;
+  ivec2 rc = ivec2(base % w, base / w);
+  ${ln ? 'float k0 = texelFetch(X0, rc, 0).x;' : 'float k0 = 0.0;'}
+  vec4 s1 = vec4(0.0), s2 = vec4(0.0);
+  for (int k = 0; k < nb; k++) {
+    vec4 v = texelFetch(X0, rc + ivec2(k, 0), 0) - vec4(k0);
+    s1 += v;
+    s2 += v * v;
+  }
+  float n = float(uDim);
+  float m1 = (s1.x + s1.y + s1.z + s1.w) / n;
+  float m2 = (s2.x + s2.y + s2.z + s2.w) / n;
+  ${ln ? 'return vec4(k0 + m1, 1.0 / sqrt(max(m2 - m1 * m1, 0.0) + uEps), 0.0, 0.0);' : 'return vec4(0.0, 1.0 / sqrt(m2 + uEps), 0.0, 0.0);'}
+}`, this.ctx.tensor(rows * 4), { inputs: { X0: x }, ints: { uDim: dim }, floats: { uEps: eps }, work: dim / 4 });
+  }
+
+  /**
+   * adaLN with its norm applied as it modulates (`pre`, the trunk's precomputed gammas and betas): the norm's stats,
+   * then one pass, `mask * (x * rstd * sigmoid(gamma) + beta)`, as floats or packed halves.
+   */
+  _adaLNFused(x, mask, rows, dim, type, eps, pre, packed) {
+    const c = this.ctx;
+    const st = this._rowStats(x, rows, dim, type === 'layer_norm', eps);
+    const d4 = dim / 4;
+    const body = `
+uniform sampler2D X; uniform sampler2D ST; uniform sampler2D A; uniform sampler2D M; uniform int uS; uniform int uOg;
+vec4 ad(int r, int c4) {
+  if (el(M, r) == 0.0) return vec4(0.0);
+  vec4 s = tx(ST, r);
+  vec4 nx = (tx(X, r * ${d4} + c4) - vec4(s.x)) * s.y;
+  int g = (r * uS + uOg) / 4 + c4;
+  return nx / (vec4(1.0) + exp(-tx(A, g))) + tx(A, g + ${d4});
+}`;
+    const out = packed
+      ? c.kernel(`adaln-fused-pk${d4}`, `${body}
+uvec4 compute(int t) {
+  int r = t / ${d4 / 2};
+  int c4 = (t - r * ${d4 / 2}) * 2;
+  vec4 a = ad(r, c4), b = ad(r, c4 + 1);
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
+}`, c.tensor(rows * dim, 'packed'), { inputs: { X: x, ST: st, A: pre.t, M: mask }, ints: { uS: pre.stride, uOg: pre.off } })
+      : c.kernel(`adaln-fused${d4}`, `${body}
+vec4 compute(int t) { int r = t / ${d4}; return ad(r, t - r * ${d4}); }`, c.tensor(rows * dim), { inputs: { X: x, ST: st, A: pre.t, M: mask }, ints: { uS: pre.stride, uOg: pre.off } });
+    st.free();
+    return out;
+  }
+
+  /** `mask * (x + y * sigmoid(scale))`: an output matmul's result (planes or tensor) scaled and added in one pass. */
+  _scaleAdd(x, y, mask, rows, dim, sc) {
+    const rd = this._rowReader('Y', y, dim);
+    const d4 = dim / 4;
+    return this.ctx.kernel(`scaleadd-${rd.key}-${d4}`, `${rd.glsl}
+uniform sampler2D X; uniform sampler2D SC; uniform sampler2D M; uniform int uS; uniform int uO;
+vec4 compute(int t) {
+  int r = t / ${d4};
+  int c4 = t - r * ${d4};
+  if (el(M, r) == 0.0) return vec4(0.0);
+  return tx(X, t) + Y(r, c4) / (vec4(1.0) + exp(-tx(SC, (r * uS + uO) / 4 + c4)));
+}`, this.ctx.tensor(rows * dim), { inputs: { ...rd.inputs, X: x, SC: sc.t, M: mask }, ints: { uS: sc.stride, uO: sc.off } });
+  }
+
   adaLN(x, cond, mask, rows, dim, condRows, dimCond, type, prefix, eps = 1e-5, pre = null, half = false) {
     const nx = this.norm(x, rows, dim, type, null, null, eps);
     if (pre) {
@@ -888,7 +991,7 @@ vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs,
   }
 
   /** PairBiasAttention (`pair_bias_attn.py`); `maskAny`: the token mask has some valid token. */
-  attention(nodes, pair, mask, n, D, P, H, usePairBias, useQkln, type, prefix, eps = 1e-5, biasPre = null) {
+  attention(nodes, pair, mask, n, D, P, H, usePairBias, useQkln, type, prefix, eps = 1e-5, biasPre = null, opts = {}) {
     const c = this.ctx;
     const dh = Math.floor(D / H);
     const W = (k, opt = false) => this.W(`${prefix}.${k}`, opt);
@@ -898,14 +1001,36 @@ vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs,
     const normed = this.norm(nodes, n, D, type, W('node_norm.weight'), W('node_norm.bias', true), eps, fuse ? 'packed' : false);
     const wq = fuse ? this._stacked(`${prefix}#qkvg`, [[`${prefix}.to_qkv.weight`, `${prefix}.to_qkv.bias`, 3 * D], [`${prefix}.to_g.weight`, `${prefix}.to_g.bias`, D]], D) : null;
     const nOut = fuse ? 4 * D : 3 * D;
-    const qkv = fuse ? this.linear(normed, n, D, wq.w, nOut, wq.b) : this.linear(normed, n, D, W('to_qkv.weight'), nOut, W('to_qkv.bias', true));
-    const part = (k) => c.elementwise('qkvpart', 'el(QKV, (e / uD) * uS + uOff + e - (e / uD) * uD)', n * D,
-      { inputs: { QKV: qkv }, ints: { uD: D, uOff: k * D, uS: nOut } });
-    let q = part(0);
-    let k = part(1);
-    const v = part(2);
-    const g = fuse ? part(3) : this.linear(normed, n, D, W('to_g.weight'), D, W('to_g.bias', true));
+    const fused = fuse && opts.fused;
+    const qkv = fuse ? this.linear(normed, n, D, wq.w, nOut, wq.b, null, fused ? 'cmplanes' : false) : this.linear(normed, n, D, W('to_qkv.weight'), nOut, W('to_qkv.bias', true));
+    let q;
+    let k;
+    let v;
+    let g;
+    if (fused) {
+      // q, k, v and g straight from the matmul's result, four targets.
+      const rd = this._rowReader('Y', qkv, nOut);
+      const d4 = D / 4;
+      [q, k, v, g] = [0, 1, 2, 3].map(() => c.tensor(n * D));
+      c.kernel(`qkvsplit-${rd.key}-${d4}`, `${rd.glsl}
+void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
+  int r = t / ${d4};
+  int c4 = t - r * ${d4};
+  r0 = Y(r, c4); r1 = Y(r, ${d4} + c4); r2 = Y(r, ${2 * d4} + c4); r3 = Y(r, ${3 * d4} + c4);
+}`, [q, k, v, g], { inputs: rd.inputs });
+    } else {
+      const part = (kk) => c.elementwise('qkvpart', 'el(QKV, (e / uD) * uS + uOff + e - (e / uD) * uD)', n * D,
+        { inputs: { QKV: qkv }, ints: { uD: D, uOff: kk * D, uS: nOut } });
+      q = part(0);
+      k = part(1);
+      v = part(2);
+      g = fuse ? part(3) : this.linear(normed, n, D, W('to_g.weight'), D, W('to_g.bias', true));
+    }
     qkv.free();
+    // Fused, with weight-only RMS q/k norms and n a multiple of 4: the norms folded into the scores,
+    // rstd_q rstd_k sum_d q k (w_q w_k), four keys a fragment; the output written as packed halves.
+    const foldQk = fused && useQkln && type !== 'layer_norm' && !W('q_layer_norm.bias', true) && !W('k_layer_norm.bias', true) && n % 4 === 0 && dh % 8 === 0 && !this.noFoldQk;
+    if (foldQk) return this._attnFolded(q, k, v, g, normed, mask, n, D, H, dh, W, eps, biasPre, prefix);
     if (useQkln) {
       const qn = this.norm(q, n, D, type, W('q_layer_norm.weight'), W('q_layer_norm.bias', true), eps);
       const kn = this.norm(k, n, D, type, W('k_layer_norm.weight'), W('k_layer_norm.bias', true), eps);
@@ -921,6 +1046,7 @@ vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs,
     if (usePairBias && biasPre) {
       // This layer's columns of `_pairBias`, computed once for the layers that read this z.
       ({ t: bias, stride: biasS, off: biasO } = biasPre);
+      if (bias.pbPlanes) bias = bias.tensor();
     } else if (usePairBias && pair && !this.skipBias) {
       const np = this.norm(pair, n * n, P, type, W('pair_norm.weight'), W('pair_norm.bias', true), eps, this.pk('np'));
       bias = this.linear(np, n * n, P, W('to_bias.weight'), H);
@@ -979,7 +1105,105 @@ vec4 compute(int t) {
   return acc / (vec4(1.0) + exp(-gv));
 }`, c.tensor(n * D), { inputs: { L: logits, S: stats, V: v, G: g }, ints: { uN: n, uD: D, uDh: dh }, work: n });
     [logits, stats, v, g].forEach((t) => t.free());
-    const out = this.linear(gated, n, D, W('to_out_node.weight'), D, W('to_out_node.bias', true));
+    // `opts.fused`: the output projection's planes, for the block's scale-and-add to read.
+    const out = this.linear(gated, n, D, W('to_out_node.weight'), D, W('to_out_node.bias', true), null, opts.fused ? 'cmplanes' : false);
+    gated.free();
+    return out;
+  }
+
+  /** `attention`'s core with the q/k RMS norms folded into the scores (see there); returns the output projection's planes. */
+  _attnFolded(q, k, v, g, normed, mask, n, D, H, dh, W, eps, biasPre, prefix) {
+    const c = this.ctx;
+    normed.free();
+    const key = `${prefix}#wqk`;
+    let wqk = this.cache.get(key);
+    if (!wqk) {
+      const raw = (nm) => { const e = this.weights.tensors ? this.weights.tensors[nm] : this.weights[nm]; return e.data ?? e; };
+      const a = raw(`${prefix}.q_layer_norm.weight`);
+      const b = raw(`${prefix}.k_layer_norm.weight`);
+      wqk = c.upload(Float32Array.from(a, (x, i) => x * b[i]), { weight: true });
+      this.cache.set(key, wqk);
+    }
+    // q's and k's RMS statistics in one draw (rows 0..n-1 of q, then of k).
+    const sqk = c.kernel('rowstats-qk', `
+uniform sampler2D Q; uniform sampler2D K; uniform int uN; uniform int uDim; uniform float uEps;
+vec4 compute(int r) {
+  int nb = uDim / 4;
+  bool isK = r >= uN;
+  int base = (isK ? r - uN : r) * nb;
+  vec4 s2 = vec4(0.0);
+  for (int k = 0; k < nb; k++) { vec4 v = isK ? tx(K, base + k) : tx(Q, base + k); s2 += v * v; }
+  return vec4(0.0, 1.0 / sqrt((s2.x + s2.y + s2.z + s2.w) / float(uDim) + uEps), 0.0, 0.0);
+}`, c.tensor(2 * n * 4), { inputs: { Q: q, K: k }, ints: { uN: n, uDim: D }, floats: { uEps: eps }, work: D / 4 });
+    const bias = biasPre?.t ?? null;
+    const bq = bias?.pbPlanes ?? null;
+    if (bias && !bq) throw new Error('folded attention: the pair bias as planes');
+    const n4 = n / 4;
+    const dh4 = dh / 4;
+    const logits = c.kernel(`attlogits4${bias ? '-b' : ''}`, `
+uniform sampler2D Q; uniform sampler2D K; uniform sampler2D WQK; uniform sampler2D SQ; uniform sampler2D SK; uniform sampler2D M;${bias ? ` uniform sampler2D AB0; uniform sampler2D AB1; uniform sampler2D AB2; uniform sampler2D AB3; uniform int uBS; uniform int uBO;
+// The pair bias of pair r, column cc, from _pairBias's planes (row r in plane r & 3).
+float pb(int r, int cc) { int e = (r >> 2) * uBS + cc; int p = r & 3; return p == 0 ? el(AB0, e) : p == 1 ? el(AB1, e) : p == 2 ? el(AB2, e) : el(AB3, e); }` : ''}
+uniform int uN; uniform int uD; uniform float uScale;
+vec4 compute(int t) {
+  int e0 = t * 4;
+  int h = e0 / (uN * uN);
+  int rem = e0 - h * uN * uN;
+  int i = rem / uN;
+  int j0 = rem - i * uN;
+  int qb = (i * uD + h * ${dh}) / 4;
+  int wb = h * ${dh4};
+  int kb = (j0 * uD + h * ${dh}) / 4;
+  int ks = uD / 4;
+  vec4 s = vec4(0.0);
+  for (int d = 0; d < ${dh4}; d++) {
+    vec4 qv = tx(Q, qb + d) * tx(WQK, wb + d);
+    s += vec4(dot(qv, tx(K, kb + d)), dot(qv, tx(K, kb + ks + d)), dot(qv, tx(K, kb + 2 * ks + d)), dot(qv, tx(K, kb + 3 * ks + d)));
+  }
+  vec4 rk = vec4(tx(SK, uN + j0).y, tx(SK, uN + j0 + 1).y, tx(SK, uN + j0 + 2).y, tx(SK, uN + j0 + 3).y);
+  s *= uScale * tx(SQ, i).y * rk;
+  if (el(M, i) != 0.0) {
+    vec4 mj = vec4(el(M, j0), el(M, j0 + 1), el(M, j0 + 2), el(M, j0 + 3));
+    ${bias ? 'int r0 = i * uN + j0; vec4 b = vec4(pb(r0, uBO + h), pb(r0 + 1, uBO + h), pb(r0 + 2, uBO + h), pb(r0 + 3, uBO + h));' : 'vec4 b = vec4(0.0);'}
+    s = mix(vec4(-1e4), s + b, notEqual(mj, vec4(0.0)));
+  }
+  return s;
+}`, c.tensor(H * n * n), { inputs: { Q: q, K: k, WQK: wqk, SQ: sqk, SK: sqk, M: mask, ...(bq ? { AB0: bq[0], AB1: bq[1], AB2: bq[2], AB3: bq[3] } : {}) },
+      ints: { uN: n, uD: D, ...(bias ? { uBS: biasPre.stride, uBO: biasPre.off } : {}) }, floats: { uScale: 1 / Math.sqrt(dh) }, work: dh });
+    [q, k, sqk].forEach((t) => t.free());
+    const stats = c.kernel('attstats', `
+uniform sampler2D L; uniform int uN;
+vec4 compute(int row) {
+  int base = row * uN;
+  float m = -3.4e38;
+  for (int j = 0; j < uN; j++) m = max(m, el(L, base + j));
+  float s = 0.0;
+  for (int j = 0; j < uN; j++) s += exp(el(L, base + j) - m);
+  return vec4(m, s > 0.0 ? 1.0 / s : 0.0, 0.0, 0.0);
+}`, c.tensor(H * n * 4), { inputs: { L: logits }, ints: { uN: n }, work: 2 * n });
+    // Eight channels of one head a fragment, written as packed halves (the output projection's operand).
+    const gated = c.kernel('attpv-pk', `
+uniform sampler2D L; uniform sampler2D S; uniform sampler2D V; uniform sampler2D G; uniform int uN; uniform int uD;
+uvec4 compute(int t) {
+  int e0 = t * 8;
+  int i = e0 / uD;
+  int c0 = e0 - i * uD;
+  int h = c0 / ${dh};
+  int row = h * uN + i;
+  vec4 st = tx(S, row);
+  vec4 a = vec4(0.0), b = vec4(0.0);
+  for (int j = 0; j < uN; j++) {
+    float p = exp(el(L, row * uN + j) - st.x);
+    int vb = (j * uD + c0) / 4;
+    a += p * tx(V, vb);
+    b += p * tx(V, vb + 1);
+  }
+  a = a * st.y / (vec4(1.0) + exp(-tx(G, e0 / 4)));
+  b = b * st.y / (vec4(1.0) + exp(-tx(G, e0 / 4 + 1)));
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
+}`, c.tensor(n * D, 'packed'), { inputs: { L: logits, S: stats, V: v, G: g }, ints: { uN: n, uD: D }, work: n });
+    [logits, stats, v, g].forEach((t) => t.free());
+    const out = this.linear(gated, n, D, W('to_out_node.weight'), D, W('to_out_node.bias', true), null, 'cmplanes');
     gated.free();
     return out;
   }
@@ -990,6 +1214,37 @@ vec4 compute(int t) {
     // each null to compute it here.
     const ada = (k) => pre?.ada && { t: pre.ada, stride: pre.adaStride, off: (pre.layer * 4 + k * 2) * D };
     const sc = (k) => pre?.sc && { t: pre.sc, stride: pre.scStride, off: (pre.layer * 2 + k) * D };
+    if (pre?.ada && pre?.sc && D % 8 === 0 && !this.noTokFuse) {
+      // Fused: adaLN's norm applied as it modulates, q/k/v/g split from the matmul's planes, SwiGLU from its planes into
+      // packed halves, each output projection scaled, masked and added to the stream in one pass.
+      const xa = this._adaLNFused(x, mask, n, D, type, eps, ada(0), false);
+      const att = this.attention(xa, usePairBias ? pair : null, mask, n, D, P, H, usePairBias, useQkln, type, `${prefix}.mhba.mha`, eps, pre?.bias, { fused: true });
+      xa.free();
+      const after = this._scaleAdd(x, att, mask, n, D, sc(0));
+      att.free();
+      const xt = this._adaLNFused(after, mask, n, D, type, eps, ada(1), true);
+      const tp = `${prefix}.transition.transition`;
+      const inner = D * 4;
+      const h = this.linear(xt, n, D, this.W(`${tp}.swish_linear.0.weight`), inner * 2, null, null, 'cmplanes');
+      xt.free();
+      const rd = this._rowReader('Y', h, inner * 2);
+      const i4 = inner / 4;
+      const mid = this.ctx.kernel(`swiglu-pk-${rd.key}-${i4}`, `${rd.glsl}
+vec4 sw(int r, int c4) { vec4 g = Y(r, ${i4} + c4); return g / (vec4(1.0) + exp(-g)) * Y(r, c4); }
+uvec4 compute(int t) {
+  int r = t / ${i4 / 2};
+  int c4 = (t - r * ${i4 / 2}) * 2;
+  vec4 a = sw(r, c4), b = sw(r, c4 + 1);
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
+}`, this.ctx.tensor(n * inner, 'packed'), { inputs: rd.inputs });
+      h.free();
+      const y = this.linear(mid, n, inner, this.W(`${tp}.linear_out.weight`), D, null, null, 'cmplanes');
+      mid.free();
+      const out = this._scaleAdd(after, y, mask, n, D, sc(1));
+      y.free();
+      after.free();
+      return out;
+    }
     const add = (a, b) => this.ctx.elementwise('addmasked', 'el(M, e / uDim) != 0.0 ? el(A, e) + el(B, e) : 0.0', n * D,
       { inputs: { A: a, B: b, M: mask }, ints: { uDim: D } });
     const xa = this.adaLN(x, cond, mask, n, D, n, C, type, `${prefix}.mhba.adaln`, eps, ada(0));
@@ -1244,7 +1499,7 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     const rows = n * n;
     const W = (k) => this.W(`${prefix}.${k}`);
     const xm = this.maskRows(x, n, D, mask);
-    const xn = this.norm(xm, n, D, 'layer_norm', W('layer_norm_in.weight'), W('layer_norm_in.bias'), eps);
+    const xn = this.norm(xm, n, D, 'layer_norm', W('layer_norm_in.weight'), W('layer_norm_in.bias'), eps, D % 8 === 0 ? 'packed' : false);
     xm.free();
     const pij = this.linear(xn, n, D, W('linear_x.weight'), 2 * P);
     xn.free();
@@ -1355,7 +1610,14 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
   vec4 rs = inversesqrt(ss / float(uIn) + vec4(uEps));
   r0 = a[0] * rs.x; r1 = a[1] * rs.y; r2 = a[2] * rs.z; r3 = a[3] * rs.w;
 }`, qs, { inputs: { X: z, Wt: w }, ints: { uIn: P, uOut: outD, uRows: rows }, floats: { uEps: eps }, work: P / 2 });
-    return this._repack(qs, rows, outD, false);
+    // Left as planes (row r in plane r & 3) for the folded attention's scores; `tensor()` repacks them for the other path.
+    let t = null;
+    const self = this;
+    return {
+      pbPlanes: qs,
+      tensor() { return (t ??= self._repack(qs, rows, outD, false, true)); },
+      free() { qs.forEach((x) => x.free()); t?.free(); },
+    };
   }
 
   /**

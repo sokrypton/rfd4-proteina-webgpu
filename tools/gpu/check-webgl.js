@@ -85,7 +85,7 @@ export async function main(_device, args) {
     }
     const t0 = performance.now();
     const out = await model.forwardTrunk(n, f, batch.padding_mask.data, nnCfg, depth, { insertion: true });
-    if (model.ctx.counts) { const all = [...model.ctx.counts]; results.draws = all.reduce((a, [, v]) => a + v, 0); results.drawsTop = all.sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, v]) => `${v} ${k}`); model.ctx.counts = null; }
+    if (model.ctx.counts) { const all = [...model.ctx.counts]; results.draws = all.reduce((a, [, v]) => a + v, 0); results.drawsTop = all.sort((a, b) => b[1] - a[1]).slice(0, Number(opt.top ?? 12)).map(([k, v]) => `${v} ${k}`); model.ctx.counts = null; }
     const ms = Math.round(performance.now() - t0);
     const ctx = batch.is_in_context_conditioning.data;
     const lat = batch.supports_local_latent.data;
