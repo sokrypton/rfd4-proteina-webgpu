@@ -346,6 +346,41 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
 }
 
 /**
+ * Per-row LayerNorm statistics, vec2(mean, 1/std), of `rows` rows of `k` values (f16 packed eight a vec4<u32>, or f32
+ * four a vec4<f32>), sums about each row's first value; for `gemmDirectSource`'s `lnStats`. A thread a row.
+ */
+function rowStatsSource(aF16) {
+  return `
+struct P { m: u32, k: u32, sAm: u32, offA: u32 };
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read> a: array<${aF16 ? 'vec4<u32>' : 'vec4<f32>'}>;
+@group(0) @binding(2) var<storage, read_write> st: array<vec2<f32>>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+  let r = (wid.x + wid.y * 65535u) * 64u + li;
+  let live = r < p.m;
+  if (!live) { return; }
+  let base = (p.offA + r * p.sAm) / ${aF16 ? 8 : 4}u;
+  ${aF16 ? 'let k0 = unpack2x16float(a[base].x).x;' : 'let k0 = a[base].x;'}
+  var s1 = vec4<f32>(0.0);
+  var s2 = vec4<f32>(0.0);
+  for (var k = 0u; k < p.k / ${aF16 ? 8 : 4}u; k++) {
+    ${aF16 ? `let u = a[base + k];
+    let lo = vec4<f32>(unpack2x16float(u.x), unpack2x16float(u.y)) - vec4<f32>(k0);
+    let hi = vec4<f32>(unpack2x16float(u.z), unpack2x16float(u.w)) - vec4<f32>(k0);
+    s1 += lo + hi;
+    s2 += lo * lo + hi * hi;` : `let v = a[base + k] - vec4<f32>(k0);
+    s1 += v;
+    s2 += v * v;`}
+  }
+  let inv = 1.0 / f32(p.k);
+  let m1 = dot(s1, vec4<f32>(1.0)) * inv;
+  let m2 = dot(s2, vec4<f32>(1.0)) * inv;
+  st[r] = vec2<f32>(k0 + m1, inverseSqrt(max(m2 - m1 * m1, 0.0) + 1e-5));
+}`;
+}
+
+/**
  * The stock GEMM without workgroup staging ("direct", `gemmVariant.direct`): each thread computes 4 rows x 8 columns
  * (columns tn0..tn0+3 and tn0+64..tn0+67 of a 128-column tile, as `gemmSource`, so its epilogues and `pairOut` read the
  * same accumulators) from packed-f16 weights and A read straight from memory, eight k a load, no barriers. A workgroup
@@ -354,7 +389,10 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
  * rows, K a multiple of 8. Pair epilogues: `pairOut` ones, and `triProjG`'s transposed aT/bT/gz (`triAB`).
  */
 function gemmDirectSource({ pair = null, gate = false, aF16 = false, cF16 = false, gF16 = false, vecEpilogue = false,
-  addOnly = false, gSigm = true, hasAlpha = false, hasBias = false, actType = 0, acc = false, inLn = false, triAB = null, tr = 64 }) {
+  addOnly = false, gSigm = true, hasAlpha = false, hasBias = false, actType = 0, acc = false, inLn = false, triAB = null, tr = 64, lnStats = false }) {
+  // `lnStats`: the input norm's mean and 1/std per row from a statistics pass (`rowStatsSource`, binding 5) rather than
+  // gathered in the k loop (WebGL2's arrangement: the loop then runs as a plain GEMM's).
+  if (lnStats && (!inLn || gate)) throw new Error('gemmDirectSource: lnStats is for an input norm without a gate');
   // `tr` row quads x `cg` column groups a workgroup (64 x 4 for the pair GEMMs; shorter for few rows).
   const cg = 256 / tr;
   const rows = [0, 1, 2, 3];
@@ -446,6 +484,7 @@ struct P { m: u32, n: u32, k: u32, b1: u32,
 @group(0) @binding(3) var<storage, read_write> c: array<${EC}>;
 @group(0) @binding(4) var<storage, read> bias: array<${vecEpilogue ? 'vec4<f32>' : 'f32'}>;
 ${gate ? `@group(0) @binding(5) var<storage, read> gsc: array<${EG}>;` : ''}
+${lnStats ? '@group(0) @binding(5) var<storage, read> lnst: array<vec2<f32>>;' : ''}
 ${vecEpilogue && (cF16 || gF16) ? `fn unpack4f16(u: vec2<u32>) -> vec4<f32> {
   return vec4<f32>(vec4<f16>(bitcast<vec2<f16>>(u.x), bitcast<vec2<f16>>(u.y)));
 }
@@ -485,7 +524,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   var acc_1_0 = vec4<f32>(0.0); var acc_1_1 = vec4<f32>(0.0);
   var acc_2_0 = vec4<f32>(0.0); var acc_2_1 = vec4<f32>(0.0);
   var acc_3_0 = vec4<f32>(0.0); var acc_3_1 = vec4<f32>(0.0);
-  ${inLn ? 'var sumA = vec4<f32>(0.0);\n  var sqSumA = vec4<f32>(0.0);' : ''}
+  ${inLn && !lnStats ? 'var sumA = vec4<f32>(0.0);\n  var sqSumA = vec4<f32>(0.0);' : ''}
   for (var k8 = 0u; k8 < p.k / 8u; k8++) {
     ${[0, 1, 2, 3, 4, 5, 6, 7].map(wl).join(' ')}
     let wla = mat4x4<f32>(${[0, 1, 2, 3].map(lo).join(', ')});
@@ -496,11 +535,13 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
       ${ld(i)}
       acc_${i}_0 += xl${i} * wla + xh${i} * wha;
       acc_${i}_1 += xl${i} * wlb + xh${i} * whb;
-      ${inLn ? `let s${i} = xl${i} + xh${i}; let q${i} = xl${i} * xl${i} + xh${i} * xh${i};
+      ${inLn && !lnStats ? `let s${i} = xl${i} + xh${i}; let q${i} = xl${i} * xl${i} + xh${i} * xh${i};
       sumA[${i}] += s${i}.x + s${i}.y + s${i}.z + s${i}.w; sqSumA[${i}] += q${i}.x + q${i}.y + q${i}.z + q${i}.w;` : ''}
     }`).join('\n    ')}
   }
-  ${inLn ? `let invK = 1.0 / f32(p.k);
+  ${inLn && lnStats ? `${rows.map((i) => `let st${i} = lnst[min(m0 + tm + ${i}u, p.m - 1u)];`).join(' ')}
+  let mean4 = vec4<f32>(st0.x, st1.x, st2.x, st3.x);
+  let invStd4 = vec4<f32>(st0.y, st1.y, st2.y, st3.y);` : inLn ? `let invK = 1.0 / f32(p.k);
   let mean4 = sumA * invK;
   let invStd4 = inverseSqrt(max(sqSumA * invK - mean4 * mean4, vec4<f32>(0.0)) + vec4<f32>(1e-5));` : ''}
   ${triEpi || (pair ? `if (!inBatch) { return; }
@@ -2915,9 +2956,20 @@ export class Rfd4pEngine {
       // the staged kernel (16 x 16: 1.06-1.29x; 64 x 4 at those rows: 0.7x).
       const tr = m >= (this.gemmVariant?.directMinRows ?? 1024) ? 64 : (this.gemmVariant?.directTr ?? 32);
       const dKey = `gemm-d${tr}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${vecEpilogue ? '-ve' : ''}${spec.inNorm === 'ln' ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate ? `-g${gF16 ? '16' : ''}${addOnly ? 'a' : gSigm ? 's' : 'm'}` : ''}${spec.pair ? `-p-${spec.pair.key}` : ''}`;
+      // An input norm's statistics from a pass of their own, then a plain GEMM loop (WebGL2's fold): 1 batch, no gate.
+      const lnStats = spec.inNorm === 'ln' && !hasGate && B0 * B1 === 1 && (this.gemmVariant?.lnStatsPass ?? true);
       const dSrc = gemmDirectSource({ pair: spec.pair ?? null, gate: hasGate, aF16, cF16, gF16, vecEpilogue: !spec.pair && vecEpilogue,
         addOnly, gSigm, hasAlpha, hasBias, actType, acc: acc === 1, inLn: spec.inNorm === 'ln',
-        triAB: triAB ? { f16Out: Boolean(spec.pair.cF16) } : null, tr });
+        triAB: triAB ? { f16Out: Boolean(spec.pair.cF16) } : null, tr, lnStats });
+      if (lnStats) {
+        if (!this.lnStatsBuf || this.lnStatsBuf.floats < 2 * m) this.lnStatsBuf = this.buffer('lnStatsBuf', Math.max(2 * m, 2 * 65536));
+        const su = new Uint32Array([m, k, A.m, A.off]);
+        const statsStep = this.step(`rowstats${aF16 ? '-a16' : ''}`, rowStatsSource(aF16), Math.ceil(m / 64), [spec.a, this.lnStatsBuf], su, `rowStats ${m}x${k}`);
+        const dGroupsS = Math.ceil(m / (4 * tr)) * Math.ceil(n / 128) * (16 / (256 / tr));
+        const gemmStep = this.step(`${dKey}-lst`, dSrc, dGroupsS, [spec.a, spec.b, spec.c, spec.bias ?? this.dummy, this.lnStatsBuf], u,
+          spec.label ?? `gemm ${m}x${n}x${k}`);
+        return Promise.all([statsStep, gemmStep]);
+      }
       const dGroups = Math.ceil(m / (4 * tr)) * Math.ceil(n / 128) * (16 / (256 / tr)) * B0 * B1;
       const bufs = [spec.a, spec.b, spec.c, spec.bias ?? this.dummy, ...(hasGate ? [spec.gate.sc] : []), ...(spec.pair?.buffers ?? [])];
       return this.step(dKey, dSrc, dGroups, bufs, u, spec.label ?? `gemm ${m}x${n}x${k}${B0 * B1 > 1 ? `[${B0 * B1}]` : ''}`);
@@ -3715,6 +3767,7 @@ fn pairOut(m: u32, n0: u32, tn0: u32, r0: vec4<f32>, r1: vec4<f32>) {
     this.uniforms = [];
     this.activationBytes = 0;
     this.splitBuf = null;
+    this.lnStatsBuf = null;
   }
 
   destroy() {

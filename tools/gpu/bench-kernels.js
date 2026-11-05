@@ -11,13 +11,14 @@ import { pairCondFeatures, pairFeatures, trunkCondFeatures, trunkSeqFeatures } f
 import { Rfd4pTrunkGpu } from '../../webgpu/rfd4p/trunk.js';
 import { loadOracleCase, loadReleased } from './check-trunk.js';
 
-function features(t, meta, nnCfg, weights) {
+function features(t, meta, nnCfg, weights, step = 0) {
   const batch = {};
   for (const [key, v] of Object.entries(t)) if (key.startsWith('batch.')) batch[key.slice(6)] = v;
   const n = batch.padding_mask.shape[1];
-  const xt = { bb_ca: t['step.0.x_t.bb_ca'].data, local_latents: t['step.0.x_t.local_latents'].data };
-  const tt = { bb_ca: t['step.0.t.bb_ca'].data[0], local_latents: t['step.0.t.local_latents'].data[0] };
-  const draws = meta.rng.filter((r) => r.fn === 'randperm' && r.call === 0).map((r) => t[`rng.${r.i}`].data);
+  // `--step=k`: the oracle's inputs at step k (x_t, t, that step's randperm draws), not step 0's.
+  const xt = { bb_ca: t[`step.${step}.x_t.bb_ca`].data, local_latents: t[`step.${step}.x_t.local_latents`].data };
+  const tt = { bb_ca: t[`step.${step}.t.bb_ca`].data[0], local_latents: t[`step.${step}.t.local_latents`].data[0] };
+  const draws = meta.rng.filter((r) => r.fn === 'randperm' && r.call === step).map((r) => t[`rng.${r.i}`].data);
   let d = 0;
   return {
     n,
@@ -49,7 +50,7 @@ export async function main(device, args) {
   const out = [];
   for (const caseName of (opt.cases ?? 'uncond_short,ppi_pdl1').split(',')) {
     const { meta, t } = await loadOracleCase(caseName);
-    const { n, f } = features(t, meta, cfg.nn, weights);
+    const { n, f } = features(t, meta, cfg.nn, weights, Number(opt.step ?? 0));
     const best = variants.map(() => ({ total: Infinity, kernels: new Map() }));
     const outputs = [];
     for (let r = 0; r < rounds; r += 1) {

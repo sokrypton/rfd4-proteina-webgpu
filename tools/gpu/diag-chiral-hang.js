@@ -8,7 +8,7 @@
  *   LOCALFOLD_STOCK_FLAGS=1 node tools/gpu-chrome.mjs tools/gpu/diag-chiral-hang.js --runs=3 --nsteps=12
  */
 export async function main(device, args = []) {
-  const opt = Object.fromEntries(args.map((a) => a.replace(/^--/, '').split('=')));
+  const opt = Object.fromEntries(args.map((a) => { const i = a.indexOf('='); return [a.slice(2, i), a.slice(i + 1)]; }));
   const runs = Number(opt.runs ?? 3);
   const nsteps = Number(opt.nsteps ?? 12);
   const presets = (opt.presets ?? 'sm_sam,enzyme_oro').split(',');
@@ -36,6 +36,8 @@ export async function main(device, args = []) {
     if (!known.has(preset)) { out.results.push({ preset, skipped: 'no such preset' }); continue; }
     for (let r = 0; r < runs; r += 1) {
       await app._loadPreset(preset);
+      // `--variant='{"direct":false}'`: the engine's GEMM variant for this run (the model is made on first use).
+      if (opt.variant && app.gpuModel) { app.gpuModel.trunk.engine.gemmVariant = JSON.parse(opt.variant); app.gpuModel.trunk.n = -1; }
       const n = app.currentBatchResult?.n ?? 0;
       const stepMs = [];
       let last = performance.now();

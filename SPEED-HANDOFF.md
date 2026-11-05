@@ -790,3 +790,16 @@ carried over:
 - **Float16 rounding** (`tools/gpu/probe-f16-round.js`): WebGPU here rounds f32 -> f16 to nearest in all three forms the
   engine uses (`pack2x16float`, `vec2<f16>`, `array<f16>` stores). The WebGL2 path found its float16 render-target
   writes truncating on the same M2 and rounds in the shader; nothing to fix on this side.
+- **The input-norm GEMM (`linear_1`, `inNorm: 'ln'`) with its statistics from a pass of their own** (`rowStatsSource`,
+  then the direct kernel's `lnStats` epilogue: WebGL2's fold, `gemmVariant.lnStatsPass`): the GEMM 21.1 -> 18.6 ms at
+  n = 100, 89.7 -> 79.2 at n = 208 (it now runs as the plain 384 x 768 one), a pass 1% faster net of the pass.
+  `check-generate --half=1` 0.0305 A backbone, 0.0323 A structure.
+- **Section 11 measured again (stock flags, M2).** `diag-chiral-hang.js` (now `--variant=<gemmVariant JSON>`), sm_sam,
+  12 steps: the inflated second step is still there but shorter with the direct kernel (step 1 1.5-1.9 s against a
+  0.51-0.68 s median; the old kernel 2.2-3.7 s against 0.85-1.2 s), and in 4 + 5 runs no device was lost on either. One
+  hang reproduced earlier in the session on the direct kernel (run 2 of 3), and `check-webapp` failed on
+  `small_molecule_binder` 4 times in a row then passed twice, so the bug is still there and still intermittent. New:
+  **the trunk's own cost does not depend on the step** - `bench-kernels.js --step=k` (the oracle's x_t, t and draws at
+  step k) gives a 530 ms pass at steps 0, 1, 5 and 30 alike, kernel by kernel. So the inflation is outside the trunk's
+  arithmetic: first-use pipeline creation on the non-fused path (decoder, heads) or the live frame's Mol* scene
+  competing for the GPU, not a data-dependent kernel.
