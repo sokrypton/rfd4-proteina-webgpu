@@ -44,6 +44,8 @@ export async function main(_device, args) {
   if (opt.packed === '1' || opt.p88 === '1') results.packed8x8 = benchPacked88(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5));
   if (opt.p88 === '1') results.packed4x8 = benchPacked48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5));
   if (opt.p88 === '1') results.packed4x8small = benchPacked48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5), true);
+  if (opt.quad === '1') results.quad4x8 = benchQuad48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5));
+  if (opt.quad === '1') results.packed4x8 = benchPacked48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5));
   if (opt.p88 === '1') results.packed4x8named = benchPacked48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5), 'named');
   if (opt.probe === '1') Object.assign(results, benchProbe(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5)));
   if (opt.layout === '1') Object.assign(results, benchLayout(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5)));
@@ -183,6 +185,141 @@ function timeIt(c, run, reps) {
   const ms = (performance.now() - t0) / reps;
   prev.forEach((t) => t.free());
   return ms;
+}
+
+/**
+ * The 4 x 8 packed matmul with each 2 x 2 quad of fragments sharing its fetches: horizontal neighbours (the same 4 rows,
+ * column blocks 2c and 2c + 1) fetch 2 rows of x each and swap them by dFdx, vertical neighbours (the same columns)
+ * fetch 4 of the 8 weight rows each and swap them by dFdy: 6 texel reads per 256 multiply-adds instead of 12.
+ */
+function benchQuad48(c, x32, w32, rows, inD, outD, reps) {
+  const pack = (src, size) => c.kernel('pack8', `
+uniform sampler2D S;
+uvec4 compute(int t) {
+  vec4 a = tx(S, 2 * t), b = tx(S, 2 * t + 1);
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
+}`, c.tensor(size, 'packed'), { inputs: { S: src } });
+  const wf = c.elementwise('copyf', 'el(X, e)', outD * inD, { inputs: { X: w32 } });
+  const xp = pack(x32, rows * inD);
+  const wp = pack(wf, outD * inD);
+  const rq = Math.ceil(rows / 4);
+  let check = null;
+  const run = () => {
+    const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD, 'packed'));
+    c.kernel('linear4x8pk-quad', `
+uniform highp usampler2D X; uniform highp usampler2D Wt; uniform int uIn; uniform int uOut; uniform int uRows;
+void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
+uvec4 pk(vec4 a, vec4 b) { return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw)); }
+void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
+  int e0 = t * 8;
+  int q = e0 / uOut;
+  int o0 = e0 - q * uOut;
+  int ib = uIn / 8;
+  int xw = textureSize(X, 0).x;
+  int ww = textureSize(Wt, 0).x;
+  bool right = (int(gl_FragCoord.x) & 1) == 1, bottom = (int(gl_FragCoord.y) & 1) == 1;
+  float sx = right ? -1.0 : 1.0, sy = bottom ? -1.0 : 1.0;
+  // This fragment's 2 rows (right: rows 2, 3) and 4 weight rows (bottom: columns 4 to 7).
+  ivec2 xc0, xc1;
+  { int r = min(q * 4 + (right ? 2 : 0), uRows - 1); int xt = r * ib; xc0 = ivec2(xt % xw, xt / xw);
+    r = min(q * 4 + (right ? 3 : 1), uRows - 1); xt = r * ib; xc1 = ivec2(xt % xw, xt / xw); }
+  ivec2 wc[4];
+  for (int j = 0; j < 4; j++) { int wt = min(o0 + (bottom ? 4 : 0) + j, uOut - 1) * ib; wc[j] = ivec2(wt % ww, wt / ww); }
+  vec4 a[4], b[4];
+  for (int i = 0; i < 4; i++) { a[i] = vec4(0.0); b[i] = vec4(0.0); }
+  for (int k = 0; k < ib; k++) {
+    ivec2 dk = ivec2(k, 0);
+    vec4 m0l, m0h, m1l, m1h;
+    unpack8(texelFetch(X, xc0 + dk, 0), m0l, m0h);
+    unpack8(texelFetch(X, xc1 + dk, 0), m1l, m1h);
+    vec4 o0l = m0l + sx * dFdx(m0l), o0h = m0h + sx * dFdx(m0h), o1l = m1l + sx * dFdx(m1l), o1h = m1h + sx * dFdx(m1h);
+    vec4 xl[4], xh[4];
+    xl[0] = right ? o0l : m0l; xh[0] = right ? o0h : m0h; xl[1] = right ? o1l : m1l; xh[1] = right ? o1h : m1h;
+    xl[2] = right ? m0l : o0l; xh[2] = right ? m0h : o0h; xl[3] = right ? m1l : o1l; xh[3] = right ? m1h : o1h;
+    vec4 l0, h0, l1, h1, l2, h2, l3, h3;
+    unpack8(texelFetch(Wt, wc[0] + dk, 0), l0, h0); unpack8(texelFetch(Wt, wc[1] + dk, 0), l1, h1);
+    unpack8(texelFetch(Wt, wc[2] + dk, 0), l2, h2); unpack8(texelFetch(Wt, wc[3] + dk, 0), l3, h3);
+    mat4 ml = mat4(l0, l1, l2, l3), mh = mat4(h0, h1, h2, h3);
+    mat4 ol = mat4(l0 + sy * dFdy(l0), l1 + sy * dFdy(l1), l2 + sy * dFdy(l2), l3 + sy * dFdy(l3));
+    mat4 oh = mat4(h0 + sy * dFdy(h0), h1 + sy * dFdy(h1), h2 + sy * dFdy(h2), h3 + sy * dFdy(h3));
+    mat4 wla = bottom ? ol : ml, wha = bottom ? oh : mh, wlb = bottom ? ml : ol, whb = bottom ? mh : oh;
+    for (int i = 0; i < 4; i++) {
+      a[i] += xl[i] * wla + xh[i] * wha;
+      b[i] += xl[i] * wlb + xh[i] * whb;
+    }
+  }
+  r0 = pk(a[0], b[0]); r1 = pk(a[1], b[1]); r2 = pk(a[2], b[2]); r3 = pk(a[3], b[3]);
+}`, qs, { inputs: { X: xp, Wt: wp }, ints: { uIn: inD, uOut: outD, uRows: rows }, work: inD * 4, quad: true });
+    return qs;
+  };
+  const ms = timeIt(c, run, reps);
+  // Against the plain 4 x 8 kernel's planes, on a few texels.
+  const ref = benchPacked48Planes(c, xp, wp, rows, inD, outD);
+  const got = run();
+  let maxd = 0;
+  for (let i = 0; i < 4; i += 1) {
+    const g = c.readU32 ? null : null;
+    const a = readPacked(c, got[i]);
+    const b = readPacked(c, ref[i]);
+    for (let k = 0; k < Math.min(a.length, 200000); k += 1) maxd = Math.max(maxd, Math.abs(a[k] - b[k]));
+  }
+  got.forEach((t) => t.free());
+  ref.forEach((t) => t.free());
+  return { ms: Number(ms.toFixed(1)), gflops: Number(((2 * rows * inD * outD) / ms / 1e6).toFixed(0)), maxDiffVsPlain: maxd };
+}
+
+/** A packed tensor's values (unpacked to floats on the GPU and read). */
+function readPacked(c, t) {
+  const f = c.kernel('unpack-read', `
+uniform highp usampler2D S;
+vec4 compute(int t) {
+  int w = textureSize(S, 0).x;
+  int pt = t >> 1;
+  uvec4 u = texelFetch(S, ivec2(pt % w, pt / w), 0);
+  return (t & 1) == 0 ? vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)) : vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w));
+}`, c.tensor(t.size), { inputs: { S: t } });
+  const d = Float32Array.from(c.read(f));
+  f.free();
+  return d;
+}
+
+/** The plain 4 x 8 kernel's planes, for checking. */
+function benchPacked48Planes(c, xp, wp, rows, inD, outD) {
+  const rq = Math.ceil(rows / 4);
+  const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD, 'packed'));
+  c.kernel('linear4x8pk', `
+uniform highp usampler2D X; uniform highp usampler2D Wt; uniform int uIn; uniform int uOut; uniform int uRows;
+void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
+uvec4 pk(vec4 a, vec4 b) { return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw)); }
+void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
+  int e0 = t * 8;
+  int q = e0 / uOut;
+  int o0 = e0 - q * uOut;
+  int ib = uIn / 8;
+  int xw = textureSize(X, 0).x;
+  int ww = textureSize(Wt, 0).x;
+  ivec2 xc[4];
+  for (int i = 0; i < 4; i++) { int r = min(q * 4 + i, uRows - 1); int xt = r * ib; xc[i] = ivec2(xt % xw, xt / xw); }
+  ivec2 wc[8];
+  for (int i = 0; i < 8; i++) { int wt = (o0 + i) * ib; wc[i] = ivec2(wt % ww, wt / ww); }
+  vec4 a[4], b[4];
+  for (int i = 0; i < 4; i++) { a[i] = vec4(0.0); b[i] = vec4(0.0); }
+  for (int k = 0; k < ib; k++) {
+    ivec2 dk = ivec2(k, 0);
+    vec4 l[8], h[8];
+    for (int j = 0; j < 8; j++) unpack8(texelFetch(Wt, wc[j] + dk, 0), l[j], h[j]);
+    mat4 wla = mat4(l[0], l[1], l[2], l[3]), wha = mat4(h[0], h[1], h[2], h[3]);
+    mat4 wlb = mat4(l[4], l[5], l[6], l[7]), whb = mat4(h[4], h[5], h[6], h[7]);
+    for (int i = 0; i < 4; i++) {
+      vec4 xl, xh;
+      unpack8(texelFetch(X, xc[i] + dk, 0), xl, xh);
+      a[i] += xl * wla + xh * wha;
+      b[i] += xl * wlb + xh * whb;
+    }
+  }
+  r0 = pk(a[0], b[0]); r1 = pk(a[1], b[1]); r2 = pk(a[2], b[2]); r3 = pk(a[3], b[3]);
+}`, qs, { inputs: { X: xp, Wt: wp }, ints: { uIn: inD, uOut: outD, uRows: rows }, work: inD * 4 });
+  return qs;
 }
 
 /** 8 rows x 8 columns a fragment as packed halves over eight render targets (128 bytes a pixel). Kernel only. */

@@ -244,7 +244,7 @@ export class GLContext {
    * `inputs`: { samplerName: tensor }; `ints` / `floats`: { uniformName: value }. `work` is the loop length of one
    * fragment, so a long draw is split into bands (and flushed between them) before a slow GPU's watchdog notices.
    */
-  kernel(key, body, out, { inputs = {}, ints = {}, floats = {}, work = 1 } = {}) {
+  kernel(key, body, out, { inputs = {}, ints = {}, floats = {}, work = 1, quad = false } = {}) {
     const gl = this.gl;
     // Four outputs (an array of four tensors of one shape): `body` defines compute4(t, r0..r3) writing all of them.
     const outs = Array.isArray(out) ? out : [out];
@@ -254,13 +254,13 @@ export class GLContext {
     // truncates (Apple M2, ANGLE Metal), and truncation's bias added up over a trunk pass (z in float16 then lost 6e-3
     // relative on motif_idx_1prw, 4e-4 rounded).
     const h16 = outs[0].half === true && !this.noR16;
-    const p = this._program(`${mrt ? `${key}#mrt` : key}${h16 ? ':h16' : ''}`, mrt ? `${outs.map((_, i) => `layout(location = ${i}) out ${ot} ${h16 ? 'g' : 'f'}${i};`).join('\n')}
+    const p = this._program(`${mrt ? `${key}#mrt` : key}${h16 ? ':h16' : ''}${quad ? ':quad' : ''}`, mrt ? `${outs.map((_, i) => `layout(location = ${i}) out ${ot} ${h16 ? 'g' : 'f'}${i};`).join('\n')}
 ${h16 ? `${R16}
 vec4 ${outs.map((_, i) => `f${i}`).join(', ')};` : ''}
 ${body}
 void main() {
   int t = int(gl_FragCoord.y) * uOutW + int(gl_FragCoord.x);
-  if (t >= uOutTexels) { ${outs.map((_, i) => `${h16 ? 'g' : 'f'}${i} = ${ot}(0);`).join(' ')} return; }
+  ${quad ? '// (no early return: the whole 2 x 2 quad runs, its fragments exchanging values by derivatives)' : `if (t >= uOutTexels) { ${outs.map((_, i) => `${h16 ? 'g' : 'f'}${i} = ${ot}(0);`).join(' ')} return; }`}
   compute4(t, ${outs.map((_, i) => `f${i}`).join(', ')});${h16 ? `\n  ${outs.map((_, i) => `g${i} = r16(f${i});`).join(' ')}` : ''}
 }` : outs[0].half === 'packed' ? `out uvec4 fragOut;
 ${body}
