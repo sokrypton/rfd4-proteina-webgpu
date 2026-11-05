@@ -280,7 +280,9 @@ void main() {
     // About 2^31 inner-loop steps per band: only a very long draw is split (bands cost ~25% on a tiled GPU, each a
     // render pass of its own; a 43k x 384 x 256 matmul is 18 ms whole on an M2).
     const rowsPerBand = Math.max(1, Math.floor((this.bandWork ?? 2 ** 31) / Math.max(1, out.w * work)));
-    if (rowsPerBand >= out.h) {
+    if (this.skipDraw || this.skipKeys?.test(key)) {
+      // (timing probe: everything but the draw)
+    } else if (rowsPerBand >= out.h) {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     } else {
       gl.enable(gl.SCISSOR_TEST);
@@ -312,7 +314,7 @@ void main() {
         this.read(out, 4);
       }
       const now = performance.now();
-      const k = `${key} ${work}`;
+      const k = `${key} ${work}${this.profileSizes ? ` @${out.size ?? outs?.[0]?.size}` : ""}`;
       this.profile.set(k, (this.profile.get(k) ?? 0) + now - (this.lastT ?? now));
       this.lastT = now;
     }

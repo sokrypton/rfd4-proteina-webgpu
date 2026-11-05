@@ -853,7 +853,7 @@ export function pairFeatures(batch, opts) {
     cache.distOffset = distOffset;
     cache.prevBins = prevBins;
   }
-  return { data, dim };
+  return { data, dim, distOffset };
 }
 
 /**

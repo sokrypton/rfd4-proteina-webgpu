@@ -45,7 +45,7 @@ function coordRmsdAngstrom(gotCoors, wantCoors, atomMask) {
   return { rmsdA: Math.sqrt(sumSq / Math.max(count, 1)), maxAtomDistA: maxDist, atoms: count };
 }
 
-function recordedOracleRng(tensors, rngLog) {
+export function recordedOracleRng(tensors, rngLog) {
   const randnDraws = rngLog.filter((r) => r.fn === 'randn');
   let rn = 0;
   return {

@@ -936,6 +936,10 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
   const nnCfg = cfg.nn;
   const distCfg = { dim: nnCfg.xt_pair_dist_dim, min: nnCfg.xt_pair_dist_min, max: nnCfg.xt_pair_dist_max };
   const featCache = {};
+  // A backend that adds the Cα distance bins itself (`pairDistsOnGpu`, the WebGL2 one, as Rfd4pGeneratorGpu does) is
+  // given the rest of the pair features once, on the first step, and each step only the Cα coordinates.
+  const pairOnGpu = Boolean(opts.kernels?.pairDistsOnGpu);
+  let pairDistOffset = -1;
   let lastLogits = null;
   let lastInsertion = null;
   // Early stop, as Rfd4pGeneratorGpu.generate does (`opts.earlyStop`): once the x1 Cα and the designed sequence have
@@ -944,6 +948,14 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
     ? new ConvergenceMonitor(nsteps, opts.earlyStop === true ? {} : opts.earlyStop, emit.bb_ca)
     : null;
   let stepsRun = nsteps;
+
+  const pairStatic = () => {
+    const r = pairFeatures(batch, {
+      n, caNm: x.bb_ca, feats: nnCfg.feats_pair_repr, dist: distCfg, seqSepDim: nnCfg.seq_sep_dim, skipPairDists: true,
+    });
+    pairDistOffset = r.distOffset;
+    return r.data;
+  };
 
   for (let s = 0; s < nsteps; s += 1) {
     if (opts.signal?.aborted) throw new Error('Generation aborted');
@@ -966,11 +978,14 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
       cond1: trunkCondFeatures(batch, {
         n, t: tt, recycleRemaining: 1, feats: nnCfg.feats_cond_seq, weights,
       }).data,
-      pair: pairFeatures(batch, {
-        n, caNm: x.bb_ca, feats: nnCfg.feats_pair_repr, dist: distCfg, seqSepDim: nnCfg.seq_sep_dim, cache: featCache,
-      }).data,
+      pair: pairOnGpu
+        ? (s === 0 ? pairStatic() : null)
+        : pairFeatures(batch, {
+          n, caNm: x.bb_ca, feats: nnCfg.feats_pair_repr, dist: distCfg, seqSepDim: nnCfg.seq_sep_dim, cache: featCache,
+        }).data,
       pairCond: pairCondFeatures(tt, nnCfg.feats_pair_cond),
     };
+    if (pairOnGpu) f.pairDists = { caNm: x.bb_ca, offset: pairDistOffset, ...distCfg };
 
     // Decoded (all-atom) live frames when asked, as Rfd4pGeneratorGpu does (`decodeStep`, `decodeEvery`); a frame
     // without them is a Cα trace, whose strands have no plane to face.

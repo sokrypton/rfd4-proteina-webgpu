@@ -150,15 +150,19 @@ void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
     if (packedOk) {
       // Operands as packed halves (8 a texel): a 4 x 4 block a fragment reads half the texels of the float path (2x on
       // an M2, tools/gpu/bench-webgl.js --packed=1), into four render targets, then repacked.
+      // `cm` (few rows, a small x): fragments ordered row block fastest, so neighbouring fragments share their weights
+      // and x stays in cache; ordered by columns, each row block streamed the whole weight matrix again (a token matmul
+      // at n = 208, 52 row blocks: about 0.2 TFLOP/s, 350 ms of a trunk pass).
       out.free();
+      const cm = rows * inD <= (this.cmLimit ?? 1 << 20) && !this.noCM;
       const xp = this._pack(x, rows * inD);
       const wp = w.weight ? this._packWeight(w) : this._pack(w, outD * inD);
       const rq = Math.ceil(rows / 4);
       const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD));
-      c.kernel('linear4x4pk', `
+      c.kernel(`linear4x4pk${cm ? '-cm' : ''}`, `
 uniform highp usampler2D X; uniform highp usampler2D Wt; uniform sampler2D B;
 uniform sampler2D Z; uniform sampler2D G; uniform sampler2D PM; uniform int uRes; uniform int uGate;
-uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows;${epi}
+uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows; uniform int uRq;${epi}
 vec4 fin(vec4 v, int r, int o0) {
   if (uRes == 0) return v;
   int zt = (r * uOut + o0) / 4;
@@ -168,9 +172,7 @@ vec4 fin(vec4 v, int r, int o0) {
 vec4 epi4(vec4 a) { return vec4(epi(a.x), epi(a.y), epi(a.z), epi(a.w)); }
 void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
 void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
-  int e0 = t * 4;
-  int q = e0 / uOut;
-  int o0 = e0 - q * uOut;
+  ${cm ? 'int q = t % uRq; int o0 = (t / uRq) * 4;' : 'int e0 = t * 4; int q = e0 / uOut; int o0 = e0 - q * uOut;'}
   int ib = uIn / 8;
   int xw = textureSize(X, 0).x;
   int ww = textureSize(Wt, 0).x;
@@ -201,10 +203,10 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
   r2 = live[2] ? fin(epi4(a[2] + bv), q * 4 + 2, o0) : vec4(0.0);
   r3 = live[3] ? fin(epi4(a[3] + bv), q * 4 + 3, o0) : vec4(0.0);
 }`, qs, { inputs: { X: xp, Wt: wp, B: bias ?? w, Z: resid?.z ?? w, G: resid?.gate ?? w, PM: resid?.mask ?? w },
-        ints: { ...ints, uRes: resid ? 1 : 0, uGate: resid?.gate ? 1 : 0 }, work: inD * 2 });
+        ints: { ...ints, uRes: resid ? 1 : 0, uGate: resid?.gate ? 1 : 0, uRq: rq }, work: inD * 2 });
       if (xp !== x) xp.free();
       if (wp !== w && !wp.weight) wp.free();
-      return this._repack(qs, rows, outD, outHalf);
+      return cm ? this._repackCM(qs, rows, outD, outHalf) : this._repack(qs, rows, outD, outHalf);
     }
     if (rows >= 64 && inD % 4 === 0 && outD % 4 === 0 && TW % (inD / 4) === 0 && !this.no4x4) {
       // A block of R = 4 rows x 4 columns a fragment (R render targets, a 1/R of the rows each), then repacked: 8 texel
@@ -330,7 +332,7 @@ float lin(int e) {
    * `mask[r] * (X Wp^T + bp) * sigmoid(X Wg^T + bg)`, both projections of one input in one pass (the triangle update's
    * a and b): 4 rows x 4 columns of each a fragment, four render targets, then repacked.
    */
-  gatedLinear(x, rows, inD, wp, bp, wg, bg, outD, mask, half = false) {
+  gatedLinear(x, rows, inD, wp, bp, wg, bg, outD, mask, half = false, planes = false) {
     const c = this.ctx;
     const ib = inD / 4;
     if (inD % 4 || outD % 4 || TW % ib) {
@@ -345,13 +347,13 @@ float lin(int e) {
     }
     const rq = Math.ceil(rows / 4);
     // Also measured and slower or no better (M2, one warm pass at n = 208): the projection's and gate's weights
-    // interleaved into one texture (2.38 s vs 2.33), the two as separate 4 x 8 matmuls plus a combine pass (2.54 s).
+    // interleaved into one texture (2.38 s vs 2.33), the two as separate 4 x 8 matmuls plus a combine pass (2.54 s; at TW 384, 1.51 s vs 1.41, best of 5).
     // (4 rows x 8 columns of both projections, packed outputs, measured 1.2x slower: register pressure, M2.)
     if (inD % 8 === 0 && TW % (inD / 8) === 0 && !this.noPacked) {
       const xp = this._pack(x, rows * inD);
       const wpp = this._packWeight(wp);
       const wgp = this._packWeight(wg);
-      const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD));
+      const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD, planes ? true : false));
       c.kernel('gatedlinear4x4pk', `
 uniform highp usampler2D X; uniform highp usampler2D Wp; uniform highp usampler2D Wg; uniform sampler2D Bp; uniform sampler2D Bg; uniform sampler2D M;
 uniform int uIn; uniform int uOut; uniform int uRows; uniform int uBp; uniform int uBg;
@@ -398,11 +400,13 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
 }`, qs, { inputs: { X: xp, Wp: wpp, Wg: wgp, Bp: bp ?? mask, Bg: bg ?? mask, M: mask },
         ints: { uIn: inD, uOut: outD, uRows: rows, uBp: bp ? 1 : 0, uBg: bg ? 1 : 0 }, work: inD * 4 });
       if (xp !== x) xp.free();
+      // `planes`: the four float16 planes as they are (plane i holds rows 4q + i), for a consumer that reads them.
+      if (planes) return { planes: qs, free() { qs.forEach((t) => t.free()); } };
       return this._repack(qs, rows, outD, half && this.halfPair);
     }
     if (x.half === 'packed') {
       const xu = this._unpack(x);
-      const y = this.gatedLinear(xu, rows, inD, wp, bp, wg, bg, outD, mask, half);
+      const y = this.gatedLinear(xu, rows, inD, wp, bp, wg, bg, outD, mask, half, planes);
       xu.free();
       return y;
     }
@@ -526,6 +530,35 @@ vec4 compute(int t) {
   if (i == 0) return tx(Q0, qt); if (i == 1) return tx(Q1, qt); if (i == 2) return tx(Q2, qt);
   return tx(Q3, qt);
 }`, this.ctx.tensor(rows * outD, half), { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3] }, ints: { uOut: outD } });
+    qs.forEach((t) => t.free());
+    return res;
+  }
+
+  /** `_repack` for planes written row block fastest (texel ob * rq + q of plane i: row 4q + i, columns 4ob to 4ob + 3). */
+  _repackCM(qs, rows, outD, half) {
+    const rq = Math.ceil(rows / 4);
+    const pre = `vec4 rpt(int r, int c4) {
+  int qt = c4 * uRq + (r >> 2);
+  int i = r & 3;
+  return i == 0 ? tx(Q0, qt) : i == 1 ? tx(Q1, qt) : i == 2 ? tx(Q2, qt) : tx(Q3, qt);
+}`;
+    const head = 'uniform sampler2D Q0; uniform sampler2D Q1; uniform sampler2D Q2; uniform sampler2D Q3; uniform int uOut; uniform int uRq;';
+    const packed = half === 'packed';
+    const res = this.ctx.kernel(`repack4cm${packed ? '-pk' : ''}`, packed ? `${head}
+${pre}
+uvec4 compute(int t) {
+  int e0 = t * 8;
+  int r = e0 / uOut;
+  int c4 = (e0 - r * uOut) / 4;
+  vec4 a = rpt(r, c4), b = rpt(r, c4 + 1);
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
+}` : `${head}
+${pre}
+vec4 compute(int t) {
+  int e0 = t * 4;
+  int r = e0 / uOut;
+  return rpt(r, (e0 - r * uOut) / 4);
+}`, this.ctx.tensor(rows * outD, half), { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3] }, ints: { uOut: outD, uRq: rq } });
     qs.forEach((t) => t.free());
     return res;
   }
@@ -674,8 +707,22 @@ vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs,
   }
 
   /** AdaptiveLayerNorm (`adaptive_ln_scale.py`): per-row (`condRows === rows`) or broadcast (`condRows === 1`) cond. */
-  adaLN(x, cond, mask, rows, dim, condRows, dimCond, type, prefix, eps = 1e-5) {
+  adaLN(x, cond, mask, rows, dim, condRows, dimCond, type, prefix, eps = 1e-5, pre = null) {
     const nx = this.norm(x, rows, dim, type, null, null, eps);
+    if (pre) {
+      // gamma and beta read from the layers' precomputed cond projections (`_condProj`).
+      const out = this.ctx.elementwise('adaln-pre', 'ada(e)', rows * dim, {
+        inputs: { NX: nx, A: pre.t, M: mask }, ints: { uDim: dim, uS: pre.stride, uOg: pre.off, uOb: pre.off + dim },
+        pre: `float ada(int e) {
+  int r = e / uDim;
+  if (el(M, r) == 0.0) return 0.0;
+  int d = e - r * uDim;
+  return el(NX, e) * sigm(el(A, r * uS + uOg + d)) + el(A, r * uS + uOb + d);
+}`,
+      });
+      nx.free();
+      return out;
+    }
     const nc = this.norm(cond, condRows, dimCond, type, this.W(`${prefix}.norm_cond.weight`), this.W(`${prefix}.norm_cond.bias`, true), eps);
     const g = this.linear(nc, condRows, dimCond, this.W(`${prefix}.to_gamma.0.weight`), dim, this.W(`${prefix}.to_gamma.0.bias`));
     const be = this.linear(nc, condRows, dimCond, this.W(`${prefix}.to_beta.weight`), dim);
@@ -693,7 +740,11 @@ vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs,
   }
 
   /** AdaptiveOutputScale. */
-  outScale(x, cond, mask, rows, dim, dimCond, prefix) {
+  outScale(x, cond, mask, rows, dim, dimCond, prefix, pre = null) {
+    if (pre) {
+      return this.ctx.elementwise('outscale-pre', 'el(M, e / uDim) != 0.0 ? el(X, e) * sigm(el(SC, (e / uDim) * uS + uO + e - (e / uDim) * uDim)) : 0.0',
+        rows * dim, { inputs: { X: x, SC: pre.t, M: mask }, ints: { uDim: dim, uS: pre.stride, uO: pre.off } });
+    }
     const g = this.linear(cond, rows, dimCond, this.W(`${prefix}.to_adaln_zero_gamma.0.weight`), dim, this.W(`${prefix}.to_adaln_zero_gamma.0.bias`));
     const out = this.ctx.elementwise('outscale', 'el(M, e / uDim) != 0.0 ? el(X, e) * sigm(el(G, e)) : 0.0', rows * dim,
       { inputs: { X: x, G: g, M: mask }, ints: { uDim: dim } });
@@ -723,7 +774,7 @@ vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs,
   }
 
   /** PairBiasAttention (`pair_bias_attn.py`); `maskAny`: the token mask has some valid token. */
-  attention(nodes, pair, mask, n, D, P, H, usePairBias, useQkln, type, prefix, eps = 1e-5) {
+  attention(nodes, pair, mask, n, D, P, H, usePairBias, useQkln, type, prefix, eps = 1e-5, biasPre = null) {
     const c = this.ctx;
     const dh = Math.floor(D / H);
     const W = (k, opt = false) => this.W(`${prefix}.${k}`, opt);
@@ -746,7 +797,12 @@ vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs,
     const g = this.linear(normed, n, D, W('to_g.weight'), D, W('to_g.bias', true));
     normed.free();
     let bias = null;
-    if (usePairBias && pair) {
+    let biasS = H;
+    let biasO = 0;
+    if (usePairBias && biasPre) {
+      // This layer's columns of `_pairBias`, computed once for the layers that read this z.
+      ({ t: bias, stride: biasS, off: biasO } = biasPre);
+    } else if (usePairBias && pair && !this.skipBias) {
       const np = this.norm(pair, n * n, P, type, W('pair_norm.weight'), W('pair_norm.bias', true), eps, this.pk('np'));
       bias = this.linear(np, n * n, P, W('to_bias.weight'), H);
       np.free();
@@ -754,7 +810,7 @@ vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs,
     // Scores [H, n, n]: scaled q.k, masked pairs -1e4 when the row has a valid key, the pair bias otherwise added.
     const logits = c.elementwise(`attlogits${bias ? '-b' : ''}`, 'score(e)', H * n * n, {
       inputs: { Q: q, K: k, M: mask, ...(bias ? { AB: bias } : {}) },
-      ints: { uN: n, uD: D, uDh: dh, uH: H },
+      ints: { uN: n, uD: D, uDh: dh, uH: biasS, uBO: biasO },
       floats: { uScale: 1 / Math.sqrt(dh) },
       work: dh,
       pre: `float score(int e) {
@@ -769,14 +825,14 @@ vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs,
   s *= uScale;
   if (el(M, i) != 0.0) {
     if (el(M, j) == 0.0) s = -1e4;
-    ${bias ? 'else s += el(AB, (i * uN + j) * uH + h);' : ''}
+    ${bias ? 'else s += el(AB, (i * uN + j) * uH + uBO + h);' : ''}
   }
   return s;
 }`,
     });
     q.free();
     k.free();
-    bias?.free();
+    if (!biasPre) bias?.free();
     // Row max and 1/sum of exp, per (h, i).
     const stats = c.kernel('attstats', `
 uniform sampler2D L; uniform int uN;
@@ -810,20 +866,24 @@ vec4 compute(int t) {
   }
 
   /** One `MultiheadAttnAndTransition` block (`attn_n_transition.py`). */
-  attnBlock(x, pair, cond, mask, n, D, P, H, C, usePairBias, useQkln, type, prefix, eps = 1e-5) {
+  attnBlock(x, pair, cond, mask, n, D, P, H, C, usePairBias, useQkln, type, prefix, eps = 1e-5, pre = null) {
+    // `pre`: this layer's slices of `_condProj` (adaLN gammas and betas, output scales) and of `_pairBias` (`bias`),
+    // each null to compute it here.
+    const ada = (k) => pre?.ada && { t: pre.ada, stride: pre.adaStride, off: (pre.layer * 4 + k * 2) * D };
+    const sc = (k) => pre?.sc && { t: pre.sc, stride: pre.scStride, off: (pre.layer * 2 + k) * D };
     const add = (a, b) => this.ctx.elementwise('addmasked', 'el(M, e / uDim) != 0.0 ? el(A, e) + el(B, e) : 0.0', n * D,
       { inputs: { A: a, B: b, M: mask }, ints: { uDim: D } });
-    const xa = this.adaLN(x, cond, mask, n, D, n, C, type, `${prefix}.mhba.adaln`, eps);
-    const att = this.attention(xa, usePairBias ? pair : null, mask, n, D, P, H, usePairBias, useQkln, type, `${prefix}.mhba.mha`, eps);
+    const xa = this.adaLN(x, cond, mask, n, D, n, C, type, `${prefix}.mhba.adaln`, eps, ada(0));
+    const att = this.attention(xa, usePairBias ? pair : null, mask, n, D, P, H, usePairBias, useQkln, type, `${prefix}.mhba.mha`, eps, pre?.bias);
     xa.free();
-    const att2 = this.outScale(att, cond, mask, n, D, C, `${prefix}.mhba.scale_output`);
+    const att2 = this.outScale(att, cond, mask, n, D, C, `${prefix}.mhba.scale_output`, sc(0));
     att.free();
     const after = add(x, att2);
     att2.free();
-    const xt = this.adaLN(after, cond, mask, n, D, n, C, type, `${prefix}.transition.adaln`, eps);
+    const xt = this.adaLN(after, cond, mask, n, D, n, C, type, `${prefix}.transition.adaln`, eps, ada(1));
     const tr = this.swiglu(xt, mask, n, D, 4, `${prefix}.transition.transition`);
     xt.free();
-    const tr2 = this.outScale(tr, cond, mask, n, D, C, `${prefix}.transition.scale_output`);
+    const tr2 = this.outScale(tr, cond, mask, n, D, C, `${prefix}.transition.scale_output`, sc(1));
     tr.free();
     const out = add(after, tr2);
     after.free();
@@ -837,8 +897,10 @@ vec4 compute(int t) {
     const rows = n * n;
     const W = (k, opt = false) => this.W(`${prefix}.${k}`, opt);
     const zn = this.norm(z, rows, cZ, 'layer_norm', W('layer_norm_in.weight'), W('layer_norm_in.bias', true), eps, this.pk('zn'));
+    // (Written straight into the batched matmul's channel-major layout, 8 k x 2 channels a fragment, the even and odd
+    // channels as two targets: 2.2x slower in a whole pass, M2; neighbouring fragments then share no rows of zn.)
     const gated = (side) => this.gatedLinear(zn, rows, cZ, W(`linear_${side}_p.weight`), W(`linear_${side}_p.bias`, true),
-      W(`linear_${side}_g.weight`), W(`linear_${side}_g.bias`, true), cH, pairMask, true);
+      W(`linear_${side}_g.weight`), W(`linear_${side}_g.bias`, true), cH, pairMask, true, !this.noTriMM && !this.noPlanes);
     let a = gated('a');
     let b = gated('b');
     // x[i, j, c] = sum_k a[i, k, c] b[j, k, c] (outgoing) or a[k, i, c] b[k, j, c] (incoming), never n^3 in memory.
@@ -929,15 +991,22 @@ vec4 compute(int t) {
     const Kp = Math.ceil(n / 8) * 8;
     const ib = Kp / 8;
     const rd = (t) => (t.half === 'packed' ? 'elp' : 'el');
-    const cm = (src, rowsPer) => c.elementwise(`tri-cm-${outgoing ? 'out' : 'in'}${src.half === 'packed' ? '-p' : ''}`, 'cmv(e)', cH * rowsPer * Kp, {
-      inputs: { S: src }, ints: { uN: n, uC: cH, uR: rowsPer, uK: Kp }, half: 'packed', rowTexels: ib,
-      pre: `float cmv(int e) {
+    // From a tensor, or from the gated projection's planes (row r in plane r & 3, as row r >> 2).
+    const cm = (src, rowsPer) => c.elementwise(`tri-cm-${outgoing ? 'out' : 'in'}${src.planes ? '-q' : src.half === 'packed' ? '-p' : ''}`, 'cmv(e)', cH * rowsPer * Kp, {
+      inputs: src.planes ? { Q0: src.planes[0], Q1: src.planes[1], Q2: src.planes[2], Q3: src.planes[3] } : { S: src },
+      ints: { uN: n, uC: cH, uR: rowsPer, uK: Kp }, half: 'packed', rowTexels: ib,
+      pre: `float at(int r, int ch) {
+  ${src.planes
+    ? 'int qe = (r >> 2) * uC + ch; int p = r & 3; return p == 0 ? el(Q0, qe) : p == 1 ? el(Q1, qe) : p == 2 ? el(Q2, qe) : el(Q3, qe);'
+    : `return ${rd(src)}(S, r * uC + ch);`}
+}
+float cmv(int e) {
   int r = e / uK;
   int k = e - r * uK;
   int ch = r / uR;
   int i = r - ch * uR;
   if (i >= uN || k >= uN) return 0.0;
-  return ${outgoing ? `${rd(src)}(S, (i * uN + k) * uC + ch)` : `${rd(src)}(S, (k * uN + i) * uC + ch)`};
+  return ${outgoing ? 'at(i * uN + k, ch)' : 'at(k * uN + i, ch)'};
 }`,
     });
     // j padded to 8: a fragment writes 4 rows (i) x 8 columns (j) as packed halves (the 4x8 block, 64 bytes a pixel).
@@ -1016,17 +1085,18 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     const pij = this.linear(xn, n, D, W('linear_x.weight'), 2 * P);
     xn.free();
     // pi from j, pj from i (pair_update.py's broadcast).
-    let zz = c.elementwise('pairwrite', 'pw(e)', rows * P, {
-      inputs: { Z: z, PIJ: pij, PM: pairMask }, ints: { uN: n, uP: P },
-      pre: `float pw(int e) {
-  int r = e / uP;
-  if (el(PM, r) == 0.0) return 0.0;
-  int d = e - r * uP;
+    // A texel (4 channels of one pair) at a time.
+    let zz = c.kernel('pairwrite4', `
+uniform sampler2D Z; uniform sampler2D PIJ; uniform sampler2D PM; uniform int uN; uniform int uP;
+vec4 compute(int t) {
+  int e0 = t * 4;
+  int r = e0 / uP;
+  if (el(PM, r) == 0.0) return vec4(0.0);
+  int d = e0 - r * uP;
   int i = r / uN;
   int j = r - i * uN;
-  return el(Z, e) + el(PIJ, j * 2 * uP + d) * el(PIJ, i * 2 * uP + uP + d);
-}`,
-    });
+  return tx(Z, t) + tx(PIJ, (j * 2 * uP + d) / 4) * tx(PIJ, (i * 2 * uP + uP + d) / 4);
+}`, c.tensor(rows * P), { inputs: { Z: z, PIJ: pij, PM: pairMask }, ints: { uN: n, uP: P } });
     pij.free();
     for (const dir of ['outgoing', 'incoming']) {
       const z2 = this.triMul(zz, pairMask, n, P, TRI, dir, `${prefix}.tri_mult_${dir === 'outgoing' ? 'out' : 'in'}`, eps);
@@ -1054,6 +1124,177 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
   // ---- networks -----------------------------------------------------------------------------------------------
 
   /** As `forwardTrunkCpu(n, f, mask, weights, cfg, nRecycle, opts)`; returns `{bb_ca, local_latents, logits, insertion}`. */
+  /**
+   * The attention pair biases of `layers` (that all read this z), `to_bias(rmsnorm(z))` for each, as one matmul over z
+   * itself: RMSNorm has no mean, so `to_bias(w * z * rstd) = rstd * (z (W diag(w))^T)`, the norm's weight folded into
+   * the projection and the row's sum of squares gathered in the same walk. `[rows, H * layers.length]`, layer-major.
+   */
+  _pairBias(z, rows, P, H, layers, prefix, eps = 1e-5) {
+    const c = this.ctx;
+    const key = `${prefix}#pairbias:${layers.join(',')}`;
+    let w = this.cache.get(key);
+    if (!w) {
+      const raw = (name) => {
+        const e = this.weights.tensors ? this.weights.tensors[name] : this.weights[name];
+        if (!e) throw new Error(`Missing weight tensor: ${name}`);
+        return e.data ?? e;
+      };
+      const data = new Float32Array(layers.length * H * P);
+      layers.forEach((l, li) => {
+        const nw = raw(`${prefix}.${l}.mhba.mha.pair_norm.weight`);
+        const tb = raw(`${prefix}.${l}.mhba.mha.to_bias.weight`);
+        for (let h = 0; h < H; h += 1) for (let k = 0; k < P; k += 1) data[(li * H + h) * P + k] = tb[h * P + k] * nw[k];
+      });
+      w = c.upload(data, { weight: true });
+      this.cache.set(key, w);
+    }
+    const outD = layers.length * H;
+    const rq = Math.ceil(rows / 4);
+    const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD));
+    c.kernel('pairbias4x4', `
+uniform sampler2D X; uniform sampler2D Wt; uniform int uIn; uniform int uOut; uniform int uRows; uniform float uEps;
+void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
+  int e0 = t * 4;
+  int q = e0 / uOut;
+  int o0 = e0 - q * uOut;
+  int ib = uIn / 4;
+  int xw = textureSize(X, 0).x;
+  int ww = textureSize(Wt, 0).x;
+  ivec2 xc[4];
+  ivec2 wc[4];
+  for (int i = 0; i < 4; i++) {
+    int r = min(q * 4 + i, uRows - 1);
+    int xt = r * ib;
+    xc[i] = ivec2(xt % xw, xt / xw);
+    int wt = (o0 + i) * ib;
+    wc[i] = ivec2(wt % ww, wt / ww);
+  }
+  vec4 a[4];
+  vec4 ss = vec4(0.0);
+  for (int i = 0; i < 4; i++) a[i] = vec4(0.0);
+  for (int k = 0; k < ib; k++) {
+    ivec2 dk = ivec2(k, 0);
+    mat4 wm = mat4(texelFetch(Wt, wc[0] + dk, 0), texelFetch(Wt, wc[1] + dk, 0), texelFetch(Wt, wc[2] + dk, 0), texelFetch(Wt, wc[3] + dk, 0));
+    for (int i = 0; i < 4; i++) {
+      vec4 x = texelFetch(X, xc[i] + dk, 0);
+      a[i] += x * wm;
+      ss[i] += dot(x, x);
+    }
+  }
+  vec4 rs = inversesqrt(ss / float(uIn) + vec4(uEps));
+  r0 = a[0] * rs.x; r1 = a[1] * rs.y; r2 = a[2] * rs.z; r3 = a[3] * rs.w;
+}`, qs, { inputs: { X: z, Wt: w }, ints: { uIn: P, uOut: outD, uRows: rows }, floats: { uEps: eps }, work: P / 2 });
+    return this._repack(qs, rows, outD, false);
+  }
+
+  /**
+   * The pair projection with the Cα distance features added (`pairFeatures`' `xt_bb_ca_pair_dists`: a one-hot bin of
+   * |CA_i - CA_j| in nm, torch.bucketize against `dim - 1` evenly spaced limits, for valid pairs only): the projection
+   * of the other features plus the bin's weight column.
+   */
+  _pairDists(zs, n, P, pd, m, name) {
+    const c = this.ctx;
+    const key = `${name}#dists:${pd.offset}:${pd.dim}`;
+    let wd = this.cache.get(key);
+    if (!wd) {
+      const e = this.weights.tensors ? this.weights.tensors[name] : this.weights[name];
+      const w = e.data ?? e;
+      const pf = w.length / P;
+      const data = new Float32Array(pd.dim * P);
+      for (let b = 0; b < pd.dim; b += 1) for (let d = 0; d < P; d += 1) data[b * P + d] = w[d * pf + pd.offset + b];
+      wd = c.upload(data, { weight: true });
+      this.cache.set(key, wd);
+    }
+    const limits = new Float32Array(pd.dim - 1);
+    for (let k = 0; k < pd.dim - 1; k += 1) limits[k] = pd.min + ((pd.max - pd.min) * k) / (pd.dim - 2);
+    const lim = c.upload(limits);
+    const ca = c.upload(Float32Array.from(pd.caNm));
+    const out = c.kernel('pairdist', `
+uniform sampler2D ZS; uniform sampler2D WD; uniform sampler2D CA; uniform sampler2D LIM; uniform sampler2D M;
+uniform int uN; uniform int uP; uniform int uNL;
+vec4 compute(int t) {
+  int e0 = t * 4;
+  int r = e0 / uP;
+  int d0 = e0 - r * uP;
+  int i = r / uN;
+  int j = r - i * uN;
+  vec4 z = tx(ZS, t);
+  if (el(M, i) == 0.0 || el(M, j) == 0.0) return z;
+  vec3 dv = vec3(el(CA, i * 3), el(CA, i * 3 + 1), el(CA, i * 3 + 2)) - vec3(el(CA, j * 3), el(CA, j * 3 + 1), el(CA, j * 3 + 2));
+  float rr = sqrt(dot(dv, dv));
+  int bin = 0;
+  for (int k = 0; k < uNL; k++) if (el(LIM, k) < rr) bin++;
+  return z + tx(WD, (bin * uP + d0) / 4);
+}`, c.tensor(n * n * P), { inputs: { ZS: zs, WD: wd, CA: ca, LIM: lim, M: m }, ints: { uN: n, uP: P, uNL: pd.dim - 1 } });
+    lim.free();
+    ca.free();
+    return out;
+  }
+
+  /**
+   * Feature rows (3588 and 2436 wide, say) zero-padded to a multiple of 32, feature and weight alike, so their linear
+   * takes the blocked matmul rather than the per-value one: { t, w, width }.
+   */
+  _padFeats(data, rows, name, outD) {
+    const c = this.ctx;
+    const fw = data.length / rows;
+    const pw = Math.ceil(fw / 32) * 32;
+    if (pw === fw) return { t: c.upload(data), w: this.W(name), width: fw };
+    const out = new Float32Array(rows * pw);
+    for (let r = 0; r < rows; r += 1) out.set(data.subarray(r * fw, (r + 1) * fw), r * pw);
+    return { t: c.upload(out), w: this.padded(name, outD, fw, pw), width: pw };
+  }
+
+  /**
+   * Every layer's cond-only linears in two matmuls, as the cond is the same for all of them: the adaLN gammas and betas
+   * on the cond RMS-normalised without its affine (norm_cond's weight and bias folded into each projection,
+   * `W diag(w) c + W b + bias`), per layer [mhba gamma, mhba beta, transition gamma, transition beta], and the output
+   * scales on the cond itself, per layer [mhba, transition]. Weights folded and concatenated once, on first use.
+   */
+  _condProj(cond, n, C, D, L, prefix, type, eps = 1e-5) {
+    let cw = this.cache.get(`${prefix}#condproj`);
+    if (!cw) {
+      const raw = (name, optional = false) => {
+        const e = this.weights.tensors ? this.weights.tensors[name] : this.weights[name];
+        if (!e && !optional) throw new Error(`Missing weight tensor: ${name}`);
+        return e ? (e.data ?? e) : null;
+      };
+      const aw = new Float32Array(L * 4 * D * C);
+      const ab = new Float32Array(L * 4 * D);
+      const sw = new Float32Array(L * 2 * D * C);
+      const sb = new Float32Array(L * 2 * D);
+      for (let l = 0; l < L; l += 1) {
+        ['mhba', 'transition'].forEach((blk, k) => {
+          const p = `${prefix}.${l}.${blk}`;
+          const nw = raw(`${p}.adaln.norm_cond.weight`, true);
+          const nb = raw(`${p}.adaln.norm_cond.bias`, true);
+          [[raw(`${p}.adaln.to_gamma.0.weight`), raw(`${p}.adaln.to_gamma.0.bias`, true)], [raw(`${p}.adaln.to_beta.weight`), null]].forEach(([w, b], j) => {
+            const row0 = (l * 4 + k * 2 + j) * D;
+            for (let o = 0; o < D; o += 1) {
+              let bias = b ? b[o] : 0;
+              for (let i = 0; i < C; i += 1) {
+                const wv = w[o * C + i];
+                aw[(row0 + o) * C + i] = nw ? wv * nw[i] : wv;
+                if (nb) bias += wv * nb[i];
+              }
+              ab[row0 + o] = bias;
+            }
+          });
+          sw.set(raw(`${p}.scale_output.to_adaln_zero_gamma.0.weight`), (l * 2 + k) * D * C);
+          sb.set(raw(`${p}.scale_output.to_adaln_zero_gamma.0.bias`), (l * 2 + k) * D);
+        });
+      }
+      const up = (a) => this.ctx.upload(a, { half: a.length > 65536, weight: true });
+      cw = { aw: up(aw), ab: up(ab), sw: up(sw), sb: up(sb) };
+      this.cache.set(`${prefix}#condproj`, cw);
+    }
+    const nc = this.norm(cond, n, C, type, null, null, eps);
+    const ada = this.linear(nc, n, C, cw.aw, L * 4 * D, cw.ab);
+    nc.free();
+    const sc = this.linear(cond, n, C, cw.sw, L * 2 * D, cw.sb);
+    return { ada, sc, adaStride: L * 4 * D, scStride: L * 2 * D };
+  }
+
   async forwardTrunk(n, f, mask, cfg, nRecycle = 1, opts = {}) {
     const c = this.ctx;
     const D = cfg.token_dim ?? 768;
@@ -1065,9 +1306,9 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     const norm = 'rmsnorm_torch';
     const { m, pm } = this._masks(mask, n);
     const condC = (feats) => {
-      const ft = c.upload(feats);
-      let x = this.linear(ft, n, feats.length / n, this.W('nn.cond_factory.linear_out.weight'), C);
-      ft.free();
+      const ft = this._padFeats(feats, n, 'nn.cond_factory.linear_out.weight', C);
+      let x = this.linear(ft.t, n, ft.width, ft.w, C);
+      ft.t.free();
       for (const k of [1, 2]) {
         const y = this.swiglu(x, m, n, C, 2, `nn.transition_c_${k}`);
         x.free();
@@ -1078,20 +1319,31 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     const c0 = condC(f.cond0);
     const c1 = nRecycle > 1 ? condC(f.cond1 ?? f.cond0) : c0;
 
-    const seqT = c.upload(f.seq);
-    const sLin = this.linear(seqT, n, f.seq.length / n, this.W('nn.init_repr_factory.linear_out.weight'), D);
-    seqT.free();
+    const seqT = this._padFeats(f.seq, n, 'nn.init_repr_factory.linear_out.weight', D);
+    const sLin = this.linear(seqT.t, n, seqT.width, seqT.w, D);
+    seqT.t.free();
     const sInit = this.maskRows(sLin, n, D, m);
     sLin.free();
 
     // The pair features (107 wide) padded with zeros to 128, feature and weight alike, take the blocked matmul.
-    const pf = f.pair.length / (n * n);
-    const pw = Math.ceil(pf / 32) * 32;
-    const padded = new Float32Array(n * n * pw);
-    for (let r = 0; r < n * n; r += 1) padded.set(f.pair.subarray(r * pf, (r + 1) * pf), r * pw);
-    const pairT = c.upload(padded);
-    const zLin = this.linear(pairT, n * n, pw, this.padded('nn.pair_repr_builder.init_repr_factory.linear_out.weight', P, pf, pw), P);
-    pairT.free();
+    // With `f.pairDists` (the sampler's, for `pairDistsOnGpu`): `f.pair` is the rest of the features, given on a job's
+    // first step only, and its projection is kept; each step adds the Cα distance bins' weight columns to it.
+    const pairName = 'nn.pair_repr_builder.init_repr_factory.linear_out.weight';
+    let zLin;
+    if (f.pair) {
+      const pt = this._padFeats(f.pair, n * n, pairName, P);
+      zLin = this.linear(pt.t, n * n, pt.width, pt.w, P);
+      pt.t.free();
+    }
+    if (f.pairDists) {
+      if (zLin) {
+        this.pairStatic?.free();
+        this.pairStatic = zLin;
+        this.pairStaticN = n;
+      }
+      if (this.pairStaticN !== n) throw new Error('pair features: a job\'s first step must carry them');
+      zLin = this._pairDists(this.pairStatic, n, P, f.pairDists, m, pairName);
+    }
     const zN = this.norm(zLin, n * n, P, norm, this.W('nn.pair_repr_builder.init_repr_factory.ln_out.weight'));
     zLin.free();
     const zMasked = this.maskRows(zN, n * n, P, pm);
@@ -1105,32 +1357,60 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     zMasked.free();
     zCond.free();
 
-    let s = this.zeros(n * D);
-    let z = this.zeros(n * n * P);
+    let s = null;
+    let z = null;
+    let zInitOwn = zInit;
     for (let cycle = 0; cycle < Math.max(1, nRecycle); cycle += 1) {
-      const sn = this.norm(s, n, D, norm, this.W('nn.s_cycle_norm.weight'));
-      const sd = this.linear(sn, n, D, this.W('nn.s_cycle_proj.weight'), D);
-      sn.free();
-      const zn = this.norm(z, n * n, P, norm, this.W('nn.z_cycle_norm.weight'), null, 1e-5, this.pk('zc'));
-      const zd = this.linear(zn, n * n, P, this.W('nn.z_cycle_proj.weight'), P, null, null, true);
-      zn.free();
-      s.free();
-      z.free();
-      s = c.elementwise('add', 'el(A, e) + el(B, e)', n * D, { inputs: { A: sInit, B: sd } });
-      z = c.elementwise('add', 'el(A, e) + el(B, e)', n * n * P, { inputs: { A: zInit, B: zd } });
-      sd.free();
-      zd.free();
+      if (cycle === 0) {
+        // s and z start at zero, so their recycle terms (a weight-only norm, a bias-free projection) are zero too.
+        s = c.elementwise('copy', 'el(A, e)', n * D, { inputs: { A: sInit } });
+        if (nRecycle > 1) {
+          z = c.elementwise('copy', 'el(A, e)', n * n * P, { inputs: { A: zInit } });
+        } else {
+          z = zInit;
+          zInitOwn = null;
+        }
+      } else {
+        const sn = this.norm(s, n, D, norm, this.W('nn.s_cycle_norm.weight'));
+        const sd = this.linear(sn, n, D, this.W('nn.s_cycle_proj.weight'), D);
+        sn.free();
+        const zn = this.norm(z, n * n, P, norm, this.W('nn.z_cycle_norm.weight'), null, 1e-5, this.pk('zc'));
+        const zd = this.linear(zn, n * n, P, this.W('nn.z_cycle_proj.weight'), P, null, null, true);
+        zn.free();
+        s.free();
+        z.free();
+        s = c.elementwise('add', 'el(A, e) + el(B, e)', n * D, { inputs: { A: sInit, B: sd } });
+        z = c.elementwise('add', 'el(A, e) + el(B, e)', n * n * P, { inputs: { A: zInit, B: zd } });
+        sd.free();
+        zd.free();
+      }
       const cc = cycle === 0 ? c0 : c1;
+      const cp = this.noCondProj ? null : this._condProj(cc, n, C, D, cfg.nlayers, 'nn.transformer_layers', norm);
+      const updates = (i) => cfg.update_pair_repr && i < cfg.nlayers - 1 && i % (cfg.update_pair_repr_every_n ?? 2) === 0;
+      // The pair biases of the layers that read the current z, made when the first of them runs.
+      let pb = null;
       for (let i = 0; i < cfg.nlayers; i += 1) {
-        const s2 = this.attnBlock(s, z, cc, m, n, D, P, H, C, true, true, norm, `nn.transformer_layers.${i}`);
+        if (!pb && P % 4 === 0 && TW % (P / 4) === 0 && !this.noPairBias) {
+          const layers = [i];
+          while (!updates(layers[layers.length - 1]) && layers[layers.length - 1] < cfg.nlayers - 1) layers.push(layers[layers.length - 1] + 1);
+          pb = { t: this._pairBias(z, n * n, P, H, layers, 'nn.transformer_layers'), first: i, stride: layers.length * H };
+        }
+        const bias = pb && { t: pb.t, stride: pb.stride, off: (i - pb.first) * H };
+        const s2 = this.attnBlock(s, z, cc, m, n, D, P, H, C, true, true, norm, `nn.transformer_layers.${i}`, 1e-5, cp || bias ? { ...cp, layer: i, bias } : null);
         s.free();
         s = s2;
-        if (cfg.update_pair_repr && i < cfg.nlayers - 1 && i % (cfg.update_pair_repr_every_n ?? 2) === 0) {
+        if (updates(i)) {
+          pb?.t.free();
+          pb = null;
+        }
+        if (!this.skipPair && updates(i)) {
           const z2 = this.pairUpdate(s, z, m, pm, n, D, P, TRI, `nn.pair_update_layers.${i}`);
           z.free();
           z = z2;
         }
       }
+      if (cp) { cp.ada.free(); cp.sc.free(); }
+      pb?.t.free();
     }
     const head = async (name, out) => {
       const h = this.norm(s, n, D, norm, this.W(`nn.${name}.0.weight`));
@@ -1154,7 +1434,7 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
       res.insertion = Float32Array.from(await c.readAsync(scaled));
       [q, k, qk, scaled].forEach((t) => t.free());
     }
-    [s, z, sInit, zInit, m, pm, c0].forEach((t) => t.free());
+    [s, z, sInit, zInitOwn, m, pm, c0].forEach((t) => t?.free());
     if (c1 !== c0) c1.free();
     return res;
   }
@@ -1172,9 +1452,9 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
       cond.free();
       cond = y;
     }
-    const ft = c.upload(feats);
-    const sLin = this.linear(ft, n, fdim, this.W(`${prefix}.init_repr_factory.linear_out.weight`), D);
-    ft.free();
+    const ft = this._padFeats(feats, n, `${prefix}.init_repr_factory.linear_out.weight`, D);
+    const sLin = this.linear(ft.t, n, ft.width, ft.w, D);
+    ft.t.free();
     let s = this.maskRows(sLin, n, D, m);
     sLin.free();
     for (let l = 0; l < cfg.nlayers; l += 1) {
@@ -1228,6 +1508,7 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
   kernels() {
     return {
       forwardTrunk: (n, f, mask, weights, cfg, nRecycle, opts) => this.forwardTrunk(n, f, mask, cfg, nRecycle, opts),
+      pairDistsOnGpu: true,
       decode: (batch, o) => this.decode(batch, o),
       encode: (batch, o) => this.encode(batch, o),
     };
