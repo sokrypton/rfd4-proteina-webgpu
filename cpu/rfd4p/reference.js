@@ -844,6 +844,10 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
   const centeringScale = sampling.centering?.scale ?? 0.2;
   const coordCondMask = tensorData(batch, 'coord_cond_mask');
   const moleculeIid = tensorData(batch, 'molecule_iid');
+  // The networks: the float32 references here, or another implementation of the same functions (`webgl/rfd4p`).
+  const forwardTrunk = opts.kernels?.forwardTrunk ?? forwardTrunkCpu;
+  const decodeLatents = opts.kernels?.decode ?? decodeLatentsCpu;
+  const encodeLatents = opts.kernels?.encode ?? encodeLatentsCpu;
 
   const emit = flowEmitMasks(
     {
@@ -881,7 +885,7 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
           caNm[i * 3 + k] = Number.isFinite(v) ? v : 0;
         }
       }
-      const enc = encodeLatentsCpu(batch, {
+      const enc = await encodeLatents(batch, {
         n,
         weights,
         cfg: cfg.autoencoder_config.nn_ae.encoder,
@@ -961,7 +965,7 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
       pairCond: pairCondFeatures(tt, nnCfg.feats_pair_cond),
     };
 
-    const out = forwardTrunkCpu(n, f, pad, weights, nnCfg, depths[s], { insertion: s === nsteps - 1 });
+    const out = await forwardTrunk(n, f, pad, weights, nnCfg, depths[s], { insertion: s === nsteps - 1 });
     for (let i = 0; i < n; i += 1) {
       if (!emit.bb_ca[i]) out.bb_ca.fill(0, i * 3, i * 3 + 3);
       if (!emit.local_latents[i]) out.local_latents.fill(0, i * 32, i * 32 + 32);
@@ -1007,7 +1011,7 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
       let liveDecoded = null;
       if (decodeEvery > 0 && ((s + 1) % decodeEvery === 0 || s + 1 === nsteps)) {
         const liveSeq = sequenceForDecoder(batch, n, lastLogits);
-        const dec = decodeLatentsCpu(batch, {
+        const dec = await decodeLatents(batch, {
           n, caNm: x1.bb_ca, z: x1.local_latents, seq: liveSeq, weights, cfg: cfg.autoencoder_config.nn_ae.decoder,
         });
         liveDecoded = formatSampleLocalLatents(batch, { n, caNm: x1.bb_ca, decoded: dec });
@@ -1026,7 +1030,7 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
   }
 
   const seq = sequenceForDecoder(batch, n, lastLogits);
-  const decoded = decodeLatentsCpu(batch, {
+  const decoded = await decodeLatents(batch, {
     n, caNm: x.bb_ca, z: x.local_latents, seq, weights, cfg: cfg.autoencoder_config.nn_ae.decoder,
   });
   const formatted = formatSampleLocalLatents(batch, { n, caNm: x.bb_ca, decoded });

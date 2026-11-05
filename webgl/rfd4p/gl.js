@@ -1,0 +1,298 @@
+/**
+ * A small WebGL2 tensor library: the GPU fallback for browsers without WebGPU (Safari before 26, older Chrome).
+ *
+ * A tensor is a flat float array held in an RGBA32F texture, 4 values to a texel, row-major and wrapped at `TW` texels
+ * a row (a pair tensor of n^2 rows is far taller than a texture may be). Weights are the same layout in RGBA16F (large
+ * matrices, as the WebGPU path holds them) or RGBA32F (vectors and small matrices). Every kernel is a fragment shader
+ * that writes one texel - 4 outputs - per fragment; `kernel` runs one, `elementwise` wraps the common case of an output
+ * computed one value at a time.
+ *
+ * Needs WebGL2 and EXT_color_buffer_float (rendering to float textures): Safari 15+, Chrome 56+, Firefox 51+.
+ */
+
+// 3072 texels (12288 floats) a row: every row width of the model in texels (64, 96, 128, 192, 384, 768) divides it, so
+// no matrix row wraps onto the next texture row, and a kernel can walk one with a fixed texture row.
+export const TW = 3072;
+const VERT = `#version 300 es
+in vec2 p;
+void main() { gl_Position = vec4(p, 0.0, 1.0); }`;
+
+/** GLSL shared by every kernel: texel and element reads of any tensor, and the output texel's index. */
+const PRELUDE = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform int uOutW;
+uniform int uOutTexels;
+vec4 tx(sampler2D s, int t) { int w = textureSize(s, 0).x; return texelFetch(s, ivec2(t % w, t / w), 0); }
+float el(sampler2D s, int e) { vec4 v = tx(s, e >> 2); int c = e & 3; return c == 0 ? v.x : c == 1 ? v.y : c == 2 ? v.z : v.w; }
+float sigm(float v) { return 1.0 / (1.0 + exp(-v)); }
+`;
+
+export function webgl2Available() {
+  try {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl2');
+    return Boolean(gl && gl.getExtension('EXT_color_buffer_float'));
+  } catch {
+    return false;
+  }
+}
+
+export class GLTensor {
+  constructor(ctx, size, tex, w, h, half = false) {
+    Object.assign(this, { ctx, size, tex, w, h, half, texels: Math.ceil(size / 4) });
+  }
+
+  /** Back to the pool (the texture is reused by the next tensor of its shape). */
+  free() {
+    if (!this.tex || this.weight) return;
+    this.ctx._release(this);
+    this.tex = null;
+  }
+}
+
+export class GLContext {
+  constructor() {
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = 1;
+    this.canvas.height = 1;
+    const gl = this.canvas.getContext('webgl2', { antialias: false, depth: false, stencil: false, alpha: true,
+      premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+    if (!gl) throw new Error('WebGL2 is not available');
+    if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('WebGL2 here cannot render to float textures');
+    this.gl = gl;
+    this.maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    this.programs = new Map();
+    this.pool = new Map();
+    this.fb = gl.createFramebuffer();
+    this.vb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.vb);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    this.bytes = 0;
+    this.renderer = (() => {
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    })();
+  }
+
+  _shape(size) {
+    const texels = Math.max(1, Math.ceil(size / 4));
+    const w = Math.min(TW, texels);
+    const h = Math.ceil(texels / w);
+    if (h > this.maxSize) throw new Error(`tensor of ${size} floats is too large for this GPU's textures`);
+    return { w, h };
+  }
+
+  _texture(w, h, half) {
+    const gl = this.gl;
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, half ? gl.RGBA16F : gl.RGBA32F, w, h);
+    for (const p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, p, gl.NEAREST);
+    for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, p, gl.CLAMP_TO_EDGE);
+    this.bytes += w * h * (half ? 8 : 16);
+    return tex;
+  }
+
+  /** An activation tensor of `size` floats (contents undefined until written). */
+  tensor(size) {
+    const { w, h } = this._shape(size);
+    const key = `${w}x${h}`;
+    const free = this.pool.get(key);
+    const tex = free?.length ? free.pop() : this._texture(w, h, false);
+    return new GLTensor(this, size, tex, w, h);
+  }
+
+  _release(t) {
+    const key = `${t.w}x${t.h}`;
+    if (!this.pool.has(key)) this.pool.set(key, []);
+    this.pool.get(key).push(t.tex);
+  }
+
+  /** A tensor holding `data` (Float32Array or array). `half` stores it as float16 (weights). */
+  upload(data, { half = false, weight = false } = {}) {
+    const src = data instanceof Float32Array ? data : Float32Array.from(data);
+    const { w, h } = this._shape(src.length);
+    const t = weight
+      ? new GLTensor(this, src.length, this._texture(w, h, half), w, h, half)
+      : this.tensor(src.length);
+    t.weight = weight;
+    this.write(t, src);
+    return t;
+  }
+
+  write(t, src) {
+    const gl = this.gl;
+    const full = t.w * t.h * 4;
+    let data = src;
+    if (src.length !== full) {
+      data = new Float32Array(full);
+      data.set(src.subarray(0, Math.min(src.length, full)));
+    }
+    gl.bindTexture(gl.TEXTURE_2D, t.tex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, t.w, t.h, gl.RGBA, gl.FLOAT, data);
+  }
+
+  /** The tensor's values (blocks until the GPU is done). */
+  read(t, size = t.size) {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t.tex, 0);
+    const rows = Math.ceil(Math.ceil(size / 4) / t.w);
+    const out = new Float32Array(t.w * rows * 4);
+    gl.readPixels(0, 0, t.w, rows, gl.RGBA, gl.FLOAT, out);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return out.subarray(0, size);
+  }
+
+  /** As `read`, after the GPU has finished, polled, so the page stays responsive while a long pass runs. */
+  async readAsync(t, size = t.size) {
+    const gl = this.gl;
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.flush();
+    for (;;) {
+      const st = gl.clientWaitSync(sync, 0, 0);
+      if (st === gl.ALREADY_SIGNALED || st === gl.CONDITION_SATISFIED || st === gl.WAIT_FAILED) break;
+      await new Promise((r) => setTimeout(r, 4));
+    }
+    gl.deleteSync(sync);
+    return this.read(t, size);
+  }
+
+  _program(key, body) {
+    let p = this.programs.get(key);
+    if (p) return p;
+    const gl = this.gl;
+    const compile = (type, src) => {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        throw new Error(`WebGL kernel ${key}: ${gl.getShaderInfoLog(s)}\n${src}`);
+      }
+      return s;
+    };
+    const prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, PRELUDE + body));
+    gl.bindAttribLocation(prog, 0, 'p');
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(`WebGL kernel ${key}: ${gl.getProgramInfoLog(prog)}`);
+    p = { prog, loc: new Map() };
+    this.programs.set(key, p);
+    return p;
+  }
+
+  _loc(p, name) {
+    if (!p.loc.has(name)) p.loc.set(name, this.gl.getUniformLocation(p.prog, name));
+    return p.loc.get(name);
+  }
+
+  /**
+   * Run kernel `key` (GLSL `body`, which defines `vec4 compute(int t)` for output texel `t`) into `out`.
+   * `inputs`: { samplerName: tensor }; `ints` / `floats`: { uniformName: value }. `work` is the loop length of one
+   * fragment, so a long draw is split into bands (and flushed between them) before a slow GPU's watchdog notices.
+   */
+  kernel(key, body, out, { inputs = {}, ints = {}, floats = {}, work = 1 } = {}) {
+    const gl = this.gl;
+    // Four outputs (an array of four tensors of one shape): `body` defines compute4(t, r0..r3) writing all of them.
+    const outs = Array.isArray(out) ? out : [out];
+    const mrt = outs.length > 1;
+    const p = this._program(mrt ? `${key}#mrt` : key, mrt ? `${outs.map((_, i) => `layout(location = ${i}) out vec4 f${i};`).join('\n')}
+${body}
+void main() {
+  int t = int(gl_FragCoord.y) * uOutW + int(gl_FragCoord.x);
+  if (t >= uOutTexels) { ${outs.map((_, i) => `f${i} = vec4(0.0);`).join(' ')} return; }
+  compute4(t, ${outs.map((_, i) => `f${i}`).join(', ')});
+}` : `out vec4 fragOut;
+${body}
+void main() {
+  int t = int(gl_FragCoord.y) * uOutW + int(gl_FragCoord.x);
+  if (t >= uOutTexels) { fragOut = vec4(0.0); return; }
+  fragOut = compute(t);
+}`);
+    out = outs[0];
+    gl.useProgram(p.prog);
+    let unit = 0;
+    for (const [name, t] of Object.entries(inputs)) {
+      if (!t?.tex) throw new Error(`kernel ${key}: input ${name} is missing`);
+      if (outs.includes(t)) throw new Error(`kernel ${key}: output aliases input ${name}`);
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, t.tex);
+      gl.uniform1i(this._loc(p, name), unit);
+      unit += 1;
+    }
+    gl.uniform1i(this._loc(p, 'uOutW'), out.w);
+    gl.uniform1i(this._loc(p, 'uOutTexels'), out.texels);
+    for (const [name, v] of Object.entries(ints)) gl.uniform1i(this._loc(p, name), v);
+    for (const [name, v] of Object.entries(floats)) gl.uniform1f(this._loc(p, name), v);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
+    outs.forEach((o, i) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, o.tex, 0));
+    if (mrt) gl.drawBuffers(outs.map((_, i) => gl.COLOR_ATTACHMENT0 + i));
+    gl.viewport(0, 0, out.w, out.h);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.vb);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    // About 2^26 inner-loop steps per band.
+    const rowsPerBand = Math.max(1, Math.floor((1 << 26) / Math.max(1, out.w * work)));
+    if (rowsPerBand >= out.h) {
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    } else {
+      gl.enable(gl.SCISSOR_TEST);
+      for (let y = 0; y < out.h; y += rowsPerBand) {
+        gl.scissor(0, y, out.w, Math.min(rowsPerBand, out.h - y));
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.flush();
+      }
+      gl.disable(gl.SCISSOR_TEST);
+    }
+    if (mrt) {
+      // Back to one attachment: a stale one could be sampled by the next kernel (a feedback loop).
+      for (let i = 1; i < outs.length; i += 1) gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, null, 0);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    // Profiling (`this.profile = new Map()`): each kernel waited for and timed, by key.
+    if (this.profile) {
+      // A one-texel read waits for the draw (Chrome's finish() does not).
+      this.read(out, 4);
+      const now = performance.now();
+      const k = `${key} ${work}`;
+      this.profile.set(k, (this.profile.get(k) ?? 0) + now - (this.lastT ?? now));
+      this.lastT = now;
+    }
+    return out;
+  }
+
+  /**
+   * `out[e] = expr` for every element `e < size`, `expr` GLSL over `e` (an int) that may read the inputs with
+   * `el(name, index)`; `pre` declares helpers. A new tensor unless `out` is given.
+   */
+  elementwise(key, expr, size, { inputs = {}, ints = {}, floats = {}, pre = '', work = 1, out = null } = {}) {
+    const decl = [
+      ...Object.keys(inputs).map((n) => `uniform sampler2D ${n};`),
+      ...Object.keys(ints).map((n) => `uniform int ${n};`),
+      ...Object.keys(floats).map((n) => `uniform float ${n};`),
+      'uniform int uSize;',
+    ].join('\n');
+    const body = `${decl}
+${pre}
+float value(int e) { return ${expr}; }
+vec4 compute(int t) {
+  int e = t * 4;
+  return vec4(value(e), e + 1 < uSize ? value(e + 1) : 0.0, e + 2 < uSize ? value(e + 2) : 0.0, e + 3 < uSize ? value(e + 3) : 0.0);
+}`;
+    const target = out ?? this.tensor(size);
+    return this.kernel(`ew:${key}`, body, target, { inputs, ints: { ...ints, uSize: size }, floats, work });
+  }
+
+  destroy() {
+    const gl = this.gl;
+    for (const list of this.pool.values()) for (const tex of list) gl.deleteTexture(tex);
+    this.pool.clear();
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+  }
+}

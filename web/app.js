@@ -37,6 +37,8 @@ import {
   installStudioApiInterceptor,
 } from './studio-api.js';
 import { DesignPanel } from './design-panel.js';
+import { webgl2Available } from '../webgl/rfd4p/gl.js';
+import { Rfd4pModelGL } from '../webgl/rfd4p/model.js';
 import { openGuide } from './guide-dialog.js';
 import { resultsFiles } from './results-zip.js';
 import {
@@ -701,10 +703,20 @@ class Rfd4pStudioApp {
     this.els.predictBtn.disabled = false;
     this.designPanel.render();
     const params = new URLSearchParams(window.location.search);
-    // Without WebGPU a design runs on the CPU path on the main thread: hours for 60 steps, with the page frozen on
-    // its last status. Say so instead; `?cpu=1` keeps the CPU path for development.
-    this.noWebGpu = !this.gpuDevice && params.get('cpu') !== '1';
-    const backendLabel = this.gpuDevice ? 'WebGPU FP16' : this.noWebGpu ? 'No WebGPU' : 'CPU Float32';
+    // `?gl=1`: the WebGL2 path even where WebGPU is available (for testing it).
+    if (params.get('gl') === '1' && this.gpuDevice) {
+      this.gpuDevice.destroy?.();
+      this.gpuDevice = null;
+      this.gpuModel = null;
+    }
+    // Without WebGPU (Safari before 26, older browsers) designs run on WebGL2 (`webgl/rfd4p`), several times slower but
+    // on the GPU. Without that too, the CPU path would take hours with the page frozen: say so instead; `?cpu=1`
+    // keeps the CPU path for development. Refolding (LocalFold) needs WebGPU either way.
+    const cpuOnly = params.get('cpu') === '1';
+    this.glFallback = !this.gpuDevice && !cpuOnly && webgl2Available();
+    this.noWebGpu = !this.gpuDevice && !this.glFallback && !cpuOnly;
+    this.noRefold = !this.gpuDevice;
+    const backendLabel = this.gpuDevice ? 'WebGPU FP16' : this.glFallback ? 'WebGL2' : this.noWebGpu ? 'No WebGPU' : 'CPU Float32';
     if (this.els.webgpuBadge) {
       this.els.webgpuBadge.textContent = backendLabel;
     }
@@ -1191,7 +1203,7 @@ class Rfd4pStudioApp {
       else for (const c of cols) { const x = value(v, c.key); tr.append(h('td', { class: 'rfd4p-dt-num', text: x === null ? '' : c.fmt(x) })); }
       const stop = (fn) => (ev) => { ev.preventDefault(); ev.stopPropagation(); fn(); };
       tr.append(h('td', { class: 'rfd4p-dt-act' },
-        isInputRow || this.noWebGpu ? null : h('button', {
+        isInputRow || this.noRefold ? null : h('button', {
           type: 'button', class: 'rfd4p-design-act rfd4p-design-refold', text: '↻', disabled: busy,
           title: 'Refold this design with the settings below (shown again if it was already refolded with them)', 'aria-label': `Refold seed ${this._designName(v)}`,
           onclick: stop(() => { void this._refoldDesigns([sid]); }),
@@ -1286,7 +1298,7 @@ class Rfd4pStudioApp {
    */
   _syncRefoldUi() {
     const any = (this.runs ?? []).some((r) => r.designs.length);
-    if (this.els.refoldBox) this.els.refoldBox.hidden = !any || this.noWebGpu;
+    if (this.els.refoldBox) this.els.refoldBox.hidden = !any || this.noRefold;
     const btn = this.els.refoldBtn;
     if (btn) {
       const pre = this.weightPrefetch;
@@ -1352,7 +1364,7 @@ class Rfd4pStudioApp {
    */
   _prefetchFoldWeights() {
     const model = this.els.refoldModel?.value ?? 'openbind0';
-    if (this.noWebGpu || !model || this.refoldAbort) return;
+    if (this.noRefold || !model || this.refoldAbort) return;
     if (model === 'af3' && !this._af3TermsAccepted()) return;
     if (this.weightPrefetch?.model === model) return;
     const name = REFOLD_MODELS[model] ?? model;
@@ -1608,7 +1620,13 @@ class Rfd4pStudioApp {
       await this.ensureWeightsLoaded(this.prevArchChoice, { needEncoder });
 
       const useGpu = Boolean(this.gpuModel);
-      const backendLabel = useGpu ? 'WebGPU FP16' : 'CPU Float32';
+      // The WebGL2 model holds the weights it has used on the GPU: made again only when the weights change.
+      if (!useGpu && this.glFallback && this.glModelWeights !== this.activeWeights) {
+        this.glModel?.destroy();
+        this.glModel = new Rfd4pModelGL(this.activeWeights);
+        this.glModelWeights = this.activeWeights;
+      }
+      const backendLabel = useGpu ? 'WebGPU FP16' : this.glFallback ? 'WebGL2' : 'CPU Float32';
 
       const customSampling = {
         ...DEFAULT_SAMPLING,
@@ -1802,7 +1820,8 @@ class Rfd4pStudioApp {
         try {
           result = useGpu
             ? await this.gpuModel.generate(batch, genOpts)
-            : await generateRfd4pCpu(batch, this.activeWeights, this.activeConfig, genOpts);
+            : await generateRfd4pCpu(batch, this.activeWeights, this.activeConfig,
+              this.glFallback ? { ...genOpts, kernels: this.glModel.kernels() } : genOpts);
         } finally {
           if (liveRenderPromise) {
             await liveRenderPromise;

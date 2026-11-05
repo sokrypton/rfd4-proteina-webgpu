@@ -42,6 +42,7 @@
     "stamp": "node tools/stamp-modules.mjs",
     "sync:localfold": "node tools/sync-localfold.mjs",
     "export:weights": "python3 tools/export_rfd4p_model.py",
-    "check:safari": "node tools/check-safari-syntax.mjs"
+    "check:safari": "node tools/check-safari-syntax.mjs",
+    "check:webgl": "node tools/gpu-chrome.mjs tools/gpu/check-webgl.js"
   }
 }
