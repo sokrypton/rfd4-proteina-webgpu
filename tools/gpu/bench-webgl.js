@@ -42,6 +42,8 @@ export async function main(_device, args) {
   if (opt.packed === '1') results.packed = benchPacked(c, x32, w, b, rows, inD, outD, Number(opt.reps ?? 5));
   if (opt.packed === '1') results.packed4x8 = benchPacked48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5));
   if (opt.probe === '1') Object.assign(results, benchProbe(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5)));
+  if (opt.layout === '1') Object.assign(results, benchLayout(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5)));
+  if (opt.int8 === '1') results.int8x4x4 = benchInt8(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5));
   if (opt.tf === '1') for (const [rb, cb] of [[4, 8], [8, 4], [8, 8], [4, 16]]) results[`tf${rb}x${cb}`] = benchTF(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5), rb, cb);
   model.destroy();
   return { rows, inD, outD, xHalf, renderer: c.renderer, results };
@@ -324,4 +326,160 @@ precision highp float; out vec4 f; void main() { f = vec4(0.0); }`;
   }
   return { ms: Number(ms.toFixed(1)), gflops: Number(((2 * rows * inD * outD) / ms / 1e6).toFixed(0)), maxRelErr: Number(err.toExponential(2)),
     maxComponents: gl.getParameter(gl.MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS), note: `kernel only, ${RB}x${CB} via transform feedback` };
+}
+
+/** Block-64 int8 weights (16 codes a texel, a float scale a block) against packed-half activations, 4 x 4 blocks. */
+function benchInt8(c, x32, w32, rows, inD, outD, reps) {
+  const wv = c.read(w32, outD * inD);
+  const nblk = inD / 64;
+  const codes = new Int8Array(outD * inD);
+  const scales = new Float32Array(outD * nblk);
+  for (let b = 0; b < outD * nblk; b += 1) {
+    let m = 0;
+    for (let i = 0; i < 64; i += 1) m = Math.max(m, Math.abs(wv[b * 64 + i]));
+    const sc = m / 127 || 1;
+    scales[b] = sc;
+    for (let i = 0; i < 64; i += 1) codes[b * 64 + i] = Math.round(wv[b * 64 + i] / sc);
+  }
+  const wq = c.tensor((outD * inD) / 2, 'packed');
+  c.writeU32(wq, new Uint32Array(codes.buffer));
+  const st = c.upload(scales);
+  const xp = c.kernel('i8-pack8', `
+uniform sampler2D S;
+uvec4 compute(int t) {
+  vec4 a = tx(S, 2 * t), b = tx(S, 2 * t + 1);
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
+}`, c.tensor(rows * inD, 'packed'), { inputs: { S: x32 } });
+  const rq = Math.ceil(rows / 4);
+  const run = () => {
+    const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD));
+    c.kernel('linear4x4i8', `
+uniform highp usampler2D X; uniform highp usampler2D Wq; uniform sampler2D Sc; uniform int uIn; uniform int uOut; uniform int uRows;
+vec4 sb(uint u) { return vec4(float(int(u << 24u) >> 24), float(int(u << 16u) >> 24), float(int(u << 8u) >> 24), float(int(u) >> 24)); }
+void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
+  int e0 = t * 4;
+  int q = e0 / uOut;
+  int o0 = e0 - q * uOut;
+  int xb = uIn / 8;
+  int wb = uIn / 16;
+  int nblk = uIn / 64;
+  int xw = textureSize(X, 0).x;
+  int ww = textureSize(Wq, 0).x;
+  ivec2 xc[4];
+  for (int i = 0; i < 4; i++) { int r = min(q * 4 + i, uRows - 1); int xt = r * xb; xc[i] = ivec2(xt % xw, xt / xw); }
+  ivec2 wc[4];
+  for (int j = 0; j < 4; j++) { int wt = (o0 + j) * wb; wc[j] = ivec2(wt % ww, wt / ww); }
+  vec4 a[4];
+  for (int i = 0; i < 4; i++) a[i] = vec4(0.0);
+  for (int blk = 0; blk < nblk; blk++) {
+    vec4 sc = vec4(el(Sc, o0 * nblk + blk), el(Sc, (o0 + 1) * nblk + blk), el(Sc, (o0 + 2) * nblk + blk), el(Sc, (o0 + 3) * nblk + blk));
+    vec4 acc[4];
+    for (int i = 0; i < 4; i++) acc[i] = vec4(0.0);
+    for (int s = 0; s < 4; s++) {
+      int k16 = blk * 4 + s;
+      uvec4 u0 = texelFetch(Wq, wc[0] + ivec2(k16, 0), 0), u1 = texelFetch(Wq, wc[1] + ivec2(k16, 0), 0);
+      uvec4 u2 = texelFetch(Wq, wc[2] + ivec2(k16, 0), 0), u3 = texelFetch(Wq, wc[3] + ivec2(k16, 0), 0);
+      mat4 m0 = mat4(sb(u0.x), sb(u1.x), sb(u2.x), sb(u3.x));
+      mat4 m1 = mat4(sb(u0.y), sb(u1.y), sb(u2.y), sb(u3.y));
+      mat4 m2 = mat4(sb(u0.z), sb(u1.z), sb(u2.z), sb(u3.z));
+      mat4 m3 = mat4(sb(u0.w), sb(u1.w), sb(u2.w), sb(u3.w));
+      for (int i = 0; i < 4; i++) {
+        uvec4 x0 = texelFetch(X, xc[i] + ivec2(2 * k16, 0), 0), x1 = texelFetch(X, xc[i] + ivec2(2 * k16 + 1, 0), 0);
+        acc[i] += vec4(unpackHalf2x16(x0.x), unpackHalf2x16(x0.y)) * m0 + vec4(unpackHalf2x16(x0.z), unpackHalf2x16(x0.w)) * m1
+          + vec4(unpackHalf2x16(x1.x), unpackHalf2x16(x1.y)) * m2 + vec4(unpackHalf2x16(x1.z), unpackHalf2x16(x1.w)) * m3;
+      }
+    }
+    for (int i = 0; i < 4; i++) a[i] += acc[i] * sc;
+  }
+  r0 = a[0]; r1 = a[1]; r2 = a[2]; r3 = a[3];
+}`, qs, { inputs: { X: xp, Wq: wq, Sc: st }, ints: { uIn: inD, uOut: outD, uRows: rows }, work: inD * 2 });
+    return qs;
+  };
+  const ms = timeIt(c, run, reps);
+  // One block against the quantized weights on the CPU.
+  const qs = run();
+  const got = c.read(qs[0], 4);
+  const xs = c.read(x32, inD);
+  let err = 0;
+  for (let j = 0; j < 4; j += 1) {
+    let d = 0; for (let k = 0; k < inD; k += 1) d += xs[k] * codes[j * inD + k] * scales[j * nblk + (k >> 6)];
+    err = Math.max(err, Math.abs(got[j] - d) / (Math.abs(d) + 1));
+  }
+  qs.forEach((t) => t.free());
+  return { ms: Number(ms.toFixed(1)), gflops: Number(((2 * rows * inD * outD) / ms / 1e6).toFixed(0)), maxRelErr: Number(err.toExponential(2)), note: 'kernel only, int8 weights' };
+}
+
+/** The 4 x 8 packed matmul with its output planes at several texture widths, and with a prefetching loop. */
+function benchLayout(c, x32, w32, rows, inD, outD, reps) {
+  const pack = (src, size) => c.kernel('lay-pack8', `
+uniform sampler2D S;
+uvec4 compute(int t) {
+  vec4 a = tx(S, 2 * t), b = tx(S, 2 * t + 1);
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
+}`, c.tensor(size, 'packed'), { inputs: { S: src } });
+  const wf = c.elementwise('lay-copyf', 'el(X, e)', outD * inD, { inputs: { X: w32 } });
+  const xp = pack(x32, rows * inD);
+  const wp = pack(wf, outD * inD);
+  const rq = Math.ceil(rows / 4);
+  const texels = (rq * outD) / 8;
+  const plane = (width) => {
+    const h = Math.ceil(texels / width);
+    const tex = c._texture(width, h, 'packed');
+    return { tex, w: width, h, half: 'packed', texels, size: texels * 8, free() { c.gl.deleteTexture(tex); } };
+  };
+  const body = (prefetch) => `
+uniform highp usampler2D X; uniform highp usampler2D Wt; uniform int uIn; uniform int uOut; uniform int uRows;
+void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
+uvec4 pk(vec4 a, vec4 b) { return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw)); }
+void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
+  int e0 = t * 8;
+  int q = e0 / uOut;
+  int o0 = e0 - q * uOut;
+  int ib = uIn / 8;
+  int xw = textureSize(X, 0).x;
+  int ww = textureSize(Wt, 0).x;
+  ivec2 xc[4];
+  for (int i = 0; i < 4; i++) { int r = min(q * 4 + i, uRows - 1); int xt = r * ib; xc[i] = ivec2(xt % xw, xt / xw); }
+  ivec2 wc[8];
+  for (int j = 0; j < 8; j++) { int wt = (o0 + j) * ib; wc[j] = ivec2(wt % ww, wt / ww); }
+  vec4 a[4], b[4];
+  for (int i = 0; i < 4; i++) { a[i] = vec4(0.0); b[i] = vec4(0.0); }
+  ${prefetch ? `uvec4 wn[8], xn[4];
+  for (int j = 0; j < 8; j++) wn[j] = texelFetch(Wt, wc[j], 0);
+  for (int i = 0; i < 4; i++) xn[i] = texelFetch(X, xc[i], 0);
+  for (int k = 0; k < ib; k++) {
+    uvec4 wcur[8], xcur[4];
+    for (int j = 0; j < 8; j++) wcur[j] = wn[j];
+    for (int i = 0; i < 4; i++) xcur[i] = xn[i];
+    if (k + 1 < ib) {
+      ivec2 dn = ivec2(k + 1, 0);
+      for (int j = 0; j < 8; j++) wn[j] = texelFetch(Wt, wc[j] + dn, 0);
+      for (int i = 0; i < 4; i++) xn[i] = texelFetch(X, xc[i] + dn, 0);
+    }
+    vec4 l[8], h[8];
+    for (int j = 0; j < 8; j++) unpack8(wcur[j], l[j], h[j]);` : `for (int k = 0; k < ib; k++) {
+    ivec2 dk = ivec2(k, 0);
+    vec4 l[8], h[8];
+    for (int j = 0; j < 8; j++) unpack8(texelFetch(Wt, wc[j] + dk, 0), l[j], h[j]);`}
+    mat4 wla = mat4(l[0], l[1], l[2], l[3]), wha = mat4(h[0], h[1], h[2], h[3]);
+    mat4 wlb = mat4(l[4], l[5], l[6], l[7]), whb = mat4(h[4], h[5], h[6], h[7]);
+    for (int i = 0; i < 4; i++) {
+      vec4 xl, xh;
+      unpack8(${prefetch ? 'xcur[i]' : 'texelFetch(X, xc[i] + dk, 0)'}, xl, xh);
+      a[i] += xl * wla + xh * wha;
+      b[i] += xl * wlb + xh * whb;
+    }
+  }
+  r0 = pk(a[0], b[0]); r1 = pk(a[1], b[1]); r2 = pk(a[2], b[2]); r3 = pk(a[3], b[3]);
+}`;
+  const out = {};
+  for (const [label, width, prefetch] of [['w3072', 3072, false], ['w256', 256, false], ['w64', 64, false], ['w32', 32, false], ['w3072-prefetch', 3072, true]]) {
+    const run = () => {
+      const qs = [0, 1, 2, 3].map(() => plane(width));
+      c.kernel(`lay-4x8${prefetch ? '-pf' : ''}`, body(prefetch), qs, { inputs: { X: xp, Wt: wp }, ints: { uIn: inD, uOut: outD, uRows: rows }, work: inD * 3 });
+      return qs;
+    };
+    out[label] = { ms: Number(timeIt(c, run, reps).toFixed(2)) };
+  }
+  return out;
 }

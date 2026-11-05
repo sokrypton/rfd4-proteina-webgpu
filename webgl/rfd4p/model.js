@@ -13,6 +13,8 @@ import { aeMasks, decoderPostprocess, decoderSeqFeatures } from '../../cpu/rfd4p
 import { encoderPostprocess, encoderSeqFeatures } from '../../cpu/rfd4p/encoder.js';
 
 const ACT = { relu: 1, sigmoid: 2 };
+// (Block kernels' output planes in narrow textures, 64 texels wide, tried: the matmul alone ~10% faster in
+// tools/gpu/bench-webgl.js --layout=1, the whole pass ~4% slower, M2.)
 
 export class Rfd4pModelGL {
   /** @param {object} weights tensors by name (`.data` decodes on read), as the CPU reference takes them */

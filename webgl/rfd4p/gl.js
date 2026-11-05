@@ -91,7 +91,6 @@ export class GLContext {
   /** `per`: values a texel holds (4 floats, or 8 packed halves). */
   _shape(size, per = 4, rowTexels = 0) {
     const texels = Math.max(1, Math.ceil(size / per));
-    // `rowTexels`: the width a multiple of it, so no row of that many texels wraps (TW suits the model's own widths).
     const w = rowTexels > 0 && TW % rowTexels ? Math.min(texels, rowTexels * Math.max(1, Math.floor(TW / rowTexels))) : Math.min(TW, texels);
     const h = Math.ceil(texels / w);
     if (h > this.maxSize) throw new Error(`tensor of ${size} floats is too large for this GPU's textures`);
@@ -136,6 +135,19 @@ export class GLContext {
     t.weight = weight;
     this.write(t, src);
     return t;
+  }
+
+  /** Raw 32-bit words into a packed (RGBA32UI) tensor's texture (int8 codes, sixteen a texel, or packed halves). */
+  writeU32(t, words) {
+    const gl = this.gl;
+    const full = t.w * t.h * 4;
+    let data = words;
+    if (words.length !== full) {
+      data = new Uint32Array(full);
+      data.set(words.subarray(0, Math.min(words.length, full)));
+    }
+    gl.bindTexture(gl.TEXTURE_2D, t.tex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, t.w, t.h, gl.RGBA_INTEGER, gl.UNSIGNED_INT, data);
   }
 
   write(t, src) {
