@@ -803,3 +803,16 @@ carried over:
   step k) gives a 530 ms pass at steps 0, 1, 5 and 30 alike, kernel by kernel. So the inflation is outside the trunk's
   arithmetic: first-use pipeline creation on the non-fused path (decoder, heads) or the live frame's Mol* scene
   competing for the GPU, not a data-dependent kernel.
+- **Tried, not shipped: float16 token activations on the stock path** (the attention's q/k/v/logits/output and SwiGLU's
+  buffers, tied to `hasSubgroupMatrix` in `blocks.js`): 1.23-1.34x on the token GEMMs, a pass ~3% / 2% faster, but the
+  outputs were wrong. Three producer/consumer gates also key on `hasSubgroupMatrix` and must move with it: `linear()`'s
+  split-reduce-norm `outF16` (SwiGLU's input), `pairToBias`'s `bF16` (the softmax reads the bias as `lF16`), and
+  `attPv`'s stock branch, which passes no f16 flags at all. With all three following one `tokF16` getter the NaNs went,
+  but `cycle0 s` was still 0.15 off (`check-rfd4p`), with the direct GEMM off too, so a further stock kernel mishandles
+  one of these f16 buffers. Not found by reading; the next step is diffing the token buffers (xn, qkv, qk, logits, att,
+  hsw) layer 0, tokF16 on against off.
+- **Tried and lost: sharing operand loads across a subgroup** (`bench-wgpu-direct` `["shf", "w" | "both"]`: each lane
+  loads one of its column group's 8 weight texels / its row quad's 4 x texels, the rest by `subgroupShuffle`): 0.69 / 0.50
+  TFLOP/s against 2.33. Loads are not what limits the direct kernel; neither are the f16 -> f32 conversions (bitcast
+  route 2.34, f16 products 2.15). Exact-fit small-M tiles (25 x 8 for n = 100) lose to 32 x 8 (non-power-of-two
+  workgroups); 4 x 4 or 2 x 8 a thread win only for 768-column outputs, about 1 ms a step.

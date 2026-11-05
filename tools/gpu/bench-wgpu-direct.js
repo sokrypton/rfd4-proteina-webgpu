@@ -86,13 +86,13 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
 }`;
 }
 
-/** R rows x C columns a thread (C a multiple of 4), storage buffers, `tr` row groups x `cg` column groups a workgroup. */
-function blockSource(R, C, tr, cg) {
-  const wg = tr * cg;
-  const rs = [...Array(R).keys()];
-  const cs = [...Array(C).keys()];
-  const c4 = C / 4;
-  return `
+/**
+ * The 4 x 8 direct kernel (64 x 4 workgroup) with operand loads shared across a subgroup of 32 lanes: lane
+ * (row quad rq 0..7, column group cg 0..3) loads one of the 8 weight texels its column group needs and one of the 4 x
+ * texels its row quad needs, and takes the rest by subgroupShuffle ('w': weights only; 'both': x too).
+ */
+function shuffleSource(both) {
+  return `enable subgroups;
 @group(0) @binding(0) var<storage, read> A: array<vec4<u32>>;
 @group(0) @binding(1) var<storage, read> W: array<vec4<u32>>;
 @group(0) @binding(2) var<storage, read_write> Cc: array<vec4<u32>>;
@@ -100,6 +100,70 @@ struct P { m: u32, k: u32, n: u32, groupsX: u32 }
 @group(0) @binding(3) var<uniform> p: P;
 fn lo(u: vec4<u32>) -> vec4<f32> { return vec4<f32>(unpack2x16float(u.x), unpack2x16float(u.y)); }
 fn hi(u: vec4<u32>) -> vec4<f32> { return vec4<f32>(unpack2x16float(u.z), unpack2x16float(u.w)); }
+@compute @workgroup_size(256)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(subgroup_invocation_id) sl: u32) {
+  let g = wid.x + wid.y * p.groupsX;
+  let nb = p.n / 8u;
+  let cbs = nb / 4u;
+  let gq = g / cbs;
+  let gc = g - gq * cbs;
+  let q = gq * 64u + li / 4u;
+  let ob = gc * 4u + li % 4u;
+  let o0 = ob * 8u;
+  let ib = p.k / 8u;
+  let rq = sl / 4u;
+  let cg = sl % 4u;
+  let wMine = (o0 + rq) * ib;
+  let xMine = min(q * 4u + cg, p.m - 1u) * ib;
+  var r: array<u32, 4>;
+  for (var i = 0u; i < 4u; i++) { r[i] = min(q * 4u + i, p.m - 1u) * ib; }
+  var a0 = vec4<f32>(0.0); var a1 = vec4<f32>(0.0); var a2 = vec4<f32>(0.0); var a3 = vec4<f32>(0.0);
+  var b0 = vec4<f32>(0.0); var b1 = vec4<f32>(0.0); var b2 = vec4<f32>(0.0); var b3 = vec4<f32>(0.0);
+  for (var k = 0u; k < ib; k++) {
+    let wm = W[wMine + k];
+    ${[0, 1, 2, 3, 4, 5, 6, 7].map((j) => `let w${j} = subgroupShuffle(wm, ${j}u * 4u + cg);`).join(' ')}
+    let wla = mat4x4<f32>(lo(w0), lo(w1), lo(w2), lo(w3));
+    let wha = mat4x4<f32>(hi(w0), hi(w1), hi(w2), hi(w3));
+    let wlb = mat4x4<f32>(lo(w4), lo(w5), lo(w6), lo(w7));
+    let whb = mat4x4<f32>(hi(w4), hi(w5), hi(w6), hi(w7));
+    ${both ? `let xm = A[xMine + k];
+    ${[0, 1, 2, 3].map((i) => `let x${i} = subgroupShuffle(xm, rq * 4u + ${i}u);`).join(' ')}` : [0, 1, 2, 3].map((i) => `let x${i} = A[r[${i}] + k];`).join(' ')}
+    a0 += lo(x0) * wla + hi(x0) * wha; a1 += lo(x1) * wla + hi(x1) * wha;
+    a2 += lo(x2) * wla + hi(x2) * wha; a3 += lo(x3) * wla + hi(x3) * wha;
+    b0 += lo(x0) * wlb + hi(x0) * whb; b1 += lo(x1) * wlb + hi(x1) * whb;
+    b2 += lo(x2) * wlb + hi(x2) * whb; b3 += lo(x3) * wlb + hi(x3) * whb;
+  }
+  if (q * 4u >= p.m) { return; }
+  let rowT = p.n / 8u;
+  let base = q * 4u;
+  Cc[base * rowT + o0 / 8u] = vec4<u32>(pack2x16float(a0.xy), pack2x16float(a0.zw), pack2x16float(b0.xy), pack2x16float(b0.zw));
+  if (base + 1u < p.m) { Cc[(base + 1u) * rowT + o0 / 8u] = vec4<u32>(pack2x16float(a1.xy), pack2x16float(a1.zw), pack2x16float(b1.xy), pack2x16float(b1.zw)); }
+  if (base + 2u < p.m) { Cc[(base + 2u) * rowT + o0 / 8u] = vec4<u32>(pack2x16float(a2.xy), pack2x16float(a2.zw), pack2x16float(b2.xy), pack2x16float(b2.zw)); }
+  if (base + 3u < p.m) { Cc[(base + 3u) * rowT + o0 / 8u] = vec4<u32>(pack2x16float(a3.xy), pack2x16float(a3.zw), pack2x16float(b3.xy), pack2x16float(b3.zw)); }
+}`;
+}
+
+/** R rows x C columns a thread (C a multiple of 4), storage buffers, `tr` row groups x `cg` column groups a workgroup. */
+function blockSource(R, C, tr, cg, math = 'f32') {
+  const wg = tr * cg;
+  const rs = [...Array(R).keys()];
+  const cs = [...Array(C).keys()];
+  const c4 = C / 4;
+  // math: 'f32' (unpack2x16float), 'cvt' (bitcast to vec4<f16>, converted), 'f16' (f16 products, an 8-k partial
+  // added to the f32 accumulators).
+  const h = math !== 'f32';
+  return `${h ? 'enable f16;' : ''}
+@group(0) @binding(0) var<storage, read> A: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> W: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read_write> Cc: array<vec4<u32>>;
+struct P { m: u32, k: u32, n: u32, groupsX: u32 }
+@group(0) @binding(3) var<uniform> p: P;
+${math === 'f16' ? `fn lo(u: vec4<u32>) -> vec4<f16> { return vec4<f16>(bitcast<vec2<f16>>(u.x), bitcast<vec2<f16>>(u.y)); }
+fn hi(u: vec4<u32>) -> vec4<f16> { return vec4<f16>(bitcast<vec2<f16>>(u.z), bitcast<vec2<f16>>(u.w)); }`
+    : math === 'cvt' ? `fn lo(u: vec4<u32>) -> vec4<f32> { return vec4<f32>(vec4<f16>(bitcast<vec2<f16>>(u.x), bitcast<vec2<f16>>(u.y))); }
+fn hi(u: vec4<u32>) -> vec4<f32> { return vec4<f32>(vec4<f16>(bitcast<vec2<f16>>(u.z), bitcast<vec2<f16>>(u.w))); }`
+      : `fn lo(u: vec4<u32>) -> vec4<f32> { return vec4<f32>(unpack2x16float(u.x), unpack2x16float(u.y)); }
+fn hi(u: vec4<u32>) -> vec4<f32> { return vec4<f32>(unpack2x16float(u.z), unpack2x16float(u.w)); }`}
 @compute @workgroup_size(${wg})
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
   let g = wid.x + wid.y * p.groupsX;
@@ -117,9 +181,9 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   ${rs.map((i) => [...Array(c4).keys()].map((b) => `var a${i}_${b} = vec4<f32>(0.0);`).join(' ')).join('\n  ')}
   for (var k = 0u; k < ib; k++) {
     ${[...Array(c4).keys()].map((b) => `let wu${b}_0 = W[wr${b * 4} + k]; let wu${b}_1 = W[wr${b * 4 + 1} + k]; let wu${b}_2 = W[wr${b * 4 + 2} + k]; let wu${b}_3 = W[wr${b * 4 + 3} + k];
-    let wl${b} = mat4x4<f32>(lo(wu${b}_0), lo(wu${b}_1), lo(wu${b}_2), lo(wu${b}_3));
-    let wh${b} = mat4x4<f32>(hi(wu${b}_0), hi(wu${b}_1), hi(wu${b}_2), hi(wu${b}_3));`).join('\n    ')}
-    ${rs.map((i) => `{ let x = A[r${i} + k]; let xl = lo(x); let xh = hi(x); ${[...Array(c4).keys()].map((b) => `a${i}_${b} += xl * wl${b} + xh * wh${b};`).join(' ')} }`).join('\n    ')}
+    let wl${b} = mat4x4<${math === 'f16' ? 'f16' : 'f32'}>(lo(wu${b}_0), lo(wu${b}_1), lo(wu${b}_2), lo(wu${b}_3));
+    let wh${b} = mat4x4<${math === 'f16' ? 'f16' : 'f32'}>(hi(wu${b}_0), hi(wu${b}_1), hi(wu${b}_2), hi(wu${b}_3));`).join('\n    ')}
+    ${rs.map((i) => `{ let x = A[r${i} + k]; let xl = lo(x); let xh = hi(x); ${[...Array(c4).keys()].map((b) => (math === 'f16' ? `a${i}_${b} += vec4<f32>(xl * wl${b} + xh * wh${b});` : `a${i}_${b} += xl * wl${b} + xh * wh${b};`)).join(' ')} }`).join('\n    ')}
   }
   let rowT = p.n / 8u;
   ${c4 === 1 ? rs.map((i) => `if (q * ${R}u + ${i}u < p.m) { Cc[(q * ${R}u + ${i}u) * rowT + o0 / 8u] = vec4<u32>(pack2x16float(a${i}_0.xy), pack2x16float(a${i}_0.zw), 0u, 0u); }`).join('\n  ') : ''}
@@ -159,16 +223,13 @@ export async function main(device, args) {
   const cBufs = [0, 1].map(() => device.createBuffer({ size: ui(M * N * 2), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC }));
   const configs = opt.configs ? JSON.parse(opt.configs) : [['tex', 256, 8, 16], ['tex', 256, 8, 8], ['tex', 256, 8, 32], ['buf', 256, 8, 16], ['buf', 256, 8, 8], ['buf', 256, 8, 32], ['buf', 128, 8, 8], ['tex', 128, 8, 4]];
   for (const cfgItem of configs) {
-    if (cfgItem[0] === 'blk') {
-      const [, R, C, tr, cg] = cfgItem;
-      const nbk = N / C;
-      if (nbk % cg) continue;
-      const groups = Math.ceil(Math.ceil(M / R) / tr) * (nbk / cg);
+    if (cfgItem[0] === 'shf') {
+      const groups = Math.ceil(Math.ceil(M / 4) / 64) * (N / 8 / 4);
       const gx = Math.min(groups, 65535);
       const gy = Math.ceil(groups / gx);
       const uni = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
       device.queue.writeBuffer(uni, 0, new Uint32Array([M, K, N, gx]));
-      const pipe = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: blockSource(R, C, tr, cg) }), entryPoint: 'main' } });
+      const pipe = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: shuffleSource(cfgItem[1] === 'both') }), entryPoint: 'main' } });
       const bgs = cBufs.map((cb) => device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [
         { binding: 0, resource: { buffer: aBuf } }, { binding: 1, resource: { buffer: wBuf } }, { binding: 2, resource: { buffer: cb } }, { binding: 3, resource: { buffer: uni } }] }));
       const run = (count) => {
@@ -180,7 +241,42 @@ export async function main(device, args) {
       await run(2);
       let best = Infinity;
       for (let r = 0; r < 3; r += 1) { const t0 = performance.now(); await run(reps); best = Math.min(best, (performance.now() - t0) / reps); }
-      results[`blk-r${R}-c${C}-${tr}x${cg}`] = { ms: Number(best.toFixed(2)), tflops: Number(((2 * M * K * N) / best / 1e9).toFixed(2)) };
+      const rb = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(cBufs[1], 0, rb, 0, 16);
+      device.queue.submit([enc.finish()]);
+      await rb.mapAsync(GPUMapMode.READ);
+      const got = Array.from(new Uint16Array(rb.getMappedRange().slice(0))).map(h2f);
+      rb.unmap();
+      const ah = new Uint16Array(aWords.buffer);
+      const wh = new Uint16Array(wWords.buffer);
+      const want = [0, 1, 2, 3, 4, 5, 6, 7].map((o) => { let sm = 0; for (let k = 0; k < K; k += 1) sm += h2f(ah[k]) * h2f(wh[o * K + k]); return sm; });
+      results[`shf-${cfgItem[1]}`] = { ms: Number(best.toFixed(2)), tflops: Number(((2 * M * K * N) / best / 1e9).toFixed(2)),
+        maxRel: Number(Math.max(...want.map((w, i) => Math.abs(w - got[i]) / Math.max(1, Math.abs(w)))).toExponential(1)) };
+      continue;
+    }
+    if (cfgItem[0] === 'blk') {
+      const [, R, C, tr, cg, math = 'f32'] = cfgItem;
+      const nbk = N / C;
+      if (nbk % cg) continue;
+      const groups = Math.ceil(Math.ceil(M / R) / tr) * (nbk / cg);
+      const gx = Math.min(groups, 65535);
+      const gy = Math.ceil(groups / gx);
+      const uni = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(uni, 0, new Uint32Array([M, K, N, gx]));
+      const pipe = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: blockSource(R, C, tr, cg, math) }), entryPoint: 'main' } });
+      const bgs = cBufs.map((cb) => device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [
+        { binding: 0, resource: { buffer: aBuf } }, { binding: 1, resource: { buffer: wBuf } }, { binding: 2, resource: { buffer: cb } }, { binding: 3, resource: { buffer: uni } }] }));
+      const run = (count) => {
+        const enc = device.createCommandEncoder();
+        for (let i = 0; i < count; i += 1) { const pass = enc.beginComputePass(); pass.setPipeline(pipe); pass.setBindGroup(0, bgs[i & 1]); pass.dispatchWorkgroups(gx, gy); pass.end(); }
+        device.queue.submit([enc.finish()]);
+        return device.queue.onSubmittedWorkDone();
+      };
+      await run(2);
+      let best = Infinity;
+      for (let r = 0; r < 3; r += 1) { const t0 = performance.now(); await run(reps); best = Math.min(best, (performance.now() - t0) / reps); }
+      results[`blk-r${R}-c${C}-${tr}x${cg}-${math}`] = { ms: Number(best.toFixed(2)), tflops: Number(((2 * M * K * N) / best / 1e9).toFixed(2)) };
       continue;
     }
     const [mode, wg, cols, tileR] = cfgItem;
