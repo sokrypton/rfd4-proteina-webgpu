@@ -419,8 +419,15 @@ export function realizeExpandableSegments(atoms, { segmentLengths = null, rng = 
     if (idx > 0 && sameChain(idx - 1)) prevResId = cur.res_id[idx - 1];
     if (idx + 1 < cur.nAtoms && sameChain(idx + 1)) nextResId = cur.res_id[idx + 1];
     const tucked = prevResId !== null && cur.res_id[idx] <= prevResId;
-    const baseResId = tucked ? prevResId + 1 : cur.res_id[idx];
-    const shift = tucked ? (nextResId === null ? 0 : Math.max(0, baseResId + segLen - nextResId)) : segLen - 1;
+    // Bonded to the residues either side (a block joining two parts of a chain), the new residues follow the one before
+    // and the rest of the chain follows them, with no hole in the numbering: a block placed where residues were cut
+    // (A1-39, new, A42-68) used to start at the sentinel's 41, the design numbered 39, 41, ..., the viewer breaking the
+    // cartoon at the hole and the model reading a residue missing there. For a sentinel numbered after the residue
+    // before it with the next one after it, as upstream numbers them, this is upstream's rule.
+    const joined = prevNeighbor !== -1 && nextNeighbor !== -1 && prevResId !== null && nextResId !== null;
+    const baseResId = tucked || joined ? prevResId + 1 : cur.res_id[idx];
+    const shift = joined ? baseResId + segLen - nextResId
+      : tucked ? (nextResId === null ? 0 : Math.max(0, baseResId + segLen - nextResId)) : segLen - 1;
 
     const afterLen = cur.nAtoms - (idx + 1);
     const prefix = idx > 0 ? sliceAtoms(cur, 0, idx) : null;

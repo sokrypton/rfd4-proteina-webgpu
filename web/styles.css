@@ -365,7 +365,6 @@ body:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]),
 [data-host-theme="light"] #viewer, [data-host-theme="light"] #viewer .msp-plugin,
 [data-host-theme="light"] #viewer .msp-viewport, [data-host-theme="light"] #viewer .msp-canvas { background: #fff !important; }
 
-
 /* Hide redundant / layout-breaking Mol* internal buttons */
 #viewer .msp-viewport-controls-buttons > div:has(> button[title="Toggle Controls Panel"]),
 #viewer .msp-viewport-controls-buttons > div:has(> button[title="Toggle Expanded Viewport"]),
@@ -578,7 +577,6 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
 
 
 
-
 .rfd4p-warning {
   margin: 6px 0 0;
   padding: 6px 8px;
@@ -662,7 +660,6 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   padding: 2px 6px;
   font-size: 11px;
 }
-
 
 
 /* Chain colours (studio-src/src/chain-colors.ts), shared by viewer, sequence bar and design panel. */
@@ -778,11 +775,9 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   margin-top: 12px;
 }
 
-
 /* One renderer (Mol*) is offered, so Studio's "Backend" menu (renderer choice) has nothing to choose. */
 .viewer-menu[data-menu="overflow"],
 #viewer-backend { display: none !important; }
-
 
 .rfd4p-add-structure {
   display: grid;
@@ -1220,11 +1215,12 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 #rfd4p-fetch-status:empty { display: none; }
 #rfd4p-studio-card:not(.rfd4p-starting) #rfd4p-examples { display: none; }
 .rfd4p-piece-pop .rfd4p-pop-static { align-self: center; font-size: 12px; }
-/* A piece's residues: from – to boxes per range, as new residues' length. */
+/* A piece's residues: from – to boxes, as new residues' length. */
 .rfd4p-piece-pop .rfd4p-ranges-wrap, .rfd4p-piece-pop .rfd4p-ranges { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .rfd4p-piece-pop .rfd4p-range { display: inline-flex; align-items: center; gap: 4px; }
 .rfd4p-piece-pop .rfd4p-range input { width: 64px; }
-#rfd4p-studio-card .rfd4p-range-x, .rfd4p-piece-pop .rfd4p-range-x, .rfd4p-piece-pop .rfd4p-range-add {
-  min-height: 0; height: 22px; padding: 0 6px; border: 0; background: none; color: var(--text-muted, #b1b3b9); cursor: pointer; font-size: 14px;
-}
-.rfd4p-piece-pop .rfd4p-range-add:hover, .rfd4p-piece-pop .rfd4p-range-x:hover { color: var(--text, #ededef); }
+/* The "+" popup: label, what to add, Add, the Add buttons in one column. */
+.rfd4p-piece-pop .rfd4p-slot-row { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+
+/* The "+" popup's boxes, new residues' and the entry's, one size so they line up. */
+.rfd4p-piece-pop .rfd4p-slot-row input[type=number] { width: 64px; }

@@ -18,10 +18,12 @@ const ADVANCED_KEY = 'rfd4p-advanced-editor';
  * (`_buildRecipe`), and shown finished: the set-up a user would make, captioned with its entry. Each matches the bundled
  * Studio example of the same name (`example`, web/studio/examples) model input for model input: the same entries,
  * residues, held atoms, chain names and order. The two 2KL8 examples are the exception: the bundled file lacks residues
- * 8–27 (a bug in it), so they keep the whole protein and drop only the His tag. Without a network that bundled example
- * opens instead.
- * Steps: `fetch` (ID and chains), `start` (a bundled Studio example instead, no download), `add` (another entry's chains, as + pdb), `piece` (open the piece holding `at`, fill
- * `set`, Apply), `removePiece` (× the piece holding `at`), `removeNew` (× the new residues left in a chain), `addSeq`,
+ * 8–27 (a bug in it), so they keep the whole protein and drop only the His tag. If an entry cannot be fetched the
+ * example does not open (the page says why); there is no stand-in.
+ * Steps: `fetch` (ID and chains), `start` (a bundled Studio example instead, no download), `add` (another entry's chains,
+ * as + pdb), `piece` (open the piece holding `at`, fill `set`, `from`/`to` its Residues, Apply), `pick` (residues picked
+ * as in the viewer, "H99-109", and that popup's `set`: structure, sequence, length), `removePiece` (× the piece holding
+ * `at`), `removeNew` (× the new residues left in a chain), `addSeq`,
  * `newLength` (the chain's `k`-th new piece), `ligand` (pose, held atoms), `chain` (its popup: `name`, `order` from 1),
  * `blocks` (a new chain laid out as blocks, [length, shape] each: "+" after the last, then each block's popup),
  * `partial`.
@@ -30,7 +32,7 @@ const TASKS = [
   { example: 'unconditional', title: 'Protein from scratch', desc: 'A new fold of the length you choose' },
   {
     // The blocks idea: a ferredoxin-like fold drawn as strands, helices and loops, each its own block of new residues.
-    example: 'blueprint', fallback: 'unconditional', title: 'Blueprint', desc: 'A fold drawn as blocks: E-H-E-E-H-E',
+    example: 'blueprint', title: 'Blueprint', desc: 'A fold drawn as blocks: E-H-E-E-H-E',
     recipe: [
       { start: 'unconditional' },
       { blocks: [[6, 'E'], [3, 'C'], [14, 'H'], [3, 'C'], [6, 'E'], [3, 'C'],
@@ -92,7 +94,7 @@ const TASKS = [
       { removeNew: 'H' },
       { piece: 'L', at: 10, set: { structure: 'rigid', keepOnly: 'L1-107' } },
       { removeNew: 'L' },
-      { piece: 'H', at: 100, set: { from: 99, to: 109, structure: 'designed', sequence: 'designed' } },
+      { pick: 'H99-109', set: { structure: 'designed', sequence: 'designed' } },
       { piece: 'T', at: 550, set: { keepOnly: 'T545-580, T591-607', hotspots: 'T557-573, T591-605' } },
       { removeNew: 'T' },
       // The frameworks' fold, as upstream's antibody examples give it (Ig-like, CATH 2.60.40).
@@ -110,16 +112,16 @@ const TASKS = [
       { chain: 'B', name: 'H' },
       { piece: 'H', at: 10, set: { structure: 'rigid', atoms: 'backbone', keepOnly: 'H1-127' } },
       { removeNew: 'H' },
-      { piece: 'H', at: 30, set: { from: 23, to: 38, structure: 'designed', sequence: 'designed', length: [11, 16] } },
-      { piece: 'H', at: 55, set: { from: 53, to: 62, structure: 'designed', sequence: 'designed', length: [8, 12] } },
-      { piece: 'H', at: 105, set: { from: 100, to: 117, structure: 'designed', sequence: 'designed', length: [8, 22] } },
+      { pick: 'H23-38', set: { structure: 'designed', sequence: 'designed', length: [11, 16] } },
+      { pick: 'H53-62', set: { structure: 'designed', sequence: 'designed', length: [8, 12] } },
+      { pick: 'H100-117', set: { structure: 'designed', sequence: 'designed', length: [8, 22] } },
     ],
   },
   {
     example: 'inverse_folding', title: 'Redesign a sequence', desc: 'New sequence for a fixed backbone (PDB 2KL8)', then: 'sequence',
     recipe: [
       { fetch: '2KL8' },
-      { piece: 'A', at: 10, set: { from: 1, to: 79, rest: 'removed' } },
+      { piece: 'A', at: 10, set: { from: 1, to: 79 } },
       { piece: 'A', at: 10, set: { sequence: 'designed' } },
     ],
   },
@@ -127,7 +129,7 @@ const TASKS = [
     example: 'partial_diffusion', title: 'Diversify a structure', desc: 'Variants close to a starting fold (PDB 2KL8)',
     recipe: [
       { fetch: '2KL8' },
-      { piece: 'A', at: 10, set: { from: 1, to: 79, rest: 'removed' } },
+      { piece: 'A', at: 10, set: { from: 1, to: 79 } },
       { partial: true },
     ],
   },
@@ -151,8 +153,6 @@ const HOTSPOT_COLOR = 0xf59e0b;
 
 /** How faded residues the model rebuilds are in the input structure (0 solid, 1 gone). */
 const FREE_TRANSPARENCY = 0.65;
-/** Residues about to be cut, while a popup's ranges are dragged or typed. */
-const CUT_TRANSPARENCY = 0.92;
 
 // The three properties of residues, the same in a sub-card's popup and the selection's: each fixed or free (the model
 // decides), and a structure may also be rigid (kept, moving as one body).
@@ -166,6 +166,23 @@ const POSITION_OPTIONS = [['fixed', 'fixed'], ['anywhere', 'free']];
 // Secondary structure as DSSP's letters, H helix, E strand, C coil (loop): a card reads "6 · E · new", the popup says both.
 const SHAPE_OPTIONS = [['1', 'H helix'], ['2', 'E strand'], ['3', 'C loop'], ['0', 'free']];
 const SHAPE_LETTER = { 1: 'H', 2: 'E', 3: 'C' };
+
+/** A minimal mmCIF of chain `chain`'s residues numbered `nums` in `atoms` (an overlay: the viewer draws it as given). */
+function atomsCif(atoms, chain, nums) {
+  const rows = ['data_overlay', 'loop_', ...['group_PDB', 'id', 'type_symbol', 'label_atom_id', 'label_comp_id', 'label_asym_id',
+    'label_entity_id', 'label_seq_id', 'auth_seq_id', 'auth_asym_id', 'Cartn_x', 'Cartn_y', 'Cartn_z', 'occupancy', 'B_iso_or_equiv',
+    'pdbx_PDB_model_num'].map((k) => `_atom_site.${k}`)];
+  let id = 0;
+  for (let i = 0; i < atoms.nAtoms; i += 1) {
+    if (String(atoms.chain_id[i]) !== chain || !nums.has(Number(atoms.res_id[i]))) continue;
+    const c = atoms.coord[i];
+    if (!c || !Number.isFinite(c[0])) continue;
+    const el = String(atoms.element?.[i] ?? String(atoms.atom_name[i])[0]).toUpperCase() || 'C';
+    const name = String(atoms.atom_name[i]);
+    rows.push(`ATOM ${++id} ${el} ${/['"\s]/.test(name) ? `"${name}"` : name} ${atoms.res_name[i]} ${chain} 1 ${atoms.res_id[i]} ${atoms.res_id[i]} ${chain} ${c[0].toFixed(3)} ${c[1].toFixed(3)} ${c[2].toFixed(3)} 1.00 0.00 1`);
+  }
+  return id ? `${rows.join('\n')}\n` : null;
+}
 const EXPOSURE_OPTIONS = [['1', 'buried'], ['2', 'intermediate'], ['3', 'exposed'], ['0', 'free']];
 const INTERACTION_OPTIONS = [
   ['hbond:1', 'H-bond donor'], ['hbond:2', 'H-bond acceptor'], ['hbond:3', 'H-bond donor or acceptor'],
@@ -630,6 +647,13 @@ export class DesignPanel {
         this._markSelected();
         // A row's own pick has its popup open already.
         if (this.cardPicking) { this.cardPicking = false; this.pop.hidden = true; return; }
+        // A click in the viewer while a row's popup is open (turning the structure) opens no other popup; on a preview
+        // frame its atoms are not the document's, so the pick is let go.
+        if (this.piecePop && !this.piecePop.hidden) {
+          this.pop.hidden = true;
+          if (this.planPreview && this.selectionCount) window.atomworksStudio?.setSelection?.([]);
+          return;
+        }
         this._renderPop();
       });
     });
@@ -929,41 +953,6 @@ export class DesignPanel {
     if (center) window.atomworksStudio.centerOn?.(atoms);
   }
 
-  /** Residues of `atoms` as the viewer names them (chain and author number: what the document's CIF writes). */
-  _viewerResidues(atoms) {
-    const a = this._inputDoc()?.atoms;
-    const out = new Map();
-    for (const i of atoms ?? []) {
-      const residue = Number(a.auth_seq_id?.[i] ?? a.res_id[i]);
-      out.set(`${a.chain_id[i]}|${residue}`, { chain: String(a.chain_id[i]), residue });
-    }
-    return [...out.values()];
-  }
-
-  /**
-   * While a popup's ranges are edited: residues about to be cut nearly vanish, those about to be freed fade as free
-   * ones do. Latest wins; null clears it.
-   */
-  _previewCut(cut, freed) {
-    this.previewWant = { cut: cut?.length ? this._viewerResidues(cut) : null, freed: freed?.length ? this._viewerResidues(freed) : null };
-    if (this.previewBusy || typeof window.atomworksStudio?.setHighlight !== 'function') return;
-    this.previewBusy = true;
-    void (async () => {
-      try {
-        while (this.previewWant) {
-          const { cut: c, freed: f } = this.previewWant;
-          this.previewWant = null;
-          await window.atomworksStudio.setHighlight('cut', c, { transparency: CUT_TRANSPARENCY });
-          await window.atomworksStudio.setHighlight('freed', f, { transparency: FREE_TRANSPARENCY });
-        }
-      } catch (err) {
-        console.warn('Crop preview failed:', err);
-      } finally {
-        this.previewBusy = false;
-      }
-    })();
-  }
-
   _ligandCard(c, l, readonly, remove) {
     // Some atoms held: named, as a residue's are ("N1, C2, N3, C4 fixed"), or counted when the names would not fit.
     const part = l.heldNames && l.heldNames.length <= 24 ? `${l.heldNames} fixed` : `${l.fixedAtoms} of ${l.atoms} atoms fixed`;
@@ -980,81 +969,120 @@ export class DesignPanel {
     if (!m) return null;
     const a = this._inputDoc()?.atoms;
     const SRC = a?.annotations?.['annotation_src-component_1_atom'];
-    const label = c.atomIndices?.map((i) => String(SRC?.[i] ?? '')).find(Boolean);
+    // A residue's name in the entry ("A38"), not a new residue's placeholder text.
+    const label = c.atomIndices?.map((i) => String(SRC?.[i] ?? '')).find((x) => /^[A-Za-z]+-?\d/.test(x));
     const chain = /^([A-Za-z]+)/.exec(label ?? '')?.[1] ?? m[2] ?? c.id;
     return { id: m[1].toUpperCase(), chain };
   }
 
-  /** "+" in a chain from an entry: new residues of a length, or residues of the entry brought back where they belong. */
+  /** "+" in a chain from an entry: new residues of a length, or residues of the entry brought back where it was pressed. */
   _slotPop(c, entry, atom, before) {
     const lenMin = el('input', { type: 'number', min: 1, max: 1000, value: 5, 'aria-label': 'Fewest new residues' });
     const lenMax = el('input', { type: 'number', min: 1, max: 1000, value: 10, 'aria-label': 'Most new residues' });
+    // Changed through the chain's plan: what is added goes exactly here, and the preview is the chain as Add would
+    // leave it. Residues of the entry not in the chain, as from – to boxes like a piece's Residues: the stretch missing
+    // here to start with, with a drag bar over it; any others typed (a motif residue removed, put back in place), the
+    // boxes empty then.
+    const plan = this._plan(c);
+    const src = plan.source;
+    const gap = this._missingAt(plan, atom, before);
+    const keptAt = (x, y) => this._partsWithInsert(plan, atom, before, { kind: 'kept', lo: x, hi: y });
+    const inChain = new Set(plan.parts.filter((q) => q.kind === 'kept')
+      .flatMap((q) => src.slice(Math.min(q.from, q.to), Math.max(q.from, q.to) + 1).map((r) => r.num)));
+    const missing = src.filter((r) => !inChain.has(r.num));
     const from = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
-      placeholder: `${entry.chain}50, ${entry.chain}45–52`, 'aria-label': `Residues of PDB ${entry.id}` });
+      value: gap ? `${gap.lo}–${gap.hi}` : '', 'aria-label': `Residues of PDB ${entry.id}` });
+    // The range typed, if every residue in it is the entry's and not in the chain; else why not.
+    const pick = () => {
+      const m = /^\s*(-?\d+)\s*(?:[-–]\s*(-?\d+))?\s*$/.exec(from.value);
+      if (!m) return { error: 'Residues as from – to' };
+      const x = Math.min(Number(m[1]), Number(m[2] ?? m[1]));
+      const y = Math.max(Number(m[1]), Number(m[2] ?? m[1]));
+      const run = src.filter((r) => r.num >= x && r.num <= y);
+      if (!run.length) return { error: `PDB ${entry.id} chain ${entry.chain} has no residues ${x}–${y}` };
+      const there = run.find((r) => inChain.has(r.num));
+      if (there) return { error: `${entry.chain}${there.num} is in the chain already` };
+      return { lo: run[0].num, hi: run.at(-1).num };
+    };
+    const ranges = () => { const r = pick(); return r.error ? null : [[r.lo, r.hi]]; };
+    let bar = null;
+    if (gap) {
+      const iLo = src.findIndex((r) => r.num === gap.lo);
+      const iHi = src.findLastIndex((r) => r.num === gap.hi);
+      const piece = { start: gap.lo, end: gap.hi, atomIndices: [] };
+      bar = this._cropBar(c, piece, src, { lo: gap.lo, hi: gap.hi, iLo, iHi, present: inChain }, from, ranges);
+    }
+    // Nothing is shown until there is something to add: where none of the entry is missing beside the "+" (after the
+    // chain's last residue), the boxes start empty, or the preview joined some far residue onto this end.
+    const show = () => {
+      const r = from.value.trim() ? pick() : { error: 'none' };
+      // Not a range yet (a box emptied to type a new number): the last preview stays, as a piece's popup keeps it;
+      // going back to the document and building the preview again on the next key was a blink.
+      if (!r.error) this._previewParts(c, keptAt(r.lo, r.hi));
+    };
+    if (missing.length) {
+      from.addEventListener('input', show);
+      queueMicrotask(show);
+    }
+    const reach = { lo: missing[0]?.num, hi: missing.at(-1)?.num };
     const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
     const go = (fn) => async () => {
       note.textContent = '';
       try { await fn(); this._closePop(); } catch (err) { note.textContent = String(err?.message ?? err).replace(/^Error:\s*/, ''); }
     };
+    const rebuild = async (parts, what) => {
+      if (!await this._mutate('/chains/rebuild', { chain_id: c.id, parts })) throw new Error(this.lastError ?? `could not ${what}`);
+    };
     const addNew = go(async () => {
       const lo = Math.max(1, Number(lenMin.value) || 1);
       const hi = Math.max(lo, Number(lenMax.value) || lo);
-      if (!await this._mutate('/segments', { minimum: lo, maximum: hi, atom_index: atom, before, new_chain: false, chain_id: null, chain_type: 'polypeptide(L)' })) {
-        throw new Error(this.lastError ?? 'could not add them');
-      }
+      await rebuild(this._partsWithInsert(plan, atom, before, { kind: 'new', min: lo, max: hi }), 'add them');
     });
-    const addBack = go(() => this._bringBack(c, entry, from.value, { atom, before }));
+    const addBack = go(async () => {
+      const r = pick();
+      if (r.error) throw new Error(r.error);
+      await rebuild(keptAt(r.lo, r.hi), 'bring them back');
+    });
     from.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); void addBack(); } });
-    const row = (label, ...kids) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...kids);
+    const row = (label, ...kids) => el('div', { class: 'rfd4p-pop-row rfd4p-slot-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...kids);
     return [
       this._popHead('Add here'),
-      row('New', el('span', { class: 'rfd4p-pop-inline' }, lenMin, el('span', { text: '–' }), lenMax),
+      // A blank as wide as the entry row's chain letter, so both rows' boxes line up.
+      row('New', el('span', { class: 'rfd4p-pop-inline' }, missing.length ? el('span', { text: entry.chain, style: 'visibility:hidden' }) : null,
+        lenMin, el('span', { text: '–' }), lenMax),
         el('button', { type: 'button', class: 'secondary compact', text: 'Add', onclick: addNew })),
-      row(`PDB ${entry.id}`, from, el('button', { type: 'button', class: 'secondary compact', text: 'Add', onclick: addBack })),
+      // Residues of the entry are offered only when some are not in the chain.
+      missing.length ? row(`PDB ${entry.id}`, el('span', { class: 'rfd4p-pop-inline' }, el('span', { text: entry.chain }), this._rangeBoxes(from, reach)),
+        el('button', { type: 'button', class: 'secondary compact', text: 'Add', onclick: addBack })) : null,
+      bar,
       note,
     ];
   }
 
   /**
-   * Residues of chain `c`'s entry (`text`: "A50, A45–52") brought back into it, fixed as loaded, where the "+" was
-   * pressed (`at`), or else next to their neighbours in the entry (`/residues/insert`); those already in the chain are
-   * left as they are. One Undo.
+   * The entry's residues missing where a "+" sits in `plan` ({ lo, hi, src }): between the nearest kept runs either
+   * side (past new residues), after the one before it (to the chain's end) or before the one after it (from the
+   * chain's start). Null when none are missing there, or the runs either side are out of the entry's order (a motif).
    */
-  async _bringBack(c, entry, text, at = null) {
-    const { residues, bad } = parseResidueList(text, entry.chain);
-    if (bad.length) throw new Error(`Not understood: ${bad.join(' ')}`);
-    const want = new Set(residues.filter((r) => r.chain === entry.chain).map((r) => r.resId));
-    if (!want.size) throw new Error(`Residues of chain ${entry.chain}, e.g. ${entry.chain}50`);
-    const a = this._inputDoc().atoms;
-    const SRC = a.annotations?.['annotation_src-component_1_atom'];
-    const here = new Set();
-    for (const i of c.atomIndices) {
-      const m = /^[A-Za-z]+(-?\d+)$/.exec(String(SRC?.[i] ?? ''));
-      here.add(m ? Number(m[1]) : Number(a.res_id[i]));
-    }
-    for (const n of here) want.delete(n);
-    if (!want.size) throw new Error('Those residues are already in the chain');
-    const res = await fetch(`https://files.rcsb.org/download/${entry.id}.cif`);
-    if (!res.ok) throw new Error(`Could not fetch ${entry.id} (RCSB ${res.status})`);
-    const doc = await this._openEntry(await res.text(), entry.id, [entry.chain], { keepUnresolved: true });
-    const b = doc.atoms;
-    const drop = [];
-    for (let i = 0; i < b.nAtoms; i += 1) if (String(b.chain_id[i]) !== entry.chain || !want.has(Number(b.res_id[i]))) drop.push(i);
-    if (drop.length) doc.deleteAtoms(drop);
-    if (!doc.atoms.nAtoms) throw new Error(`PDB ${entry.id} chain ${entry.chain} has no such residues`);
-    const d = doc.atoms;
-    const src = doc._ensureAnnotationArray('annotation_src-component_1_atom', { default: '' });
-    for (let i = 0; i < d.nAtoms; i += 1) src[i] = `${entry.chain}${d.res_id[i]}`;
-    const sid = `rfd4p_back_${Date.now().toString(36)}`;
-    getSharedStudioStore().sessions.set(sid, doc);
-    try {
-      if (!await this._mutate('/residues/insert', { from_session_id: sid, chain_id: c.id, source_chain: entry.chain,
-        at_atom: at?.atom ?? null, before: Boolean(at?.before) })) {
-        throw new Error(this.lastError ?? 'could not bring them back');
-      }
-    } finally {
-      getSharedStudioStore().sessions.delete(sid);
-    }
+  _missingAt(plan, atom, before) {
+    const src = plan?.source;
+    if (!src?.length) return null;
+    const parts = plan.parts;
+    const k = parts.findIndex((q) => (q.kind === 'new' ? q.atom === atom : q.atoms?.includes(atom)));
+    if (k < 0) return null;
+    // The nearest kept runs either side, past any new residues between (A1–40, 5–10 new, "+": A41 on are missing).
+    const kept = (q) => q?.kind === 'kept';
+    let i = before ? k - 1 : k;
+    while (i >= 0 && !kept(parts[i])) i -= 1;
+    let j = before ? k : k + 1;
+    while (j < parts.length && !kept(parts[j])) j += 1;
+    if (!kept(parts[i]) && !kept(parts[j])) return null;
+    const lo = kept(parts[i]) ? Math.max(parts[i].from, parts[i].to) + 1 : 0;
+    const hi = kept(parts[j]) ? Math.min(parts[j].from, parts[j].to) - 1 : src.length - 1;
+    if (lo > hi) return null;
+    // None of them anywhere else in the chain (in the entry's order, none would be).
+    if (parts.some((q) => kept(q) && Math.max(q.from, q.to) >= lo && Math.min(q.from, q.to) <= hi)) return null;
+    return { lo: src[lo].num, hi: src[hi].num, src };
   }
 
   /** Where a chain's coordinates come from, as the page knows it; null for chains made here (+ seq, + lig). */
@@ -1085,14 +1113,18 @@ export class DesignPanel {
     for (const id of chains) this.sources.get(doc).set(id, label);
   }
 
-  /** The one popup, next to the row that opened it. `build` makes its content; closed by Cancel, Escape or a click outside (× on a row means delete). */
+  /**
+   * The one popup, next to the row that opened it. `build` makes its content; closed by its ×, Escape or a click outside
+   * it other than in the viewer (× on a row means delete).
+   */
   _openPop(anchor, build) {
     if (!this.piecePop) {
       this.piecePop = el('div', { class: 'rfd4p-piece-pop', role: 'dialog', hidden: true });
       document.body.append(this.piecePop);
       this._movable(this.piecePop);
       document.addEventListener('pointerdown', (ev) => {
-        if (!this.piecePop.hidden && !this.piecePop.contains(ev.target) && !ev.target.closest?.('.rfd4p-sub-open')) this._closePop();
+        // Not the viewer: the structure is turned to see what the popup changes from another side.
+        if (!this.piecePop.hidden && !this.piecePop.contains(ev.target) && !ev.target.closest?.('.rfd4p-sub-open, #viewer')) this._closePop();
       }, true);
       document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') this._closePop(); });
     }
@@ -1150,12 +1182,109 @@ export class DesignPanel {
 
   _closePop() {
     if (this.piecePop) this.piecePop.hidden = true;
-    if (this.previewOn) { this.previewOn = false; this._previewCut(null, null); }
+    this._endPreview();
     // A row's residues were selected only while its popup was open.
     if (this.cardSelected) {
       this.cardSelected = false;
       if (!this.building) window.atomworksStudio?.setSelection?.([]);
     }
+  }
+
+  /** Chain `c` as a plan (studio-api.js `chainPlan`): kept runs of the chain as loaded and new blocks, in order; or null. */
+  _plan(c) {
+    return this._inputDoc()?.chainPlan?.(c.id) ?? null;
+  }
+
+  /** `plan`'s parts as `rebuildChain` takes them (kept runs by source number, new blocks by their placeholder). */
+  _parts(plan) {
+    return plan.parts.map((q) => (q.kind === 'kept' ? { kind: 'kept', lo: q.lo, hi: q.hi }
+      : q.kind === 'own' ? { kind: 'own', atoms: q.atoms } : { kind: 'new', atom: q.atom, min: q.min, max: q.max }));
+  }
+
+  /** `plan` with piece `p`'s residues (source numbers `p.start`-`p.end`) replaced by `lo`-`hi`, in the same place. */
+  _partsWithRange(plan, p, lo, hi) {
+    const out = [];
+    let placed = false;
+    for (const q of this._parts(plan)) {
+      if (q.kind !== 'kept' || q.hi < p.start || q.lo > p.end) { out.push(q); continue; }
+      if (q.lo < p.start) out.push({ kind: 'kept', lo: q.lo, hi: p.start - 1 });
+      if (!placed && lo <= hi) { out.push({ kind: 'kept', lo, hi }); placed = true; }
+      if (q.hi > p.end) out.push({ kind: 'kept', lo: p.end + 1, hi: q.hi });
+    }
+    return out;
+  }
+
+  /** `plan` with `part` added where a "+" sits (beside the part holding `atom`, before or after it). */
+  _partsWithInsert(plan, atom, before, part) {
+    const parts = this._parts(plan);
+    const k = plan.parts.findIndex((q) => (q.kind === 'new' ? q.atom === atom : q.atoms?.includes(atom)));
+    const at = k < 0 ? parts.length : before ? k : k + 1;
+    parts.splice(at, 0, part);
+    return parts;
+  }
+
+  /**
+   * The chain as Apply would leave it (`parts`), shown in the viewer in the document's place, one connected structure,
+   * with the chain as loaded faint behind it: its residues not in `parts`. Adding and editing look the same: what
+   * Apply keeps solid, the rest faint. `_endPreview` puts the document back.
+   */
+  _previewParts(c, parts) {
+    const studio = window.atomworksStudio;
+    if (typeof studio?.renderFrame !== 'function') return;
+    // Drawn as soon as asked; while a draw is under way only the latest request is kept, drawn when it is done, so a
+    // drag never queues up frames behind it.
+    this.previewNext = { c, parts, gen: this.previewGen ?? 0 };
+    if (this.previewBusy) return;
+    this.previewBusy = true;
+    void (async () => {
+      try {
+        while (this.previewNext) {
+          const { c: chain, parts: want, gen } = this.previewNext;
+          this.previewNext = null;
+          if (gen !== (this.previewGen ?? 0)) continue;
+          const doc = this._inputDoc();
+          if (!doc) break;
+          let copy;
+          try { copy = doc.previewRebuild(chain.id, want); } catch { continue; }
+          // The first frame of a preview loads a scene of its own, which takes the faint chain with it: drawn again then.
+          if (!this.planPreview) this.ghostKey = null;
+          this.planPreview = true;
+          // The card's selection would draw over the preview (an outline, and sticks where atoms are picked).
+          if (this.cardSelected) { this.cardSelected = false; studio.setSelection?.([]); }
+          await studio.renderFrame(copy.toCif(), doc.name ?? 'preview', { keepCamera: true });
+          // Closed while it was drawn: the document back, not this frame (then the next popup's preview, if one is waiting).
+          if (gen !== (this.previewGen ?? 0)) { this.planPreview = false; await studio.showDocument?.(); continue; }
+          // The chain as loaded, faint and a little thinner, drawn once per popup and never changed: the residues Apply
+          // keeps hide it inside their own cartoon, so only those left out show, and a drag swaps nothing (an overlay
+          // changed per step blinked, or pulsed while two were up; one updated in place, or a lone residue, came out as
+          // solid sticks).
+          const source = doc.chainSources?.get(chain.id);
+          if (!source) continue;
+          const key = chain.id;
+          if (key === this.ghostKey) continue;
+          this.ghostKey = key;
+          this.ghostOn = true;
+          const all = new Set();
+          for (let i = 0; i < source.atoms.nAtoms; i += 1) if (String(source.atoms.chain_id[i]) === source.chain) all.add(Number(source.atoms.res_id[i]));
+          const color = Number.parseInt(String(studio.chainColor?.(chain.id) ?? '#8899aa').replace('#', ''), 16);
+          await studio.setOverlay('rfd4p-ghost', null);
+          await studio.setOverlay('rfd4p-ghost', atomsCif(source.atoms, source.chain, all),
+            { representation: 'cartoon', alpha: 0.22, color, sizeFactor: 0.17, label: 'The chain as loaded' });
+        }
+      } finally {
+        this.previewBusy = false;
+      }
+    })();
+  }
+
+  /** The document back in the viewer after a preview, and the faint chain away. */
+  _endPreview() {
+    this.previewNext = null;
+    this.previewGen = (this.previewGen ?? 0) + 1;
+    this.ghostKey = null;
+    const studio = window.atomworksStudio;
+    if (this.ghostOn) { this.ghostOn = false; void studio?.setOverlay?.('rfd4p-ghost', null); }
+    if (this.planPreview) { this.planPreview = false; void studio?.showDocument?.(); }
   }
 
   /** A popup's title, and its × (top right) to close it. */
@@ -1282,14 +1411,10 @@ export class DesignPanel {
   /** Existing residues: which of them, then three properties (structure, sequence, position), each fixed or designed. */
   _piecePop(c, p) {
     const a = this._inputDoc()?.atoms;
-    // Which residues: one range or several ("1–40, 60–115"). Those outside go as Rest says; gaps between are free.
-    const whole = `${p.start}–${p.end}`;
+    // Which residues: one range of the chain as loaded, from – to and a drag bar. Narrowed, the piece is cropped;
+    // widened, residues come back as loaded, up to its neighbours. Applied as the chain's plan (`/chains/rebuild`).
     const residuesText = el('input', { type: 'text', class: 'rfd4p-pop-text', spellcheck: 'false', autocomplete: 'off',
-      value: whole, 'aria-label': 'Residues', title: 'One range or several, e.g. 1–40, 60–115' });
-    const rest = el('select', { 'aria-label': 'Rest', title: 'What happens to the residues of this piece outside the ranges' });
-    for (const [v, text] of [['removed', 'removed'], ['designed', 'free'], ['unchanged', 'unchanged']]) rest.append(el('option', { value: v, text }));
-    const betweenMin = el('input', { type: 'number', min: 1, max: 1000, placeholder: 'as is', 'aria-label': 'Fewest between' });
-    const betweenMax = el('input', { type: 'number', min: 1, max: 1000, placeholder: 'as is', 'aria-label': 'Most between' });
+      value: `${p.start}–${p.end}`, 'aria-label': 'Residues' });
     const now = this._properties(p);
     const select = (label, options, value, title) => {
       const s = el('select', { 'aria-label': label, title });
@@ -1302,74 +1427,54 @@ export class DesignPanel {
       'Fixed: these amino acids. Free: the model writes them.');
     const position = select('Position in chain', POSITION_OPTIONS, now.position,
       'Free: the model chooses where in the chain these residues go.');
-    // The chain as it was loaded: the ranges may reach past the piece, up to its neighbours, bringing residues back.
-    const src = this._inputDoc()?.sourceResidues?.(c.id) ?? null;
+    // A residue taken from the entry and renumbered (a motif's "A38") has no range here: its number would not match.
+    const plan = p.source ? null : this._plan(c);
+    const src = plan?.source?.length ? plan.source : null;
     const reach = (() => {
       const k = c.pieces.indexOf(p);
       const iS = src ? src.findIndex((r) => r.num === p.start) : -1;
       const iE = src ? src.findLastIndex((r) => r.num === p.end) : -1;
       if (iS < 0 || iE < 0 || k < 0) return { lo: p.start, hi: p.end, iLo: -1, iHi: -1 };
       const present = new Set((a ? c.polymerAtomIndices : []).map((i) => Number(a.res_id[i])));
+      // Up to the next residue in the job, past new residues too: brought back, they go beside this piece.
       let iLo = iS;
-      if (c.pieces[k - 1]?.kind !== 'new') while (iLo > 0 && !present.has(src[iLo - 1].num)) iLo -= 1;
+      while (iLo > 0 && !present.has(src[iLo - 1].num)) iLo -= 1;
       let iHi = iE;
-      if (c.pieces[k + 1]?.kind !== 'new') while (iHi < src.length - 1 && !present.has(src[iHi + 1].num)) iHi += 1;
+      while (iHi < src.length - 1 && !present.has(src[iHi + 1].num)) iHi += 1;
       return { lo: src[iLo].num, hi: src[iHi].num, iLo, iHi, present };
     })();
-    // The ranges typed, clamped to what the piece can reach, sorted; null when not understood.
+    const editable = reach.iLo >= 0;
+    // The range typed ([[lo, hi]], clamped to what the piece can reach); null when not understood.
+    const parse = () => {
+      const m = /^\s*(?:[A-Za-z_]+)?(-?\d+)\s*(?:[-–]\s*(-?\d+))?\s*$/.exec(residuesText.value);
+      return m ? [Number(m[1]), Number(m[2] ?? m[1])] : null;
+    };
     const ranges = () => {
-      const text = residuesText.value.replace(/\s*[-–]\s*/g, '-').trim();
-      if (!text) return [[p.start, p.end]];
-      const out = [];
-      for (const tok of text.split(/[\s,;]+/).filter(Boolean)) {
-        const m = /^(?:[A-Za-z_]+)?(-?\d+)(?:-(-?\d+))?$/.exec(tok);
-        if (!m) return null;
-        const x = Number(m[1]);
-        const y = m[2] == null ? x : Number(m[2]);
-        const lo = Math.max(reach.lo, Math.min(x, y));
-        const hi = Math.min(reach.hi, Math.max(x, y));
-        if (lo <= hi) out.push([lo, hi]);
-      }
-      return out.length ? out.sort((u, v) => u[0] - v[0]) : null;
+      if (!editable) return [[p.start, p.end]];
+      const xy = parse();
+      if (!xy) return null;
+      const lo = Math.max(reach.lo, Math.min(...xy));
+      const hi = Math.min(reach.hi, Math.max(...xy));
+      return lo <= hi ? [[lo, hi]] : null;
     };
-    const span = () => {
-      const rs = ranges() ?? [[p.start, p.end]];
-      const lo = rs[0][0];
-      const hi = Math.max(...rs.map(([, y]) => y));
-      const inRanges = (id) => rs.some(([x, y]) => id >= x && id <= y);
-      const atoms = a ? p.atomIndices.filter((i) => inRanges(Number(a.res_id[i]))) : p.atomIndices;
-      // Residues past the piece, from lo to hi, come back from the chain as loaded (those in gaps free).
-      const grow = (src ?? []).filter((r) => r.num >= lo && r.num <= hi && (r.num < p.start || r.num > p.end)).map((r) => r.num);
-      const grown = grow.filter(inRanges).length;
-      return { lo, hi, ranges: rs, atoms, grow, count: (a ? new Set(atoms.map((i) => `${a.res_id[i]}${a.ins_code[i]}`)).size : p.count) + grown };
+    // Residues the range holds once applied: the chain's as loaded from lo to hi.
+    const count = () => {
+      const [[lo, hi]] = ranges() ?? [[p.start, p.end]];
+      return src && editable ? src.filter((r) => r.num >= lo && r.num <= hi).length : p.count;
     };
-    // Designed residues may change length: a length other than their count makes them new residues.
-    const count = span().count;
-    const lenMin = el('input', { type: 'number', min: 1, max: 1000, value: count, 'aria-label': 'Fewest residues' });
-    const lenMax = el('input', { type: 'number', min: 1, max: 1000, value: count, 'aria-label': 'Most residues' });
+    const lenMin = el('input', { type: 'number', min: 1, max: 1000, value: count(), 'aria-label': 'Fewest residues' });
+    const lenMax = el('input', { type: 'number', min: 1, max: 1000, value: count(), 'aria-label': 'Most residues' });
     let lenTouched = false;
     for (const input of [lenMin, lenMax]) input.addEventListener('input', () => { lenTouched = true; });
-    // What the ranges would cut or free, shown in the structure as they are edited.
+    // The chain as Apply would leave it, drawn as the range is edited, the chain as loaded faint behind it.
     const preview = () => {
       const rs = ranges();
-      if (!rs || !a) return;
-      const { lo, hi } = span();
-      const inRanges = (id) => rs.some(([x, y]) => id >= x && id <= y);
-      const id = (i) => Number(a.res_id[i]);
-      const ends = rest.value === 'unchanged' ? [] : p.atomIndices.filter((i) => id(i) < lo || id(i) > hi);
-      const gaps = p.atomIndices.filter((i) => id(i) >= lo && id(i) <= hi && !inRanges(id(i)));
-      this.previewOn = true;
-      // The residues kept stay selected; the rest fade (nearly gone if cut).
-      const kept = p.atomIndices.filter((i) => inRanges(id(i)));
-      if (kept.length && this.cardSelected) this._selectFromCard(kept, { center: false });
-      this._previewCut(rest.value === 'removed' ? ends : [], rest.value === 'designed' ? [...ends, ...gaps] : gaps);
+      if (rs && plan && editable) this._previewParts(c, this._partsWithRange(plan, p, rs[0][0], rs[0][1]));
     };
     residuesText.addEventListener('input', () => {
-      if (!lenTouched) lenMin.value = lenMax.value = String(span().count);
-      sync();
+      if (!lenTouched) lenMin.value = lenMax.value = String(count());
       preview();
     });
-    rest.addEventListener('change', preview);
     const lengthRow = el('div', { class: 'rfd4p-pop-row', title: 'Each design picks one length from this range' },
       el('span', { class: 'rfd4p-pop-label', text: 'Length' }), el('span', { class: 'rfd4p-pop-inline' }, lenMin, el('span', { text: '–' }), lenMax));
     const atomsField = this._atomsField(now.atoms, now.names);
@@ -1384,10 +1489,7 @@ export class DesignPanel {
       const free = structure.value === 'designed' && sequence.value === 'designed';
       if (free) position.value = 'fixed';
       positionRow.hidden = free;
-      const { ranges: rs, lo, hi } = span();
-      lengthRow.hidden = !free || rs.length > 1;
-      restRow.hidden = lo <= p.start && hi >= p.end;
-      betweenRow.hidden = rs.length < 2;
+      lengthRow.hidden = !free;
     };
     structure.addEventListener('change', sync);
     sequence.addEventListener('change', sync);
@@ -1418,14 +1520,8 @@ export class DesignPanel {
 
     // Residues typed that this piece cannot reach (they are another piece's): say whose, and offer to open it.
     const elsewhere = () => {
-      const text = residuesText.value.replace(/\s*[-–]\s*/g, '-').trim();
-      const nums = [];
-      for (const tok of text.split(/[\s,;]+/).filter(Boolean)) {
-        const m = /^(?:[A-Za-z_]+)?(-?\d+)(?:-(-?\d+))?$/.exec(tok);
-        if (!m) return null;
-        nums.push(Number(m[1]), Number(m[2] ?? m[1]));
-      }
-      const out = nums.find((x) => x < reach.lo || x > reach.hi);
+      const xy = parse();
+      const out = xy?.find((x) => x < reach.lo || x > reach.hi);
       if (out == null) return null;
       return { num: out, piece: c.pieces.find((q) => q !== p && q.kind === 'kept' && out >= q.start && out <= q.end) ?? null };
     };
@@ -1445,7 +1541,8 @@ export class DesignPanel {
         }
         return;
       }
-      if (!ranges()) { note.textContent = 'Residues as ranges, e.g. 1–40, 60–115'; return; }
+      const rs = ranges();
+      if (!rs) { note.textContent = `Residues from ${reach.lo} to ${reach.hi}`; return; }
       // Hotspots are the chain's, whichever of its pieces the popup was opened from.
       const hotspots = residuesIn(hot.value, c.polymerAtomIndices);
       if (hotspots.bad.length || hotspots.missing.length) {
@@ -1454,10 +1551,6 @@ export class DesignPanel {
         return;
       }
       const hotChanged = formatResidueList(c.id, [...hotspots.want], hotspots.atomsOf) !== formatResidueList(c.id, c.hotspotResIds, c.hotspotAtoms);
-      // Shape, exposure and interaction first: they change no atoms, so the edits after see the same indices.
-      const rangeAtoms = span().atoms;
-      const extraEdits = extra.edits(rangeAtoms, this._interactionAtoms(rangeAtoms, atomsField.value()));
-      if (extraEdits.length && !await this._batch(extraEdits)) return;
       // Re-read after each edit: atom indices move when residues are added or removed.
       const chainNow = () => this._spec()?.chains.find((x) => x.id === c.id);
       const setHotspots = async () => {
@@ -1477,6 +1570,9 @@ export class DesignPanel {
           return;
         }
         this._closePop();
+        // Shape, exposure and interaction first: they change no atoms, so the edits after see the same indices.
+        const extraEdits = extra.edits(p.atomIndices, this._interactionAtoms(p.atomIndices, atomsField.value()));
+        if (extraEdits.length && !await this._batch(extraEdits)) return;
         // The residues kept, in the order typed, take this popup's properties: side chains and anywhere are part of the
         // set-up (an enzyme's site); "can move", other atoms or a designed sequence are set on them after.
         const which = atomsField.value();
@@ -1493,92 +1589,55 @@ export class DesignPanel {
         return;
       }
       this._closePop();
-      if (!await setHotspots()) return;
-      const { lo, hi, ranges: rs, atoms, count: n } = span();
-      const want = { structure: structure.value, atoms: atomsField.value(), sequence: sequence.value, position: position.value };
-      const free = { structure: 'designed', sequence: 'designed', position: 'fixed' };
-      // Residues by number, re-read after each edit (atom indices move when residues are removed or replaced).
-      const ids = (i) => Number(a.res_id[i]);
-      const gapIds = rs.slice(1).map(([x], k) => [rs[k][1] + 1, x - 1]).filter(([x, y]) => x <= y);
-      const endIds = [...new Set(p.atomIndices.map(ids).filter((id) => id < lo || id > hi))];
-      const atomsOf = (test) => {
-        const doc = this._inputDoc()?.atoms;
-        return (chainNow()?.polymerAtomIndices ?? []).filter((i) => !/^\d+-\d+$/.test(String(doc.res_name[i])) && test(Number(doc.res_id[i])));
+      const [[lo, hi]] = rs;
+      // A new range: the chain rebuilt to its plan (order, numbering and bonds all from it); residues brought back come
+      // in as loaded and take the popup's settings below with the rest.
+      const grew = lo < p.start || hi > p.end;
+      if (editable && (lo !== p.start || hi !== p.end)) {
+        if (!await this._mutate('/chains/rebuild', { chain_id: c.id, parts: this._partsWithRange(plan, p, lo, hi) })) return;
+      }
+      const mine = () => {
+        const doc = this._inputDoc().atoms;
+        return (chainNow()?.polymerAtomIndices ?? [])
+          .filter((i) => !/^\d+-\d+$/.test(String(doc.res_name[i])) && Number(doc.res_id[i]) >= lo && Number(doc.res_id[i]) <= hi);
       };
-      const inGap = (id) => gapIds.some(([x, y]) => id >= x && id <= y);
+      const atoms = editable ? mine() : p.atomIndices;
+      // Shape, exposure and interaction: they change no atoms, so the edits after see the same indices.
+      const extraEdits = extra.edits(atoms, this._interactionAtoms(atoms, atomsField.value()));
+      if (extraEdits.length && !await this._batch(extraEdits)) return;
+      if (!await setHotspots()) return;
+      const want = { structure: structure.value, atoms: atomsField.value(), sequence: sequence.value, position: position.value };
       const atomsNow = now.atoms === 'named' ? this._atomNames(now.names).join(',') : now.atoms;
       const atomsWant = Array.isArray(want.atoms) ? want.atoms.join(',') : want.atoms;
       const changed = want.structure !== now.structure || want.sequence !== now.sequence || want.position !== now.position
         || (want.structure !== 'designed' && atomsWant !== atomsNow);
-      // One edit for the settings: the ranges take the popup's, gaps between them are free, and so is the rest when
-      // asked; residues already free stay as they are.
-      const parts = [];
-      if (changed) parts.push({ p, atoms, want });
-      const nowFree = now.structure === 'designed' && now.sequence === 'designed';
-      if (!nowFree) {
-        const gaps = p.atomIndices.filter((i) => inGap(ids(i)));
-        if (gaps.length) parts.push({ p, atoms: gaps, want: free });
-        if (rest.value === 'designed') {
-          const ends = p.atomIndices.filter((i) => ids(i) < lo || ids(i) > hi);
-          if (ends.length) parts.push({ p, atoms: ends, want: free });
-        }
-      }
-      if (parts.length && !await this._applyPieces(parts)) return;
-      if (rest.value === 'removed' && endIds.length) {
-        const gone = new Set(endIds);
-        if (!await this._mutate('/delete', { atom_indices: atomsOf((id) => gone.has(id)) })) return;
-      }
-      // Residues past the piece come back from the chain as loaded, with the popup's settings (free in the gaps).
-      const grow = span().grow;
-      if (grow.length) {
-        if (!await this._mutate('/residues/restore', { chain_id: c.id, res_ids: grow })) return;
-        const inRanges = (id) => rs.some(([x, y]) => id >= x && id <= y);
-        const back = new Set(grow);
-        const kept = atomsOf((id) => back.has(id) && inRanges(id));
-        const loose = atomsOf((id) => back.has(id) && !inRanges(id));
-        const more = [kept.length && { p: { kind: 'kept' }, atoms: kept, want }, loose.length && { p: { kind: 'kept' }, atoms: loose, want: free }].filter(Boolean);
-        if (more.length && !await this._applyPieces(more)) return;
-      }
+      // Residues brought back come as loaded (fixed); they take the popup's settings when those are not that.
+      const asLoaded = want.structure === 'fixed' && want.sequence === 'fixed' && want.position === 'fixed' && (want.atoms === 'all' || !want.atoms);
+      if (atoms.length && (changed || (grew && !asLoaded)) && !await this._applyPieces([{ p, atoms: editable ? mine() : atoms, want }])) return;
       // Lengths last: free residues of another length become new residues.
-      const bMin = Math.round(Number(betweenMin.value));
-      const bMax = Math.round(Number(betweenMax.value));
-      if (!betweenRow.hidden && (bMin > 0 || bMax > 0)) {
-        const lo2 = Math.max(1, bMin || bMax);
-        const hi2 = Math.max(lo2, bMax || bMin);
-        for (const [x, y] of [...gapIds].reverse()) {
-          const gap = atomsOf((id) => id >= x && id <= y);
-          if (gap.length && !await this._mutate('/segments/replace', { atom_indices: gap, minimum: lo2, maximum: hi2 })) return;
-        }
-      }
       if (!lengthRow.hidden && lenTouched) {
+        const n = count();
         const min = Math.max(1, Math.round(Number(lenMin.value)) || n);
         const max = Math.max(min, Math.round(Number(lenMax.value)) || n);
-        if (min !== n || max !== n) {
-          const [x, y] = rs[0];
-          await this._mutate('/segments/replace', { atom_indices: atomsOf((id) => id >= x && id <= y), minimum: min, maximum: max });
-        }
+        if (min !== n || max !== n) await this._mutate('/segments/replace', { atom_indices: editable ? mine() : atoms, minimum: min, maximum: max });
       }
     };
 
     const row = (label, ...children) => el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: label }), ...children);
-    // A residue taken from the entry and renumbered (a motif's "A38", residue 1 of its new chain) is named as the card
-    // names it, by the entry, with nothing to crop: its numbering here would not match the card.
-    const crop = !p.source && src && reach.iLo >= 0 && src.length > 1 ? this._cropBar(c, p, src, reach, residuesText, ranges) : null;
+    const crop = editable && src.length > 1 ? this._cropBar(c, p, src, reach, residuesText, ranges) : null;
     const positionRow = row('Position', position);
-    const restRow = row('Rest', rest);
-    const betweenRow = el('div', { class: 'rfd4p-pop-row', title: 'The residues between the ranges are free; a length makes them new residues, each design picking one length' },
-      el('span', { class: 'rfd4p-pop-label', text: 'Between' }), el('span', { class: 'rfd4p-pop-inline' }, betweenMin, el('span', { text: '–' }), betweenMax));
     sync();
+    // The chain as loaded, its residues not in the job see-through, from the moment the popup opens.
+    if (plan && editable) queueMicrotask(() => this._previewParts(c, this._parts(plan)));
+    const name = `${c.id}${p.start}${p.end !== p.start ? `–${p.end}` : ''}`;
     return [
       this._popHead(this._pieceText(c, p)),
-      // The ranges first: narrowing them is how a loaded structure is cut to the part that matters.
-      p.source
-        ? row('Residues', el('span', { class: 'rfd4p-pop-static', text: p.source,
-          title: `From the entry's ${p.source}; ${c.id}${p.start}${p.end !== p.start ? `–${p.end}` : ''} in this chain` }))
-        : row('Residues', el('span', { class: 'rfd4p-pop-inline' }, el('span', { text: c.id }), this._rangeBoxes(residuesText, reach))),
+      // The range first: narrowing it is how a loaded structure is cut to the part that matters.
+      editable
+        ? row('Residues', el('span', { class: 'rfd4p-pop-inline' }, el('span', { text: c.id }), this._rangeBoxes(residuesText, reach)))
+        : row('Residues', el('span', { class: 'rfd4p-pop-static', text: p.source ?? name,
+          title: p.source ? `From the entry's ${p.source}; ${name} in this chain` : undefined })),
       crop,
-      restRow,
-      betweenRow,
       row('Structure', structure),
       atomsRow,
       row('Sequence', sequence),
@@ -1693,47 +1752,35 @@ export class DesignPanel {
   /**
    * The chain as it was loaded, as a bar: this piece's ranges on it, the chain's other residues muted, and a handle at
    * each end. Dragging a handle in crops the piece, out brings residues back (up to its neighbours); it edits the
-   * Residues field, so Rest, Between and Apply work as typed.
+   * Residues field, so Apply works as typed.
    */
   /**
-   * A piece's residues as a pair of boxes per range (from – to), as new residues take their length, kept in step with
-   * `field`, the hidden text the popup reads ("1–40, 60–115") and the crop bar writes; "+" adds a range, × drops one.
+   * A range of residues as two boxes (from – to), as new residues take their length, kept in step with `field`, the
+   * hidden text the popup reads ("1–40") and the crop bar writes.
    */
   _rangeBoxes(field, reach) {
     field.hidden = true;
     const box = el('span', { class: 'rfd4p-ranges' });
     let writing = false;
-    const read = () => String(field.value).split(/[,;]+/).map((t) => t.trim()).filter(Boolean)
-      .map((t) => { const m = /^(-?\d+)\s*(?:[-–]\s*(-?\d+))?$/.exec(t); return m ? [m[1], m[2] ?? m[1]] : [t, t]; });
+    const read = () => {
+      const m = /^\s*(-?\d+)\s*(?:[-–]\s*(-?\d+))?\s*$/.exec(String(field.value));
+      return m ? [m[1], m[2] ?? m[1]] : ['', ''];
+    };
     const write = () => {
-      const parts = [...box.querySelectorAll('.rfd4p-range')].map((r) => {
-        const [a, b] = [...r.querySelectorAll('input')].map((i) => i.value.trim());
-        return !a && !b ? '' : a === b || !b ? a : !a ? b : `${a}–${b}`;
-      }).filter(Boolean);
+      const [x, y] = [...box.querySelectorAll('input')].map((i) => i.value.trim());
       writing = true;
-      field.value = parts.join(', ');
+      field.value = !x && !y ? '' : x === y || !y ? x : !x ? y : `${x}–${y}`;
       field.dispatchEvent(new Event('input', { bubbles: true }));
       writing = false;
     };
     const draw = () => {
-      const rs = read();
-      if (!rs.length) rs.push(['', '']);
-      box.replaceChildren(...rs.map(([a, b], k) => {
-        const num = (v, label) => {
-          const i = el('input', { type: 'number', value: v, min: reach.lo, max: reach.hi, step: 1, 'aria-label': label });
-          i.addEventListener('input', write);
-          return i;
-        };
-        return el('span', { class: 'rfd4p-range' }, num(a, 'From residue'), el('span', { text: '–' }), num(b, 'To residue'),
-          rs.length > 1 ? el('button', { type: 'button', class: 'rfd4p-range-x', text: '×', title: 'Drop this range', 'aria-label': 'Drop this range',
-            onclick: () => { box.children[k].remove(); write(); draw(); } }) : null);
-      }), el('button', { type: 'button', class: 'rfd4p-range-add', text: '+', title: 'Another range (the residues between become free, or new with a length)',
-        'aria-label': 'Another range', onclick: () => {
-          const last = read().at(-1);
-          const from = last ? Math.min(reach.hi, Number(last[1]) + 2) : reach.lo;
-          field.value = [field.value, `${from}–${reach.hi}`].filter(Boolean).join(', ');
-          field.dispatchEvent(new Event('input', { bubbles: true }));
-        } }));
+      const num = (v, label) => {
+        const i = el('input', { type: 'number', value: v, min: reach.lo, max: reach.hi, step: 1, 'aria-label': label });
+        i.addEventListener('input', write);
+        return i;
+      };
+      const [x, y] = read();
+      box.replaceChildren(el('span', { class: 'rfd4p-range' }, num(x, 'From residue'), el('span', { text: '–' }), num(y, 'To residue')));
     };
     field.addEventListener('input', () => { if (!writing) draw(); });
     draw();
@@ -2054,11 +2101,12 @@ export class DesignPanel {
 
   // ---- selection popup ----------------------------------------------------------------------------------------
 
-  _renderPop() {
+  /** The popup for the residues picked in the viewer or the sequence bar (or `picked`: atoms, as an example is built). */
+  _renderPop(picked = null) {
     const pop = this.pop;
     const doc = this._inputDoc();
-    const sel = window.atomworksStudio?.getSelection?.() ?? [];
-    if (!sel.length || !doc || this._viewingDesign() || document.body.classList.contains('rfd4p-advanced') || this.busy) {
+    const sel = picked ?? window.atomworksStudio?.getSelection?.() ?? [];
+    if (!sel.length || !doc || (!picked && (this._viewingDesign() || document.body.classList.contains('rfd4p-advanced'))) || this.busy) {
       pop.hidden = true;
       return;
     }
@@ -2357,8 +2405,9 @@ export class DesignPanel {
     const button = this.els.taskGrid?.querySelector(`[data-example="${task.example}"]`);
     button?.classList.add('loading');
     try {
-      if (task.recipe && await this._buildRecipe(task)) return;
-      await window.atomworksStudio?.openExample(task.fallback ?? task.example);
+      // An example with a recipe is built from its entries, or not opened at all (the page says why).
+      if (task.recipe) { await this._buildRecipe(task); return; }
+      await window.atomworksStudio?.openExample(task.example);
       this.showStart = false;
       if (task.then) {
         const spec = this._spec();
@@ -2428,8 +2477,8 @@ export class DesignPanel {
 
   /**
    * Build `task` from its PDB entry with the card's own controls while the start screen stays up, then show it
-   * finished, with no Undo history (an example is a starting point). Resolves false if the entry could not be fetched
-   * (nothing is changed then), true once built.
+   * finished, with no Undo history (an example is a starting point). Resolves true once built; false if an entry could
+   * not be fetched or a step failed, and then nothing is shown but why.
    */
   async _buildRecipe(task) {
     const card = (id) => [...this.els.chainList.querySelectorAll('.rfd4p-chain')]
@@ -2458,7 +2507,6 @@ export class DesignPanel {
 
     this.building = true;
     document.body.classList.add('rfd4p-building');
-    let fetched = false;
     try {
       for (const step of task.recipe) {
         if (step.fetch) {
@@ -2483,7 +2531,6 @@ export class DesignPanel {
           this.buildSession = `rfd4p_example_${task.example}_${Date.now().toString(36)}`;
           getSharedStudioStore().sessions.set(this.buildSession, doc);
           this.render();
-          fetched = true;
         } else if (step.start) {
           // A bundled example as the starting point (Protein from scratch's 250 new residues): nothing to download.
           const res = await fetch(new URL(`./studio/examples/${step.start}.cif`, import.meta.url));
@@ -2492,7 +2539,6 @@ export class DesignPanel {
           this.buildSession = `rfd4p_example_${task.example}_${Date.now().toString(36)}`;
           getSharedStudioStore().sessions.set(this.buildSession, doc);
           this.render();
-          fetched = true;
         } else if (step.blocks) {
           // One block per entry: "+" after the last block until there are enough, then each block's length and shape.
           const chainCard = () => [...this.els.chainList.querySelectorAll('.rfd4p-chain')].at(-1);
@@ -2530,7 +2576,7 @@ export class DesignPanel {
             continue;
           }
           const pop = open(sub);
-          if (s.from != null) { fill(pop, 'Residues', `${s.from}-${s.to}`); fill(pop, 'Rest', s.rest ?? 'unchanged', 'change'); }
+          if (s.from != null) fill(pop, 'Residues', `${s.from}-${s.to}`);
           if (s.structure) fill(pop, 'Structure', s.structure, 'change');
           if (s.atoms) {
             const named = !ATOM_OPTIONS.some(([v]) => v === s.atoms);
@@ -2542,6 +2588,22 @@ export class DesignPanel {
           if (s.length) { fill(pop, 'Fewest residues', s.length[0]); fill(pop, 'Most residues', s.length[1]); }
           if (s.hotspots) fill(pop, 'Hotspots', s.hotspots);
           if (s.keepOnly) fill(pop, 'Keep only these residues', s.keepOnly);
+          await apply(pop);
+        } else if (step.pick) {
+          // Residues picked, as in the viewer, and the pick's popup: part of a piece freed, or given a length.
+          const [, chain, x, y] = /^(\w+?)(-?\d+)-(-?\d+)$/.exec(step.pick);
+          const a = this._inputDoc().atoms;
+          const atoms = [];
+          for (let i = 0; i < a.nAtoms; i += 1) {
+            if (String(a.chain_id[i]) === chain && a.res_id[i] >= Number(x) && a.res_id[i] <= Number(y) && !/^\d+-\d+$/.test(String(a.res_name[i]))) atoms.push(i);
+          }
+          if (!atoms.length) throw new Error(`chain ${chain} has no residues ${x}–${y}`);
+          this._renderPop(atoms);
+          const pop = this.pop;
+          const s = step.set ?? {};
+          if (s.structure) fill(pop, 'Structure', s.structure, 'change');
+          if (s.sequence) fill(pop, 'Sequence', s.sequence, 'change');
+          if (s.length) { fill(pop, 'Fewest residues', s.length[0]); fill(pop, 'Most residues', s.length[1]); }
           await apply(pop);
         } else if (step.removeNew) {
           for (let sub = subs(step.removeNew).find(isNew); sub; sub = subs(step.removeNew).find(isNew)) {
@@ -2583,23 +2645,21 @@ export class DesignPanel {
       const sid = this.buildSession;
       getSharedStudioStore().getSession(sid).undoStack = [];
       this.buildSession = null;
+      this.showStart = false;
       await window.atomworksStudio?.openSession?.(sid);
       return true;
     } catch (err) {
+      // Nothing half built is shown: the start screen stays, saying what went wrong.
       console.warn('Example set-up stopped:', err);
-      this.lastError = `The ${task.title} example could not be set up: ${String(err?.message ?? err)}`;
-      return fetched;
+      if (this.buildSession) getSharedStudioStore().sessions.delete(this.buildSession);
+      this.buildSession = null;
+      this.els.fetchStatus.textContent = `The ${task.title} example could not be set up: ${String(err?.message ?? err).replace(/^Error:\s*/, '')}`;
+      return false;
     } finally {
-      // A build that stopped part way is still shown, as far as it got.
-      if (this.buildSession) {
-        const sid = this.buildSession;
-        this.buildSession = null;
-        await window.atomworksStudio?.openSession?.(sid);
-      }
+      this.buildSession = null;
       this.building = false;
       document.body.classList.remove('rfd4p-building');
       this._closePop();
-      this.showStart = false;
       this.render();
     }
   }

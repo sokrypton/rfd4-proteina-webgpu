@@ -366,6 +366,9 @@ export async function createStudioDocWithCcd(text, name, opts = {}, fetchFn = gl
   return blocks.size ? new StudioDoc(text, name, { ...opts, ccdBlocks: blocks }) : doc;
 }
 
+/** Each residue's place in its chain's source ("38:"), this page's bookkeeping (not written to files). */
+const SRC_KEY = '__src';
+
 /** Buffer ions a fetched structure drops, on top of AtomWorks' rcsb `remove_ccds`. */
 const BUFFER_IONS = ['NA', 'CL'];
 
@@ -415,9 +418,14 @@ export class StudioDoc {
     }
     // Each chain as it was loaded (this page only), so residues cropped from it can be brought back.
     this.chainSources = new Map();
-    if (opts.preset === 'rcsb' && this.atoms.nAtoms) {
+    // Every document's chains as opened, not only a fetched entry's: each chain can then be edited as a plan.
+    if (this.atoms.nAtoms) {
       const loaded = cloneAtoms(this.atoms);
       for (const cid of new Set(this.atoms.chain_id.map(String))) this.chainSources.set(cid, { atoms: loaded, chain: cid });
+      // Each residue tagged with its place in that source ("38:", number and insertion code), carried by every edit:
+      // a chain's plan reads residues by it, never by their numbers now (which a renumbering edit changes).
+      const tag = this._ensureAnnotationArray(SRC_KEY, { default: '' });
+      for (let i = 0; i < this.atoms.nAtoms; i += 1) if (this._isPolymerAtom(i)) tag[i] = `${this.atoms.res_id[i]}:${this.atoms.ins_code[i] ?? ''}`;
     }
   }
 
@@ -1175,6 +1183,8 @@ export class StudioDoc {
 
   /** Run several edits as one undo step. */
   compound(fn) {
+    // Nested (a rebuild inside a larger edit): part of the outer step, which took the snapshot and restores on failure.
+    if (this._compound) return fn();
     this.snapshot();
     this._compound = true;
     try {
@@ -1447,9 +1457,48 @@ export class StudioDoc {
       }
       this._permuteAtoms(order);
       if (renumbered) this._renumberChain(cid);
+      else {
+        // In the source's order, each residue is numbered as in the source: a label saying so would only mark the chain
+        // as no longer the one loaded (no drag bar), so the residues brought back carry none, as if never removed.
+        const lab = a.annotations?.[SRC];
+        for (let i = 0; i < a.nAtoms; i += 1) {
+          if (String(a.chain_id[i]) === cid && lab?.[i] && numOf(lab[i]) === Number(a.res_id[i])) lab[i] = '';
+        }
+      }
+      if (!renumbered) this._renumberPlaceholders(cid);
       this._relinkChain(cid);
       computeIdAndEntityAnnotations(a);
       return { changed: true, message: `Brought back ${added.length} residue${added.length === 1 ? '' : 's'} to chain ${cid}.` };
+    });
+  }
+
+  /**
+   * New-residue placeholders of chain `cid` numbered between their neighbours again after residues came back around
+   * them, as `insertSegment` numbers them: a numbering gap kept, otherwise the residue before's number with the next
+   * insertion code ("40A"), so a placeholder at the chain's end numbered 41 does not clash with the residue 41 returned.
+   */
+  _renumberPlaceholders(cid) {
+    const a = this.atoms;
+    const starts = getResidueSegments(a);
+    const res = [];
+    for (let r = 0; r < starts.length - 1; r += 1) {
+      const s0 = starts[r];
+      if (String(a.chain_id[s0]) !== cid) continue;
+      res.push({ s0, e: starts[r + 1], seg: this._isSegmentAtom(s0) });
+    }
+    res.forEach((r, k) => {
+      if (!r.seg) return;
+      const prev = res.slice(0, k).reverse().find((x) => !x.seg);
+      const next = res.slice(k + 1).find((x) => !x.seg);
+      const id = Number(a.res_id[r.s0]);
+      const p = prev ? Number(a.res_id[prev.s0]) : null;
+      const q = next ? Number(a.res_id[next.s0]) : null;
+      if ((p === null || id > p) && (q === null || id < q)) return;
+      // The residue before's number, the next insertion code after any placeholder already on it.
+      const base = p ?? (q !== null ? q - 1 : id);
+      const used = res.slice(0, k).filter((x) => x.seg && Number(a.res_id[x.s0]) === base).map((x) => String(a.ins_code[x.s0] || ''));
+      const code = used.length ? String.fromCharCode(Math.max(...used.map((c) => c.charCodeAt(0) || 64)) + 1) : 'A';
+      for (let i = r.s0; i < r.e; i += 1) { a.res_id[i] = base; a.ins_code[i] = p === null ? '' : code; }
     });
   }
 
@@ -1515,8 +1564,41 @@ export class StudioDoc {
     // Each run's residues are remembered (this page only), so the new residues can be turned back into them.
     const origins = runs.map((run) => ({ chain: run.chain, prev: run.prev, next: run.next, atoms: this._sliceAtoms(run.atoms) }));
     return this.compound(() => {
-      this.deleteAtoms(drop);
-      this._insertGapSegments(gaps);
+      // Through each chain's plan: the selected runs become new blocks in their place, the chain re-joined by one rule.
+      for (const chain of new Set(runs.map((r) => r.chain))) {
+        const plan = this.chainPlan(chain);
+        const info = this._chainSourceIndex(chain);
+        const parts = [];
+        let inRun = false;
+        for (const q of plan.parts) {
+          if (q.kind === 'new') { parts.push({ kind: 'new', atom: q.atom, min: q.min, max: q.max }); inRun = false; continue; }
+          if (q.kind === 'own') {
+            let lastKey = null;
+            for (const i of q.atoms) {
+              const key = `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}`;
+              if (key === lastKey) { if (parts.at(-1)?.kind === 'own' && !inRun) parts.at(-1).atoms.push(i); continue; }
+              lastKey = key;
+              if (keys.has(key)) { if (!inRun) { parts.push({ kind: 'new', min, max }); inRun = true; } }
+              else { inRun = false; const last = parts.at(-1); if (last?.kind === 'own') last.atoms.push(i); else parts.push({ kind: 'own', atoms: [i] }); }
+            }
+            continue;
+          }
+          let lastK = null;
+          for (const i of q.atoms) {
+            const k = this._sourceIndexOf(i, info);
+            if (k === lastK) continue;
+            lastK = k;
+            if (keys.has(`${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}`)) {
+              if (!inRun) { parts.push({ kind: 'new', min, max }); inRun = true; }
+            } else {
+              inRun = false;
+              const last = parts.at(-1);
+              if (last?.kind === 'kept' && last.to === k - 1) last.to = k; else parts.push({ kind: 'kept', from: k, to: k });
+            }
+          }
+        }
+        this.rebuildChain(chain, parts);
+      }
       (this.segmentOrigins ??= []).push(...origins);
       return { changed: true, message: `Replaced ${keys.size} residues with ${gaps.length} new-residue segment${gaps.length === 1 ? '' : 's'}.` };
     });
@@ -1622,10 +1704,334 @@ export class StudioDoc {
   }
 
   /**
+   * Chain `cid`'s source (the chain as it was loaded): its polymer residues in order ({ num, ins, name }), their index
+   * by "num:ins", and the source chain's own id. Null for a chain not loaded here (a bundled example, + seq).
+   */
+  _chainSourceIndex(cid) {
+    const src = this.chainSources?.get(String(cid));
+    // No source (a chain made here, + seq): an empty one, so a chain of new residues only still reads as a plan.
+    if (!src) return { list: [], index: new Map(), chain: String(cid), atoms: null };
+    const b = src.atoms;
+    const list = [];
+    for (let i = 0; i < b.nAtoms; i += 1) {
+      if (String(b.chain_id[i]) !== src.chain) continue;
+      const polymer = b.is_polymer?.length === b.nAtoms ? Boolean(b.is_polymer[i]) : !b.hetero[i];
+      if (!polymer || /^\d+-\d+$/.test(String(b.res_name[i]))) continue;
+      const last = list.at(-1);
+      const ins = String(b.ins_code[i] ?? '');
+      if (last && last.num === Number(b.res_id[i]) && last.ins === ins) continue;
+      // The name the residue had there ("A38" in a file whose motif was renumbered), if any.
+      const label = String(b.annotations?.['annotation_src-component_1_atom']?.[i] ?? '');
+      list.push({ num: Number(b.res_id[i]), ins, name: String(b.res_name[i]), label: /^[A-Za-z]+-?\d+[A-Za-z]?$/.test(label) ? label : '' });
+    }
+    const index = new Map(list.map((r, k) => [`${r.num}:${r.ins}`, k]));
+    return { list, index, chain: src.chain, atoms: b };
+  }
+
+  /** The source index (into `_chainSourceIndex(cid).list`) of polymer residue atom `i`: by its source tag only. */
+  _sourceIndexOf(i, info) {
+    const key = String(this.atoms.annotations?.[SRC_KEY]?.[i] ?? '');
+    return key ? info.index.get(key) ?? null : null;
+  }
+
+  /**
+   * Chain `cid` as a plan: its parts in order, each a run of the source kept ({ kind: 'kept', from, to, lo, hi }:
+   * source indices and numbers, consecutive in the source and in the chain) or a block of new residues ({ kind: 'new',
+   * atom, min, max }), or residues the source does not have ({ kind: 'own', atoms }), kept as they are.
+   */
+  chainPlan(cid) {
+    cid = String(cid);
+    const info = this._chainSourceIndex(cid);
+    const a = this.atoms;
+    const segMin = a.annotations?.annotation_expsegmin_1_residue;
+    const segMax = a.annotations?.annotation_expsegmax_1_residue;
+    const parts = [];
+    let lastKey = null;
+    for (let i = 0; i < a.nAtoms; i += 1) {
+      if (String(a.chain_id[i]) !== cid) continue;
+      if (this._isSegmentAtom(i)) {
+        const [lo, hi] = String(a.res_name[i]).split('-').map(Number);
+        parts.push({ kind: 'new', atom: i, min: Number(segMin?.[i]) > 0 ? Number(segMin[i]) : lo, max: Number(segMax?.[i]) > 0 ? Number(segMax[i]) : hi });
+        lastKey = null;
+        continue;
+      }
+      if (!this._isPolymerAtom(i)) continue;
+      const key = `${a.res_id[i]}:${a.ins_code[i]}`;
+      if (key === lastKey) { parts.at(-1).atoms.push(i); continue; }
+      lastKey = key;
+      const k = this._sourceIndexOf(i, info);
+      const last = parts.at(-1);
+      // A residue the source does not have (made from new residues, say): kept as it is, in place.
+      if (k === null) { if (last?.kind === 'own') last.atoms.push(i); else parts.push({ kind: 'own', atoms: [i] }); continue; }
+      if (last?.kind === 'kept' && k === last.to + 1) { last.to = k; last.atoms.push(i); } else parts.push({ kind: 'kept', from: k, to: k, atoms: [i] });
+    }
+    for (const p of parts) if (p.kind === 'kept') { p.lo = info.list[p.from].num; p.hi = info.list[p.to].num; }
+    return { chain: info.chain, source: info.list, parts };
+  }
+
+  /**
+   * Chain `cid` rebuilt to `parts`, in that order: each kept part ({ kind: 'kept', from, to } source indices, or
+   * { lo, hi } source numbers) as the residues already in the chain where they are (their conditions with them) and the
+   * rest from the chain as loaded (fixed, as loaded); each new part as its block of new residues ({ atom } an existing
+   * one, kept with its settings; else { min, max } a new one). Then, all in one place: numbered as the source when the
+   * parts run in the source's order (new blocks between, as `insertSegment` numbers them), else 1, 2, 3... with each
+   * residue named by its source ("A38", a motif in its own order); bonded along the plan (consecutive source residues
+   * by peptide bonds, new blocks to both neighbours, a gap left a gap). One undo step.
+   */
+  rebuildChain(cid, parts) {
+    cid = String(cid);
+    const info = this._chainSourceIndex(cid);
+    const toIndex = (num) => {
+      const k = info.list.findIndex((r) => r.num === Number(num));
+      if (k < 0) throw new Error(`chain ${cid} as loaded has no residue ${num}`);
+      return k;
+    };
+    const plan = parts.map((p) => (p.kind === 'kept'
+      ? { kind: 'kept', from: Number.isInteger(p.from) ? p.from : toIndex(p.lo), to: Number.isInteger(p.to) ? p.to : toIndex(p.hi) }
+      : p.kind === 'own' ? { kind: 'own', atoms: [...p.atoms] }
+        : { kind: 'new', atom: Number.isInteger(p.atom) ? p.atom : null, min: Math.max(1, Number(p.min) || 1), max: Math.max(Number(p.min) || 1, Number(p.max) || 1) }));
+    const ownOf = new Map();
+    plan.forEach((p, k) => { if (p.kind === 'own') for (const i of p.atoms) ownOf.set(i, k); });
+    const want = new Set();
+    for (const p of plan) if (p.kind === 'kept') for (let k = Math.min(p.from, p.to); k <= Math.max(p.from, p.to); k += 1) want.add(k);
+    const keepSeg = new Set(plan.filter((p) => p.kind === 'new' && p.atom !== null).map((p) => p.atom));
+    const TAG = '__plan_tag';
+    const SRC = 'annotation_src-component_1_atom';
+    return this.compound(() => {
+      const a = this.atoms;
+      // Each atom of the chain tagged with what it is, so the steps below can move atoms around freely.
+      const tag = this._ensureAnnotationArray(TAG, { default: '' });
+      const present = new Set();
+      const drop = [];
+      for (let i = 0; i < a.nAtoms; i += 1) {
+        if (String(a.chain_id[i]) !== cid) continue;
+        if (this._isSegmentAtom(i)) {
+          tag[i] = `s${i}`;
+          if (!keepSeg.has(i)) drop.push(i);
+        } else if (this._isPolymerAtom(i)) {
+          const k = this._sourceIndexOf(i, info);
+          if (k !== null) { tag[i] = `r${k}`; if (want.has(k)) present.add(k); else drop.push(i); }
+          else if (ownOf.has(i)) tag[i] = `p${ownOf.get(i)}`;
+          else { tag[i] = 'x'; drop.push(i); }
+        } else tag[i] = 'o';
+      }
+      const segTag = new Map(plan.filter((p) => p.kind === 'new' && p.atom !== null).map((p) => [p, `s${p.atom}`]));
+      if (drop.length) this.deleteAtoms(drop);
+      // Residues of the plan not in the chain, from the chain as loaded.
+      const missing = new Set([...want].filter((k) => !present.has(k)));
+      if (missing.size && !info.atoms) throw new Error(`chain ${cid} has no source to bring residues back from`);
+      if (missing.size) {
+        const b = info.atoms;
+        const take = [];
+        for (let i = 0; i < b.nAtoms; i += 1) {
+          if (String(b.chain_id[i]) !== info.chain) continue;
+          const polymer = b.is_polymer?.length === b.nAtoms ? Boolean(b.is_polymer[i]) : !b.hetero[i];
+          if (!polymer) continue;
+          const k = info.index.get(`${Number(b.res_id[i])}:${String(b.ins_code[i] ?? '')}`);
+          if (k !== undefined && missing.has(k)) take.push(i);
+        }
+        const holder = Object.create(StudioDoc.prototype);
+        holder.atoms = b;
+        const part = { atoms: holder._sliceAtoms(take) };
+        const pa = part.atoms;
+        pa.annotations = { ...(pa.annotations ?? {}) };
+        pa.annotations[TAG] = Array.from({ length: pa.nAtoms }, (_, i) => `r${info.index.get(`${Number(pa.res_id[i])}:${String(pa.ins_code[i] ?? '')}`)}`);
+        pa.annotations[SRC_KEY] = Array.from({ length: pa.nAtoms }, (_, i) => `${Number(pa.res_id[i])}:${String(pa.ins_code[i] ?? '')}`);
+        const temp = `__plan${Date.now().toString(36)}`;
+        for (let i = 0; i < pa.nAtoms; i += 1) pa.chain_id[i] = temp;
+        const before = this.atoms.nAtoms;
+        this.combine([part]);
+        const c = this.atoms;
+        for (let i = before; i < c.nAtoms; i += 1) c.chain_id[i] = cid;
+        if (c.cathText) for (let j = 0; c.cathText.length < c.nAtoms; j += 1) c.cathText.push(pa.cathText?.[j] ?? 'x.x.x.x');
+      }
+      // New blocks: a placeholder each, tagged by its place in the plan.
+      plan.forEach((p, k) => {
+        if (p.kind !== 'new' || p.atom !== null) return;
+        const anchor = this.atoms.chain_id.findIndex((x) => String(x) === cid);
+        this.insertSegment({ minimum: p.min, maximum: p.max, atomIndex: anchor, before: true });
+        const c = this.atoms;
+        const tt = c.annotations[TAG];
+        // The block just made: the chain's only new-residue placeholder not yet tagged as one (it may copy its
+        // neighbour's annotations, this tag included).
+        const made = Array.from({ length: c.nAtoms }, (_, i) => i).find((i) => String(c.chain_id[i]) === cid && this._isSegmentAtom(i) && !/^[sn]/.test(String(tt[i] ?? '')));
+        if (made === undefined) throw new Error('could not add new residues');
+        tt[made] = `n${k}`;
+        segTag.set(p, `n${k}`);
+      });
+      // The chain's atoms in the plan's order (anything else in the chain, a ligand, after them).
+      const c = this.atoms;
+      // Residues already linked (own residues among themselves, say) stay linked while they stay next to each other.
+      const RID = '__plan_res';
+      const rid = this._ensureAnnotationArray(RID, { default: '' });
+      for (let i = 0; i < c.nAtoms; i += 1) if (String(c.chain_id[i]) === cid) rid[i] = `${c.annotations[TAG][i]}|${c.res_id[i]}|${c.ins_code[i]}|${c.res_name[i]}`;
+      const t = c.annotations[TAG];
+      const byTag = new Map();
+      for (let i = 0; i < c.nAtoms; i += 1) if (String(c.chain_id[i]) === cid) { const key = t[i] || 'o'; if (!byTag.has(key)) byTag.set(key, []); byTag.get(key).push(i); }
+      const block = [];
+      const realOrder = [];
+      for (const p of plan) {
+        if (p.kind === 'kept') {
+          const step = p.from <= p.to ? 1 : -1;
+          for (let k = p.from; step > 0 ? k <= p.to : k >= p.to; k += step) { block.push(...(byTag.get(`r${k}`) ?? [])); realOrder.push(k); }
+        } else if (p.kind === 'own') block.push(...(byTag.get(`p${plan.indexOf(p)}`) ?? []));
+        else block.push(...(byTag.get(segTag.get(p)) ?? []));
+      }
+      block.push(...(byTag.get('o') ?? []));
+      const order = [];
+      let placed = false;
+      for (let i = 0; i < c.nAtoms; i += 1) {
+        if (String(c.chain_id[i]) !== cid) { order.push(i); continue; }
+        if (!placed) { order.push(...block); placed = true; }
+      }
+      this._permuteAtoms(order);
+      // Numbering and source names, one rule: in the source's order, the source's numbers (new blocks between them as
+      // insertSegment numbers them); otherwise 1, 2, 3... with each residue named by its source.
+      const d = this.atoms;
+      const tg = d.annotations[TAG];
+      const src = this._ensureAnnotationArray(SRC, { default: '' });
+      const linkedBefore = new Set();
+      {
+        const r = d.annotations[RID];
+        for (const [u, v] of d.bonds || []) if (r[u] && r[v] && r[u] !== r[v]) linkedBefore.add(`${r[u]}>${r[v]}`).add(`${r[v]}>${r[u]}`);
+      }
+      const starts = getResidueSegments(d);
+      const res = [];
+      for (let r = 0; r < starts.length - 1; r += 1) {
+        const s0 = starts[r];
+        if (String(d.chain_id[s0]) !== cid) continue;
+        const tv = String(tg[s0] || 'o');
+        res.push({ s0, e: starts[r + 1], k: tv.startsWith('r') ? Number(tv.slice(1)) : null, seg: this._isSegmentAtom(s0) });
+      }
+      const setRes = (r, id, ins) => { for (let i = r.s0; i < r.e; i += 1) { d.res_id[i] = id; d.ins_code[i] = ins; } };
+      // The number each residue keeps: its source's, or (one the source does not have) its own; in the source's order
+      // and strictly increasing, the chain is numbered so, new blocks between as `insertSegment` numbers them;
+      // otherwise 1, 2, 3... with each source residue named by its source ("A38", a motif in its own order).
+      const fixedNum = (r) => (r.k !== null ? [info.list[r.k].num, info.list[r.k].ins] : [Number(d.res_id[r.s0]), String(d.ins_code[r.s0] || '')]);
+      const real = res.filter((r) => !r.seg);
+      const cmp = ([x, xi], [y, yi]) => (x !== y ? x - y : (xi || '').localeCompare(yi || ''));
+      const inOrder = real.every((r, j) => j === 0 || cmp(fixedNum(r), fixedNum(real[j - 1])) > 0);
+      if (inOrder) {
+        for (const r of res) if (r.k !== null) { const x = info.list[r.k]; setRes(r, x.num, x.ins); for (let i = r.s0; i < r.e; i += 1) src[i] = x.label; }
+        let lastId = -Infinity;
+        let lastIns = '';
+        res.forEach((r, j) => {
+          if (!r.seg) { lastId = Number(d.res_id[r.s0]); lastIns = String(d.ins_code[r.s0] || ''); return; }
+          const q = res.slice(j + 1).find((x) => !x.seg);
+          const qId = q ? fixedNum(q)[0] : null;
+          let id;
+          let ins = '';
+          if (lastId === -Infinity) id = qId !== null ? qId - 1 : 1;
+          else if (qId === null) id = lastId + 1;
+          else if (qId - 1 > lastId) id = qId - 1;
+          else { id = lastId; ins = lastIns ? String.fromCharCode(lastIns.charCodeAt(0) + 1) : 'A'; }
+          setRes(r, id, ins);
+          lastId = id;
+          lastIns = ins;
+        });
+      } else {
+        for (const r of res) if (r.k !== null) { const x = info.list[r.k]; for (let i = r.s0; i < r.e; i += 1) src[i] = x.label || `${info.chain}${x.num}${x.ins}`; }
+        this._renumberChain(cid);
+      }
+      // Bonds along the plan: the chain's backbone links rebuilt (side-chain links such as disulfides kept).
+      const resOf = new Int32Array(d.nAtoms).fill(-1);
+      res.forEach((r, j) => { for (let i = r.s0; i < r.e; i += 1) resOf[i] = j; });
+      const backbone = new Set(['C', 'N', "O3'", 'P']);
+      d.bonds = (d.bonds || []).filter(([u, v]) => {
+        const ru = resOf[u];
+        const rv = resOf[v];
+        if (ru < 0 || rv < 0 || ru === rv) return true;
+        if (res[ru].seg || res[rv].seg) return false;
+        return !(backbone.has(String(d.atom_name[u])) && backbone.has(String(d.atom_name[v])));
+      });
+      const find = (r, name) => { for (let i = r.s0; i < r.e; i += 1) if (d.atom_name[i] === name) return i; return -1; };
+      for (let j = 0; j + 1 < res.length; j += 1) {
+        const x = res[j];
+        const y = res[j + 1];
+        const wasLinked = linkedBefore.has(`${d.annotations[RID][x.s0]}>${d.annotations[RID][y.s0]}`);
+        if (!wasLinked && (x.k === null || y.k === null || y.k !== x.k + 1)) continue;
+        if (x.seg || y.seg) continue;
+        const na = d.chain_type?.[x.s0] === CHAIN_TYPE.DNA || d.chain_type?.[x.s0] === CHAIN_TYPE.RNA;
+        const u = find(x, na ? "O3'" : 'C');
+        const v = find(y, na ? 'P' : 'N');
+        if (u >= 0 && v >= 0) d.bonds.push([u, v, BOND_TYPE.SINGLE]);
+      }
+      for (const r of res) if (r.seg) this._installSentinelBonds(r.s0, d.chain_type?.[r.s0]);
+      delete d.annotations[TAG];
+      delete d.annotations[RID];
+      computeIdAndEntityAnnotations(d);
+      return { changed: true, message: `Chain ${cid} rebuilt.` };
+    });
+  }
+
+  /**
+   * Atoms `indices` removed. Whole residues and new-residue blocks taken out of a chain that stays are a plan edit
+   * (`rebuildChain` without them: the chain re-joined and numbered by the one rule); anything else (a whole chain, a
+   * ligand, some atoms of a residue) is deleted as it is. One undo step.
+   */
+  removeAtoms(indices) {
+    const del = new Set(this.resolveIndices(indices, 'atom'));
+    if (!del.size) return { changed: false, message: 'Nothing to remove.' };
+    const a = this.atoms;
+    const resKey = (i) => `${a.chain_id[i]}:${a.res_id[i]}:${a.ins_code[i]}:${a.res_name[i]}`;
+    const byRes = new Map();
+    for (let i = 0; i < a.nAtoms; i += 1) { const k = resKey(i); if (!byRes.has(k)) byRes.set(k, []); byRes.get(k).push(i); }
+    const planned = new Set();
+    for (const cid of new Set([...del].map((i) => String(a.chain_id[i])))) {
+      const mine = [];
+      for (let i = 0; i < a.nAtoms; i += 1) if (String(a.chain_id[i]) === cid) mine.push(i);
+      if (mine.every((i) => del.has(i))) continue;
+      const gone = mine.filter((i) => del.has(i));
+      const whole = gone.every((i) => (this._isSegmentAtom(i) || this._isPolymerAtom(i)) && byRes.get(resKey(i)).every((j) => del.has(j)));
+      if (whole && this.chainPlan(cid)) planned.add(cid);
+    }
+    if (!planned.size) return this.deleteAtoms([...del]);
+    const TAG = '__remove';
+    return this.compound(() => {
+      const tag = this._ensureAnnotationArray(TAG, { default: 0 });
+      for (const i of del) tag[i] = 1;
+      for (const cid of planned) {
+        const d = this.atoms;
+        const t = d.annotations[TAG];
+        const plan = this.chainPlan(cid);
+        const out = new Set();
+        for (let i = 0; i < d.nAtoms; i += 1) if (String(d.chain_id[i]) === cid && t[i]) out.add(i);
+        const parts = [];
+        for (const q of plan.parts) {
+          if (q.kind === 'new') { if (!out.has(q.atom)) parts.push({ kind: 'new', atom: q.atom, min: q.min, max: q.max }); continue; }
+          if (q.kind === 'own') { const left = q.atoms.filter((i) => !out.has(i)); if (left.length) parts.push({ kind: 'own', atoms: left }); continue; }
+          // The source indices of this run still wanted, as consecutive runs.
+          const keep = [];
+          for (const i of q.atoms) if (!out.has(i)) { const k = this._sourceIndexOf(i, this._chainSourceIndex(cid)); if (k !== null && keep.at(-1) !== k) keep.push(k); }
+          for (const k of keep) { const last = parts.at(-1); if (last?.kind === 'kept' && last.to === k - 1 && last.run === q) last.to = k; else parts.push({ kind: 'kept', from: k, to: k, run: q }); }
+        }
+        this.rebuildChain(cid, parts.map(({ run, ...p }) => p));
+      }
+      const d = this.atoms;
+      const rest = [];
+      for (let i = 0; i < d.nAtoms; i += 1) if (d.annotations[TAG]?.[i]) rest.push(i);
+      if (rest.length) this.deleteAtoms(rest);
+      delete this.atoms.annotations[TAG];
+      return { changed: true, message: `Removed ${del.size} atoms.` };
+    });
+  }
+
+  /**
+   * A copy of this document with chain `cid` rebuilt to `parts` (`rebuildChain`), this one unchanged: what Apply would
+   * give, for a preview.
+   */
+  previewRebuild(cid, parts) {
+    const copy = Object.create(StudioDoc.prototype);
+    Object.assign(copy, this, { atoms: cloneAtoms(this.atoms), undoStack: [], rawCif: null, revision: this.revision + 1, _compound: false });
+    copy.rebuildChain(cid, parts);
+    return copy;
+  }
+
+  /**
    * Bring residues `resIds` of chain `chain` back from the chain as it was loaded, as they were loaded (conditions
    * included), each run next to its neighbour by number; peptide and new-residue bonds rebuilt. One undo step.
    */
-  restoreFromSource(chain, resIds) {
+  restoreFromSource(chain, resIds, at = null) {
     const cid = String(chain);
     const src = this.chainSources?.get(cid);
     if (!src || !this.sourceResidues(cid)) throw new Error(`chain ${cid} has no source to bring residues back from`);
@@ -1664,6 +2070,20 @@ export class StudioDoc {
         for (let i = 0; i < before && at < 0; i += 1) if (String(a.chain_id[i]) === cid && this._isPolymerAtom(i) && Number(a.res_id[i]) === run.hi + 1) at = i;
         if (at >= 0) ahead.set(at, [...(ahead.get(at) ?? []), ...run.atoms]);
         else tail.push(...run.atoms);
+      }
+      // `at` ({ atom, before }: a piece dragged out): all of them beside that piece, on the side it grew, whatever is
+      // past it (new residues after 36 with 37-42 brought back to 36's piece go between 36 and them, not after them).
+      if (at && Number.isInteger(at.atom) && at.atom < before) {
+        const key = (i) => `${a.res_id[i]}:${a.ins_code[i]}`;
+        let s0 = at.atom;
+        while (s0 > 0 && String(a.chain_id[s0 - 1]) === cid && key(s0 - 1) === key(at.atom)) s0 -= 1;
+        let e0 = at.atom;
+        while (e0 + 1 < before && String(a.chain_id[e0 + 1]) === cid && key(e0 + 1) === key(at.atom)) e0 += 1;
+        after.clear();
+        ahead.clear();
+        tail.length = 0;
+        const all = added.flatMap((run) => run.atoms);
+        if (at.before) ahead.set(s0, all); else after.set(e0, all);
       }
       let lastOfChain = -1;
       for (let i = 0; i < before; i += 1) if (String(a.chain_id[i]) === cid) lastOfChain = i;
@@ -1922,7 +2342,8 @@ export class StudioDoc {
     this.snapshot();
     const keep = {};
     for (const [k, v] of Object.entries(this.atoms.annotations || {})) {
-      if (k.startsWith('annotation_expseg')) keep[k] = v;
+      // New-residue lengths and this page's own bookkeeping (`__src`: where each residue came from) are not conditions.
+      if (k.startsWith('annotation_expseg') || k.startsWith('__')) keep[k] = v;
     }
     this.atoms.annotations = keep;
     this.atoms.distanceRestraints = [];
@@ -2012,6 +2433,7 @@ export class StudioDoc {
     const delSet = new Set(this.resolveIndices(indices, 'atom'));
     if (delSet.size >= this.atoms.nAtoms) throw new Error('cannot delete every atom');
     this.snapshot();
+    const touched = new Set([...delSet].map((i) => String(this.atoms.chain_id[i])));
     const oldToNew = new Int32Array(this.atoms.nAtoms).fill(-1);
     const keepIndices = [];
     for (let i = 0; i < this.atoms.nAtoms; i += 1) {
@@ -2042,6 +2464,16 @@ export class StudioDoc {
     a.distanceRestraints = (a.distanceRestraints || [])
       .filter((r) => oldToNew[r.atom1] >= 0 && oldToNew[r.atom2] >= 0)
       .map((r) => ({ atom1: oldToNew[r.atom1], atom2: oldToNew[r.atom2], distance: r.distance }));
+    // New residues next to residues removed keep a bond to whatever is next to them now: new residues added after 29,
+    // then 30-32 removed, were otherwise left bonded to 29 alone, and the model read a chain break before 33 (a design
+    // came back 29 A apart there).
+    const sentinels = [];
+    for (let i = 0; i < m; i += 1) if (touched.has(String(a.chain_id[i])) && this._isSegmentAtom(i)) sentinels.push(i);
+    if (sentinels.length) {
+      const own = new Set(sentinels);
+      a.bonds = a.bonds.filter(([u, v]) => !own.has(u) && !own.has(v));
+      for (const i of sentinels) this._installSentinelBonds(i, a.chain_type?.[i]);
+    }
 
     if (closeResidueGaps) {
       this._renumberChainResidues();
@@ -2290,6 +2722,8 @@ export class StudioDoc {
         const isVec = ns && (arr.length === 0 || Array.isArray(arr[0]));
         const defVal = isVec
           ? new Array(ns.cols).fill(ns.default)
+          : k.startsWith('__')
+          ? ''
           : typeof arr[0] === 'string'
           ? 'x.x.x.x'
           : sc
@@ -2877,6 +3311,8 @@ export class StudioDoc {
     // Scalar 1-body annotation columns on _atom_site
     const scalarCols = Object.keys(a.annotations || {}).filter(
       (col) =>
+        // "__" names are this page's own bookkeeping (a residue's place in its source), never part of the file.
+        !col.startsWith('__') &&
         (!NONSCALAR_1BODY_ANNOTATIONS[col] || typeof a.annotations[col]?.[0] === 'string') &&
         Array.isArray(a.annotations[col]) &&
         a.annotations[col].length === n
@@ -3605,8 +4041,13 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
         const editResult = doc.setCharge(body.atom_indices || [], { value: body.value, delta: body.delta });
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
+      if (subpath === '/chains/rebuild' && method === 'POST') {
+        const editResult = doc.rebuildChain(body.chain_id, body.parts || []);
+        return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
+      }
       if (subpath === '/residues/restore' && method === 'POST') {
-        const editResult = doc.restoreFromSource(body.chain_id, body.res_ids || []);
+        const editResult = doc.restoreFromSource(body.chain_id, body.res_ids || [],
+          Number.isInteger(body.at_atom) ? { atom: body.at_atom, before: Boolean(body.before) } : null);
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
       if (subpath === '/segments/restore' && method === 'POST') {
@@ -3641,7 +4082,7 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
       if (subpath === '/delete' && method === 'POST') {
-        const editResult = doc.deleteAtoms(body.atom_indices || [], Boolean(body.close_residue_gaps));
+        const editResult = body.close_residue_gaps ? doc.deleteAtoms(body.atom_indices || [], true) : doc.removeAtoms(body.atom_indices || []);
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
       }
       if (subpath === '/reset-residue-ids' && method === 'POST') {

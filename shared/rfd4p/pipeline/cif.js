@@ -649,6 +649,10 @@ export function buildBondsForAtomArray(atoms, cifBlock = null, customBondDict = 
         const seqInt = safeInt(seq, -999999);
         const atomName = sc[`ptnr${p}_label_atom_id`]?.[row] ?? '';
         const tid = useTid ? sc[`ptnr${p}_transformation_id`][row] : null;
+        // The insertion code too, when given: two blocks of new residues side by side share a name and a number
+        // ("15-30" at 98 and 98A), and their bonds must not both land on the second.
+        const insCol = sc[`pdbx_ptnr${p}_PDB_ins_code`];
+        const ins = insCol ? (insCol[row] === '.' || insCol[row] === '?' ? '' : insCol[row] ?? '') : null;
 
         let match = -1;
         for (let i = 0; i < n; i++) {
@@ -657,6 +661,7 @@ export function buildBondsForAtomArray(atoms, cifBlock = null, customBondDict = 
             atoms.res_name[i] === comp &&
             atoms.res_id[i] === seqInt &&
             atoms.atom_name[i] === atomName &&
+            (ins === null || (atoms.ins_code?.[i] ?? '') === ins) &&
             (!useTid || atoms.transformation_id[i] === tid)
           ) {
             match = i;

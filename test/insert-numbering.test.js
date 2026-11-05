@@ -65,3 +65,23 @@ test('the model sees the same input as when the chain was renumbered', () => {
   const flat = (v) => (v?.data ? Array.from(v.data) : ArrayBuffer.isView(v) ? Array.from(v) : v);
   for (const k of Object.keys(x)) assert.deepEqual(flat(y[k]), flat(x[k]), k);
 });
+
+test('new residues stay joined to the chain when the residues beside them are removed afterwards', () => {
+  // New residues added after 59, then 60-62 removed: they must reach 63, or the model reads a chain break there.
+  const doc = binder();
+  doc.insertSegment({ minimum: 20, maximum: 20, atomIndex: atomOf(doc, 'A', 59), before: false });
+  const a = doc.atoms;
+  doc.deleteAtoms(Array.from({ length: a.nAtoms }, (_, i) => i).filter((i) => String(a.chain_id[i]) === 'A' && a.res_id[i] >= 60 && a.res_id[i] <= 62));
+  const res = buildBatch(doc.toCif(), { seed: 1 });
+  const pl = res.batch.token_bond_path_length;
+  const n = pl.shape.at(-1);
+  const at = res.atoms;
+  const tok = new Map();
+  for (let i = 0; i < at.res_id.length; i += 1) {
+    if (String(at.chain_id[i]) === 'A' && !tok.has(Number(at.token_id[i]))) tok.set(Number(at.token_id[i]), at.res_name[i] === '<M>');
+  }
+  // Chain A's tokens in order (the binder's own new chain B is not this one).
+  const order = [...tok.entries()].sort((x, y) => x[0] - y[0]);
+  const last = order.findLastIndex(([, isNew]) => isNew);
+  assert.equal(pl.data[order[last][0] * n + order[last + 1][0]], 1, 'the last new residue is bonded to the one after');
+});
