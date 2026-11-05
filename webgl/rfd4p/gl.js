@@ -237,8 +237,9 @@ void main() {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vb);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    // About 2^26 inner-loop steps per band.
-    const rowsPerBand = Math.max(1, Math.floor((1 << 26) / Math.max(1, out.w * work)));
+    // About 2^31 inner-loop steps per band: only a very long draw is split (bands cost ~25% on a tiled GPU, each a
+    // render pass of its own; a 43k x 384 x 256 matmul is 18 ms whole on an M2).
+    const rowsPerBand = Math.max(1, Math.floor((this.bandWork ?? 2 ** 31) / Math.max(1, out.w * work)));
     if (rowsPerBand >= out.h) {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     } else {

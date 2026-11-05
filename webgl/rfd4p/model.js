@@ -73,7 +73,8 @@ float epi(float v) { return uAct == 1 ? max(v, 0.0) : uAct == 2 ? sigm(v) : v; }
     const decl = 'uniform sampler2D X; uniform sampler2D Wt; uniform sampler2D B; uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows;';
     if (rows >= 64 && inD % 4 === 0 && outD % 4 === 0 && TW % (inD / 4) === 0 && !this.no4x4) {
       // A block of R = 4 rows x 4 columns a fragment (R render targets, a 1/R of the rows each), then repacked: 8 texel
-      // reads per 64 multiply-adds rather than 5 per 16. (8 rows over 8 targets measured 1.8x slower, M2.)
+      // reads per 64 multiply-adds rather than 5 per 16. Measured slower or no better (M2, tools/gpu/bench-webgl.js):
+      // 8 rows over 8 targets, float16 targets, the k loop unrolled by two.
       out.free();
       const R = 4;
       const rq = Math.ceil(rows / R);
@@ -196,7 +197,7 @@ float lin(int e) {
   gatedLinear(x, rows, inD, wp, bp, wg, bg, outD, mask, half = false) {
     const c = this.ctx;
     const ib = inD / 4;
-    if (inD % 4 || outD % 4 || TW % ib || !bp || !bg) {
+    if (inD % 4 || outD % 4 || TW % ib) {
       const p = this.linear(x, rows, inD, wp, outD, bp);
       const g = this.linear(x, rows, inD, wg, outD, bg);
       const out = c.elementwise('trigate', 'el(PM, e / uC) != 0.0 ? el(P, e) * sigm(el(G, e)) : 0.0', rows * outD,
@@ -209,7 +210,7 @@ float lin(int e) {
     const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD, half && this.halfPair));
     c.kernel('gatedlinear4x4', `
 uniform sampler2D X; uniform sampler2D Wp; uniform sampler2D Wg; uniform sampler2D Bp; uniform sampler2D Bg; uniform sampler2D M;
-uniform int uIn; uniform int uOut; uniform int uRows;
+uniform int uIn; uniform int uOut; uniform int uRows; uniform int uBp; uniform int uBg;
 void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
   int e0 = t * 4;
   int q = e0 / uOut;
@@ -239,12 +240,13 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     p2 += x2 * wpm; g2 += x2 * wgm;
     p3 += x3 * wpm; g3 += x3 * wgm;
   }
-  vec4 bpv = tx(Bp, o0 / 4), bgv = tx(Bg, o0 / 4);
+  vec4 bpv = uBp == 1 ? tx(Bp, o0 / 4) : vec4(0.0), bgv = uBg == 1 ? tx(Bg, o0 / 4) : vec4(0.0);
   r0 = live[0] ? (p0 + bpv) / (vec4(1.0) + exp(-(g0 + bgv))) : vec4(0.0);
   r1 = live[1] ? (p1 + bpv) / (vec4(1.0) + exp(-(g1 + bgv))) : vec4(0.0);
   r2 = live[2] ? (p2 + bpv) / (vec4(1.0) + exp(-(g2 + bgv))) : vec4(0.0);
   r3 = live[3] ? (p3 + bpv) / (vec4(1.0) + exp(-(g3 + bgv))) : vec4(0.0);
-}`, qs, { inputs: { X: x, Wp: wp, Wg: wg, Bp: bp, Bg: bg, M: mask }, ints: { uIn: inD, uOut: outD, uRows: rows }, work: inD * 8 });
+}`, qs, { inputs: { X: x, Wp: wp, Wg: wg, Bp: bp ?? mask, Bg: bg ?? mask, M: mask },
+      ints: { uIn: inD, uOut: outD, uRows: rows, uBp: bp ? 1 : 0, uBg: bg ? 1 : 0 }, work: inD * 8 });
     const res = c.kernel('repack4', `
 uniform sampler2D Q0; uniform sampler2D Q1; uniform sampler2D Q2; uniform sampler2D Q3; uniform int uOut;
 vec4 compute(int t) {

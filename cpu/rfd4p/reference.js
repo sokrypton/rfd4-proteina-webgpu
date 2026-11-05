@@ -23,6 +23,7 @@ import {
   simulationStep,
 } from '../../shared/rfd4p/flow.js';
 import { processSampleToAtoms, toCifString, toPdbString } from '../../shared/rfd4p/output.js';
+import { ConvergenceMonitor } from '../../shared/rfd4p/convergence.js';
 import {
   RESAMPLED_FORWARD_MARGINAL,
   buildPartialSchedule,
@@ -937,6 +938,12 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
   const featCache = {};
   let lastLogits = null;
   let lastInsertion = null;
+  // Early stop, as Rfd4pGeneratorGpu.generate does (`opts.earlyStop`): once the x1 Cα and the designed sequence have
+  // both been still for a while, the stopping step's x1 is the sample.
+  const monitor = opts.earlyStop
+    ? new ConvergenceMonitor(nsteps, opts.earlyStop === true ? {} : opts.earlyStop, emit.bb_ca)
+    : null;
+  let stepsRun = nsteps;
 
   for (let s = 0; s < nsteps; s += 1) {
     if (opts.signal?.aborted) throw new Error('Generation aborted');
@@ -965,7 +972,8 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
       pairCond: pairCondFeatures(tt, nnCfg.feats_pair_cond),
     };
 
-    const out = await forwardTrunk(n, f, pad, weights, nnCfg, depths[s], { insertion: s === nsteps - 1 });
+    // The insertion head on the last step, and on any step that could end the run.
+    const out = await forwardTrunk(n, f, pad, weights, nnCfg, depths[s], { insertion: s === nsteps - 1 || Boolean(monitor?.mayStopAt(s)) });
     for (let i = 0; i < n; i += 1) {
       if (!emit.bb_ca[i]) out.bb_ca.fill(0, i * 3, i * 3 + 3);
       if (!emit.local_latents[i]) out.local_latents.fill(0, i * 32, i * 32 + 32);
@@ -1007,6 +1015,7 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
       x1.bb_ca = Float32Array.from(targetBackbone);
     }
 
+    const convergence = monitor?.observe(s, x1.bb_ca, sequenceForDecoder(batch, n, lastLogits)) ?? null;
     if (opts.onStep) {
       let liveDecoded = null;
       if (decodeEvery > 0 && ((s + 1) % decodeEvery === 0 || s + 1 === nsteps)) {
@@ -1025,7 +1034,14 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
         xt: { bb_ca: Float32Array.from(x.bb_ca), local_latents: Float32Array.from(x.local_latents) },
         logits: lastLogits,
         decoded: liveDecoded,
+        convergence,
       });
+    }
+    if (convergence?.stop) {
+      x.bb_ca = Float32Array.from(x1.bb_ca);
+      x.local_latents = Float32Array.from(x1.local_latents);
+      stepsRun = s + 1;
+      break;
     }
   }
 
@@ -1048,6 +1064,8 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
   return {
     n,
     x,
+    stepsRun,
+    nsteps,
     seq,
     logits: lastLogits,
     insertionLogits: lastInsertion,
