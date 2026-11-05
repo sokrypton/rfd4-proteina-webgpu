@@ -24,10 +24,11 @@ export class Rfd4pModelGL {
     this.cache = new Map();
     // Normalised pair activations feeding the big matmuls and the triangle contractions held in float16.
     this.halfPair = true;
-    // The pair representation z itself in float16 (RGBA16F), as WebGPU's half mode holds it (`triF16`), from n =
-    // `zHalfMinN` on: at n = 208 a whole design is 13% faster and as close to the oracle (0.004 A); at n = 100 it is 4%
-    // faster but ends 0.18 A from the oracle against float32's 0.05 (WebGPU half: 0.04).
-    this.zHalf = true;
+    // The pair representation z in float16 (RGBA16F) from n = `zHalfMinN` on, as WebGPU's half mode holds it
+    // (`triF16`): off. A trunk pass at n = 208 is ~4% faster, but here z in float16 loses far more than WebGPU's does
+    // (motif_idx_1prw: Cα 6e-3 relative against WebGPU half's 8e-4 and float32's 5e-4), and whole designs drift (sm_sam,
+    // n = 181: 2.7 A from the oracle and 15 residues changed, against 0.017 A and none in float32; WebGPU half 1.7 A, 6).
+    this.zHalf = false;
     this.zHalfMinN = 160;
   }
 
@@ -85,7 +86,7 @@ export class Rfd4pModelGL {
     // Few rows and a small x (`cm`, the token matmuls): fragments ordered row block fastest (see the 4 x 4 path).
     // (The 4 x 8 block for those too, float16 outputs repacked: slower, M2, n = 100: half the fragments.)
     const cm = rows * inD <= (this.cmLimit ?? 1 << 20) && !this.noCM;
-    const go48 = packedOk && (half || resid) && rows >= 4096 && outD % 8 === 0 && !this.no48;
+    const go48 = packedOk && (half || (resid && !this.residFp32)) && rows >= 4096 && outD % 8 === 0 && !this.no48;
     const keepPlanes = half === 'planes' && go48 && !resid && !this.noKeepPlanes;
     if (half === 'planes') half = keepPlanes ? 'packed' : true;
     const outHalf = half === 'packed' ? 'packed' : half && this.halfPair;
@@ -94,6 +95,14 @@ export class Rfd4pModelGL {
       out.free();
       const y = this.linear(xr, rows, inD, w, outD, bias, act, keepPlanes ? 'planes' : half, resid);
       xr.free();
+      return y;
+    }
+    if (resid?.gate?.packedPlanes && !go48) {
+      // A gate left as planes, read by a path that takes a tensor.
+      const g = this._repackPacked(resid.gate.planes, rows, outD, true, true);
+      out.free();
+      const y = this.linear(x, rows, inD, w, outD, bias, act, half, { ...resid, gate: g });
+      g.free();
       return y;
     }
     if (resid?.z.pw && !go48) {
@@ -244,7 +253,7 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
         ints: { ...ints, uRes: resid ? 1 : 0, uGate: resid?.gate ? 1 : 0, uRq: rq, uS: S }, work: (inD * 2) / S });
       if (xp !== x) xp.free();
       if (wp !== w && !wp.weight) wp.free();
-      return cm ? this._repackCM(qs, rows, outD, outHalf, S > 1 ? { S, bias, act } : null) : this._repack(qs, rows, outD, outHalf);
+      return cm ? this._repackCM(qs, rows, outD, outHalf, S > 1 ? { S, bias, act } : null) : this._repack(qs, rows, outD, resid ? this.zh : outHalf);
     }
     if (rows >= 64 && inD % 4 === 0 && outD % 4 === 0 && TW % (inD / 4) === 0 && !this.no4x4) {
       // A block of R = 4 rows x 4 columns a fragment (R render targets, a 1/R of the rows each), then repacked: 8 texel
