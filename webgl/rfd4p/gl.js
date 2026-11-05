@@ -41,7 +41,7 @@ export function webgl2Available() {
 
 export class GLTensor {
   constructor(ctx, size, tex, w, h, half = false) {
-    Object.assign(this, { ctx, size, tex, w, h, half, texels: Math.ceil(size / 4) });
+    Object.assign(this, { ctx, size, tex, w, h, half, texels: Math.ceil(size / (half === 'packed' ? 8 : 4)) });
   }
 
   /** Back to the pool (the texture is reused by the next tensor of its shape). */
@@ -79,19 +79,22 @@ export class GLContext {
     })();
   }
 
-  _shape(size) {
-    const texels = Math.max(1, Math.ceil(size / 4));
-    const w = Math.min(TW, texels);
+  /** `per`: values a texel holds (4 floats, or 8 packed halves). */
+  _shape(size, per = 4, rowTexels = 0) {
+    const texels = Math.max(1, Math.ceil(size / per));
+    // `rowTexels`: the width a multiple of it, so no row of that many texels wraps (TW suits the model's own widths).
+    const w = rowTexels > 0 && TW % rowTexels ? Math.min(texels, rowTexels * Math.max(1, Math.floor(TW / rowTexels))) : Math.min(TW, texels);
     const h = Math.ceil(texels / w);
     if (h > this.maxSize) throw new Error(`tensor of ${size} floats is too large for this GPU's textures`);
     return { w, h };
   }
 
+  /** `half`: false (RGBA32F), true (RGBA16F) or 'packed' (RGBA32UI, eight float16 values a texel, two a channel). */
   _texture(w, h, half) {
     const gl = this.gl;
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, half ? gl.RGBA16F : gl.RGBA32F, w, h);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, half === 'packed' ? gl.RGBA32UI : half ? gl.RGBA16F : gl.RGBA32F, w, h);
     for (const p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, p, gl.NEAREST);
     for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, p, gl.CLAMP_TO_EDGE);
     this.bytes += w * h * (half ? 8 : 16);
@@ -99,16 +102,17 @@ export class GLContext {
   }
 
   /** An activation tensor of `size` floats (contents undefined until written); `half`: stored as float16. */
-  tensor(size, half = false) {
-    const { w, h } = this._shape(size);
-    const key = `${w}x${h}${half ? 'h' : ''}`;
+  tensor(size, half = false, rowTexels = 0) {
+    const { w, h } = this._shape(size, half === 'packed' ? 8 : 4, rowTexels);
+    const key = `${w}x${h}:${half === 'packed' ? 'u32' : half ? 'f16' : 'f32'}`;
     const free = this.pool.get(key);
     const tex = free?.length ? free.pop() : this._texture(w, h, half);
     return new GLTensor(this, size, tex, w, h, half);
   }
 
   _release(t) {
-    const key = `${t.w}x${t.h}${t.half ? 'h' : ''}`;
+    // By format too: a texture comes back only as the format it was made in.
+    const key = `${t.w}x${t.h}:${t.half === 'packed' ? 'u32' : t.half ? 'f16' : 'f32'}`;
     if (!this.pool.has(key)) this.pool.set(key, []);
     this.pool.get(key).push(t.tex);
   }
@@ -208,6 +212,12 @@ void main() {
   int t = int(gl_FragCoord.y) * uOutW + int(gl_FragCoord.x);
   if (t >= uOutTexels) { ${outs.map((_, i) => `f${i} = vec4(0.0);`).join(' ')} return; }
   compute4(t, ${outs.map((_, i) => `f${i}`).join(', ')});
+}` : outs[0].half === 'packed' ? `out uvec4 fragOut;
+${body}
+void main() {
+  int t = int(gl_FragCoord.y) * uOutW + int(gl_FragCoord.x);
+  if (t >= uOutTexels) { fragOut = uvec4(0u); return; }
+  fragOut = compute(t);
 }` : `out vec4 fragOut;
 ${body}
 void main() {
@@ -273,7 +283,7 @@ void main() {
    * `out[e] = expr` for every element `e < size`, `expr` GLSL over `e` (an int) that may read the inputs with
    * `el(name, index)`; `pre` declares helpers. A new tensor unless `out` is given.
    */
-  elementwise(key, expr, size, { inputs = {}, ints = {}, floats = {}, pre = '', work = 1, out = null, half = false } = {}) {
+  elementwise(key, expr, size, { inputs = {}, ints = {}, floats = {}, pre = '', work = 1, out = null, half = false, rowTexels = 0 } = {}) {
     const decl = [
       ...Object.keys(inputs).map((n) => `uniform sampler2D ${n};`),
       ...Object.keys(ints).map((n) => `uniform int ${n};`),
@@ -283,12 +293,17 @@ void main() {
     const body = `${decl}
 ${pre}
 float value(int e) { return ${expr}; }
-vec4 compute(int t) {
+${half === 'packed' ? `float v8(int e) { return e < uSize ? value(e) : 0.0; }
+uvec4 compute(int t) {
+  int e = t * 8;
+  return uvec4(packHalf2x16(vec2(v8(e), v8(e + 1))), packHalf2x16(vec2(v8(e + 2), v8(e + 3))),
+    packHalf2x16(vec2(v8(e + 4), v8(e + 5))), packHalf2x16(vec2(v8(e + 6), v8(e + 7))));
+}` : `vec4 compute(int t) {
   int e = t * 4;
   return vec4(value(e), e + 1 < uSize ? value(e + 1) : 0.0, e + 2 < uSize ? value(e + 2) : 0.0, e + 3 < uSize ? value(e + 3) : 0.0);
-}`;
-    const target = out ?? this.tensor(size, half);
-    return this.kernel(`ew:${key}`, body, target, { inputs, ints: { ...ints, uSize: size }, floats, work });
+}`}`;
+    const target = out ?? this.tensor(size, half, rowTexels);
+    return this.kernel(`ew:${key}${half === 'packed' ? ':pk' : ''}`, body, target, { inputs, ints: { ...ints, uSize: size }, floats, work });
   }
 
   destroy() {

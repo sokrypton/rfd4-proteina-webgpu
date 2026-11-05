@@ -62,15 +62,94 @@ export class Rfd4pModelGL {
   // ---- kernels ------------------------------------------------------------------------------------------------
 
   /** `Y = X W^T (+ bias)(act)`, X `[rows, inD]`, W `[outD, inD]` (a weight, or any tensor). */
-  linear(x, rows, inD, w, outD, bias = null, act = null, half = false) {
+  /**
+   * `resid`: { z, mask, gate? } makes the result `z + mask[r] * Y * sigmoid(gate)` (a residual update, gated or not),
+   * fused into the packed matmul's epilogue.
+   */
+  linear(x, rows, inD, w, outD, bias = null, act = null, half = false, resid = null) {
     const c = this.ctx;
     const out = c.tensor(rows * outD);
-    const outHalf = half && this.halfPair;
+    const outHalf = half === 'packed' ? 'packed' : half && this.halfPair;
+    const packedOk = rows >= 64 && inD % 8 === 0 && outD % 4 === 0 && TW % (inD / 8) === 0 && !this.noPacked;
+    if (resid && !packedOk) {
+      out.free();
+      const y = this.linear(x, rows, inD, w, outD, bias, act);
+      const r = c.elementwise(`resid${resid.gate ? '-g' : ''}`, `el(Z, e) + (el(PM, e / uC) != 0.0 ? el(Y, e)${resid.gate ? ' * sigm(el(G, e))' : ''} : 0.0)`,
+        rows * outD, { inputs: { Z: resid.z, Y: y, PM: resid.mask, ...(resid.gate ? { G: resid.gate } : {}) }, ints: { uC: outD } });
+      y.free();
+      return r;
+    }
+    if (x.half === 'packed' && !packedOk) {
+      const xu = this._unpack(x);
+      out.free();
+      const y = this.linear(xu, rows, inD, w, outD, bias, act, half);
+      xu.free();
+      return y;
+    }
     const inputs = { X: x, Wt: w, B: bias ?? x };
     const ints = { uIn: inD, uOut: outD, uBias: bias ? 1 : 0, uAct: ACT[act] ?? 0, uRows: rows };
     const epi = `
 float epi(float v) { return uAct == 1 ? max(v, 0.0) : uAct == 2 ? sigm(v) : v; }`;
     const decl = 'uniform sampler2D X; uniform sampler2D Wt; uniform sampler2D B; uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows;';
+    if (packedOk) {
+      // Operands as packed halves (8 a texel): a 4 x 4 block a fragment reads half the texels of the float path (2x on
+      // an M2, tools/gpu/bench-webgl.js --packed=1), into four render targets, then repacked.
+      out.free();
+      const xp = this._pack(x, rows * inD);
+      const wp = w.weight ? this._packWeight(w) : this._pack(w, outD * inD);
+      const rq = Math.ceil(rows / 4);
+      const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD));
+      c.kernel('linear4x4pk', `
+uniform highp usampler2D X; uniform highp usampler2D Wt; uniform sampler2D B;
+uniform sampler2D Z; uniform sampler2D G; uniform sampler2D PM; uniform int uRes; uniform int uGate;
+uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows;${epi}
+vec4 fin(vec4 v, int r, int o0) {
+  if (uRes == 0) return v;
+  int zt = (r * uOut + o0) / 4;
+  vec4 g = uGate == 1 ? vec4(1.0) / (vec4(1.0) + exp(-tx(G, zt))) : vec4(1.0);
+  return tx(Z, zt) + (el(PM, r) != 0.0 ? v * g : vec4(0.0));
+}
+vec4 epi4(vec4 a) { return vec4(epi(a.x), epi(a.y), epi(a.z), epi(a.w)); }
+void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
+void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
+  int e0 = t * 4;
+  int q = e0 / uOut;
+  int o0 = e0 - q * uOut;
+  int ib = uIn / 8;
+  int xw = textureSize(X, 0).x;
+  int ww = textureSize(Wt, 0).x;
+  ivec2 xc[4];
+  bool live[4];
+  for (int i = 0; i < 4; i++) { int r = q * 4 + i; live[i] = r < uRows; int xt = (live[i] ? r : 0) * ib; xc[i] = ivec2(xt % xw, xt / xw); }
+  ivec2 wc[4];
+  for (int i = 0; i < 4; i++) { int wt = (o0 + i) * ib; wc[i] = ivec2(wt % ww, wt / ww); }
+  vec4 a[4];
+  for (int i = 0; i < 4; i++) a[i] = vec4(0.0);
+  for (int k = 0; k < ib; k++) {
+    ivec2 dk = ivec2(k, 0);
+    vec4 l0, h0, l1, h1, l2, h2, l3, h3;
+    unpack8(texelFetch(Wt, wc[0] + dk, 0), l0, h0);
+    unpack8(texelFetch(Wt, wc[1] + dk, 0), l1, h1);
+    unpack8(texelFetch(Wt, wc[2] + dk, 0), l2, h2);
+    unpack8(texelFetch(Wt, wc[3] + dk, 0), l3, h3);
+    mat4 wl = mat4(l0, l1, l2, l3), wh = mat4(h0, h1, h2, h3);
+    for (int i = 0; i < 4; i++) {
+      vec4 xl, xh;
+      unpack8(texelFetch(X, xc[i] + dk, 0), xl, xh);
+      a[i] += xl * wl + xh * wh;
+    }
+  }
+  vec4 bv = uBias == 1 ? tx(B, o0 / 4) : vec4(0.0);
+  r0 = live[0] ? fin(epi4(a[0] + bv), q * 4, o0) : vec4(0.0);
+  r1 = live[1] ? fin(epi4(a[1] + bv), q * 4 + 1, o0) : vec4(0.0);
+  r2 = live[2] ? fin(epi4(a[2] + bv), q * 4 + 2, o0) : vec4(0.0);
+  r3 = live[3] ? fin(epi4(a[3] + bv), q * 4 + 3, o0) : vec4(0.0);
+}`, qs, { inputs: { X: xp, Wt: wp, B: bias ?? w, Z: resid?.z ?? w, G: resid?.gate ?? w, PM: resid?.mask ?? w },
+        ints: { ...ints, uRes: resid ? 1 : 0, uGate: resid?.gate ? 1 : 0 }, work: inD * 2 });
+      if (xp !== x) xp.free();
+      if (wp !== w && !wp.weight) wp.free();
+      return this._repack(qs, rows, outD, outHalf);
+    }
     if (rows >= 64 && inD % 4 === 0 && outD % 4 === 0 && TW % (inD / 4) === 0 && !this.no4x4) {
       // A block of R = 4 rows x 4 columns a fragment (R render targets, a 1/R of the rows each), then repacked: 8 texel
       // reads per 64 multiply-adds rather than 5 per 16. Measured slower or no better (M2, tools/gpu/bench-webgl.js):
@@ -79,6 +158,7 @@ float epi(float v) { return uAct == 1 ? max(v, 0.0) : uAct == 2 ? sigm(v) : v; }
       const R = 4;
       const rq = Math.ceil(rows / R);
       const qs = Array.from({ length: R }, () => c.tensor(rq * outD));
+      if (outHalf === 'packed') throw new Error('linear: packed output from the float path');
       const idx = [...Array(R).keys()];
       c.kernel(`linear${R}x4`, `${decl}${epi}
 vec4 epi4(vec4 a) { return vec4(epi(a.x), epi(a.y), epi(a.z), epi(a.w)); }
@@ -198,6 +278,7 @@ float lin(int e) {
     const c = this.ctx;
     const ib = inD / 4;
     if (inD % 4 || outD % 4 || TW % ib) {
+      // (linear unpacks a packed x itself)
       const p = this.linear(x, rows, inD, wp, outD, bp);
       const g = this.linear(x, rows, inD, wg, outD, bg);
       const out = c.elementwise('trigate', 'el(PM, e / uC) != 0.0 ? el(P, e) * sigm(el(G, e)) : 0.0', rows * outD,
@@ -207,6 +288,65 @@ float lin(int e) {
       return out;
     }
     const rq = Math.ceil(rows / 4);
+    if (inD % 8 === 0 && TW % (inD / 8) === 0 && !this.noPacked) {
+      const xp = this._pack(x, rows * inD);
+      const wpp = this._packWeight(wp);
+      const wgp = this._packWeight(wg);
+      const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD));
+      c.kernel('gatedlinear4x4pk', `
+uniform highp usampler2D X; uniform highp usampler2D Wp; uniform highp usampler2D Wg; uniform sampler2D Bp; uniform sampler2D Bg; uniform sampler2D M;
+uniform int uIn; uniform int uOut; uniform int uRows; uniform int uBp; uniform int uBg;
+void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
+void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
+  int e0 = t * 4;
+  int q = e0 / uOut;
+  int o0 = e0 - q * uOut;
+  int ib = uIn / 8;
+  int xw = textureSize(X, 0).x;
+  int ww = textureSize(Wp, 0).x;
+  ivec2 xc[4];
+  bool live[4];
+  for (int i = 0; i < 4; i++) { int r = q * 4 + i; live[i] = r < uRows && el(M, r) != 0.0; int xt = (r < uRows ? r : 0) * ib; xc[i] = ivec2(xt % xw, xt / xw); }
+  ivec2 wc[4];
+  for (int i = 0; i < 4; i++) { int wt = (o0 + i) * ib; wc[i] = ivec2(wt % ww, wt / ww); }
+  vec4 p[4], g[4];
+  for (int i = 0; i < 4; i++) { p[i] = vec4(0.0); g[i] = vec4(0.0); }
+  for (int k = 0; k < ib; k++) {
+    ivec2 dk = ivec2(k, 0);
+    vec4 l0, h0, l1, h1, l2, h2, l3, h3;
+    unpack8(texelFetch(Wp, wc[0] + dk, 0), l0, h0);
+    unpack8(texelFetch(Wp, wc[1] + dk, 0), l1, h1);
+    unpack8(texelFetch(Wp, wc[2] + dk, 0), l2, h2);
+    unpack8(texelFetch(Wp, wc[3] + dk, 0), l3, h3);
+    mat4 pl = mat4(l0, l1, l2, l3), ph = mat4(h0, h1, h2, h3);
+    unpack8(texelFetch(Wg, wc[0] + dk, 0), l0, h0);
+    unpack8(texelFetch(Wg, wc[1] + dk, 0), l1, h1);
+    unpack8(texelFetch(Wg, wc[2] + dk, 0), l2, h2);
+    unpack8(texelFetch(Wg, wc[3] + dk, 0), l3, h3);
+    mat4 gm = mat4(l0, l1, l2, l3), gh = mat4(h0, h1, h2, h3);
+    for (int i = 0; i < 4; i++) {
+      vec4 xl, xh;
+      unpack8(texelFetch(X, xc[i] + dk, 0), xl, xh);
+      p[i] += xl * pl + xh * ph;
+      g[i] += xl * gm + xh * gh;
+    }
+  }
+  vec4 bpv = uBp == 1 ? tx(Bp, o0 / 4) : vec4(0.0), bgv = uBg == 1 ? tx(Bg, o0 / 4) : vec4(0.0);
+  r0 = live[0] ? (p[0] + bpv) / (vec4(1.0) + exp(-(g[0] + bgv))) : vec4(0.0);
+  r1 = live[1] ? (p[1] + bpv) / (vec4(1.0) + exp(-(g[1] + bgv))) : vec4(0.0);
+  r2 = live[2] ? (p[2] + bpv) / (vec4(1.0) + exp(-(g[2] + bgv))) : vec4(0.0);
+  r3 = live[3] ? (p[3] + bpv) / (vec4(1.0) + exp(-(g[3] + bgv))) : vec4(0.0);
+}`, qs, { inputs: { X: xp, Wp: wpp, Wg: wgp, Bp: bp ?? mask, Bg: bg ?? mask, M: mask },
+        ints: { uIn: inD, uOut: outD, uRows: rows, uBp: bp ? 1 : 0, uBg: bg ? 1 : 0 }, work: inD * 4 });
+      if (xp !== x) xp.free();
+      return this._repack(qs, rows, outD, half && this.halfPair);
+    }
+    if (x.half === 'packed') {
+      const xu = this._unpack(x);
+      const y = this.gatedLinear(xu, rows, inD, wp, bp, wg, bg, outD, mask, half);
+      xu.free();
+      return y;
+    }
     const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD, half && this.halfPair));
     c.kernel('gatedlinear4x4', `
 uniform sampler2D X; uniform sampler2D Wp; uniform sampler2D Wg; uniform sampler2D Bp; uniform sampler2D Bg; uniform sampler2D M;
@@ -261,6 +401,76 @@ vec4 compute(int t) {
     return res;
   }
 
+  /** `x` as packed halves (8 a texel), for the packed matmuls; `x` itself when it already is. */
+  _pack(x, size) {
+    if (x.half === 'packed') return x;
+    return this.ctx.kernel('pack8', `
+uniform sampler2D S;
+uvec4 compute(int t) {
+  vec4 a = tx(S, 2 * t), b = tx(S, 2 * t + 1);
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
+}`, this.ctx.tensor(size, 'packed'), { inputs: { S: x } });
+  }
+
+  /** How a site's output is held: packed halves, unless the site is listed in `noPackedSites` (bisecting). */
+  pk(site) {
+    return this.noPackedSites?.has(site) ? true : 'packed';
+  }
+
+  /** A packed tensor back to floats (for a kernel that reads floats). */
+  _unpack(x) {
+    if (x.half !== 'packed') return x;
+    return this.ctx.kernel('unpack8', `
+uniform highp usampler2D S;
+vec4 compute(int t) {
+  int w = textureSize(S, 0).x;
+  int pt = t >> 1;
+  uvec4 u = texelFetch(S, ivec2(pt % w, pt / w), 0);
+  return (t & 1) == 0 ? vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)) : vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w));
+}`, this.ctx.tensor(x.size), { inputs: { S: x } });
+  }
+
+  /** A weight packed once, on first use, and kept. */
+  _packWeight(w) {
+    this.packedW ??= new Map();
+    let p = this.packedW.get(w);
+    if (!p) {
+      p = this._pack(w, w.size);
+      p.weight = true;
+      this.packedW.set(w, p);
+    }
+    return p;
+  }
+
+  /** Four planes of a 4-row block kernel (plane i holds rows 4q + i) into one row-major tensor. */
+  _repack(qs, rows, outD, half) {
+    if (half === 'packed') {
+      const res = this.ctx.elementwise('repack4', 'rp(e)', rows * outD, {
+        inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3] }, ints: { uOut: outD }, half: 'packed',
+        pre: `float rp(int e) {
+  int r = e / uOut;
+  int qe = (r / 4) * uOut + e - r * uOut;
+  int i = r - (r / 4) * 4;
+  return i == 0 ? el(Q0, qe) : i == 1 ? el(Q1, qe) : i == 2 ? el(Q2, qe) : el(Q3, qe);
+}`,
+      });
+      qs.forEach((t) => t.free());
+      return res;
+    }
+    const res = this.ctx.kernel('repack4', `
+uniform sampler2D Q0; uniform sampler2D Q1; uniform sampler2D Q2; uniform sampler2D Q3; uniform int uOut;
+vec4 compute(int t) {
+  int e0 = t * 4;
+  int r = e0 / uOut;
+  int qt = ((r / 4) * uOut + e0 - r * uOut) / 4;
+  int i = r - (r / 4) * 4;
+  if (i == 0) return tx(Q0, qt); if (i == 1) return tx(Q1, qt); if (i == 2) return tx(Q2, qt);
+  return tx(Q3, qt);
+}`, this.ctx.tensor(rows * outD, half), { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3] }, ints: { uOut: outD } });
+    qs.forEach((t) => t.free());
+    return res;
+  }
+
   /** RMSNorm (`type` other than 'layer_norm') or LayerNorm over the last `dim` of `[rows, dim]`. */
   norm(x, rows, dim, type, w = null, b = null, eps = 1e-5, half = false) {
     const c = this.ctx;
@@ -280,7 +490,7 @@ vec4 compute(int r) {
 }`, c.tensor(rows * 4), { inputs: { X: x }, ints: { uDim: dim }, floats: { uEps: eps }, work: dim * 2 });
     const out = c.elementwise(`normapply-${w ? 'w' : ''}${b ? 'b' : ''}`,
       `(el(X, e) - tx(S, e / uDim).x) * tx(S, e / uDim).y${w ? ' * el(Wn, e - (e / uDim) * uDim)' : ''}${b ? ' + el(Bn, e - (e / uDim) * uDim)' : ''}`,
-      rows * dim, { inputs: { X: x, S: stats, ...(w ? { Wn: w } : {}), ...(b ? { Bn: b } : {}) }, ints: { uDim: dim }, half: half && this.halfPair });
+      rows * dim, { inputs: { X: x, S: stats, ...(w ? { Wn: w } : {}), ...(b ? { Bn: b } : {}) }, ints: { uDim: dim }, half: half === 'packed' ? 'packed' : half && this.halfPair });
     stats.free();
     return out;
   }
@@ -369,7 +579,7 @@ vec4 compute(int r) {
     normed.free();
     let bias = null;
     if (usePairBias && pair) {
-      const np = this.norm(pair, n * n, P, type, W('pair_norm.weight'), W('pair_norm.bias', true), eps, true);
+      const np = this.norm(pair, n * n, P, type, W('pair_norm.weight'), W('pair_norm.bias', true), eps, this.pk('np'));
       bias = this.linear(np, n * n, P, W('to_bias.weight'), H);
       np.free();
     }
@@ -453,18 +663,26 @@ vec4 compute(int t) {
     return out;
   }
 
-  /** TriangleMultiplicativeUpdate, `outgoing` or `incoming` (`triangular_multiplicative_update.py`). */
+  /** TriangleMultiplicativeUpdate, `outgoing` or `incoming` (`triangular_multiplicative_update.py`): `z` plus it. */
   triMul(z, pairMask, n, cZ, cH, direction, prefix, eps = 1e-5) {
     const c = this.ctx;
     const rows = n * n;
     const W = (k, opt = false) => this.W(`${prefix}.${k}`, opt);
-    const zn = this.norm(z, rows, cZ, 'layer_norm', W('layer_norm_in.weight'), W('layer_norm_in.bias', true), eps, true);
+    const zn = this.norm(z, rows, cZ, 'layer_norm', W('layer_norm_in.weight'), W('layer_norm_in.bias', true), eps, this.pk('zn'));
     const gated = (side) => this.gatedLinear(zn, rows, cZ, W(`linear_${side}_p.weight`), W(`linear_${side}_p.bias`, true),
       W(`linear_${side}_g.weight`), W(`linear_${side}_g.bias`, true), cH, pairMask, true);
     const a = gated('a');
     const b = gated('b');
     // x[i, j, c] = sum_k a[i, k, c] b[j, k, c] (outgoing) or a[k, i, c] b[k, j, c] (incoming), never n^3 in memory.
     const out = direction === 'outgoing';
+    // Per channel the contraction is a matmul, x_c = A_c B_c^T: a and b go channel-major as packed halves (k padded to
+    // 8, i and j to 4), one batched packed matmul over the channels, and the result gathered back to [n^2, c].
+    if (!this.noTriMM) {
+      const x = this._triMatmul(a, b, n, cH, out);
+      a.free();
+      b.free();
+      return this._triTail(x, zn, rows, cZ, cH, W, eps, z, pairMask);
+    }
     // A 2 x 2 block of (i, j) a fragment, into four render targets (one per parity of i and j), then repacked: 4 texel
     // reads per 16 multiply-adds rather than 2 per 4. Each operand advances by a fixed stride per k (c4 texels
     // outgoing, n * c4 incoming): its texture coordinate is stepped rather than divided out on every read.
@@ -518,25 +736,99 @@ vec4 compute(int t) {
     planes.forEach((t) => t.free());
     a.free();
     b.free();
-    const xn = this.norm(x, rows, cH, 'layer_norm', W('layer_norm_out.weight'), W('layer_norm_out.bias', true), eps, true);
+    return this._triTail(x, zn, rows, cZ, cH, W, eps, z, pairMask);
+  }
+
+  /** The triangle update after the contraction: norm, the output projection, gated by the input's own projection. */
+  _triTail(x, zn, rows, cZ, cH, W, eps, z, pairMask) {
+    const xn = this.norm(x, rows, cH, 'layer_norm', W('layer_norm_out.weight'), W('layer_norm_out.bias', true), eps, this.pk('xn'));
     x.free();
-    const xp = this.linear(xn, rows, cH, W('linear_z.weight'), cZ, W('linear_z.bias', true));
-    xn.free();
     const gp = this.linear(zn, rows, cZ, W('linear_g.weight'), cZ, W('linear_g.bias', true));
     zn.free();
-    const res = c.elementwise('mulsig', 'el(X, e) * sigm(el(G, e))', rows * cZ, { inputs: { X: xp, G: gp } });
-    xp.free();
+    // z + pairMask * linear_z(xn) * sigmoid(gp), in the matmul's epilogue.
+    const res = this.linear(xn, rows, cH, W('linear_z.weight'), cZ, W('linear_z.bias', true), null, false, { z, mask: pairMask, gate: gp });
+    xn.free();
     gp.free();
     return res;
   }
 
-  /** `z + pairMask * d`, rows of width `dim`. */
-  addPair(z, d, pairMask, rows, dim) {
-    const out = this.ctx.elementwise('addpair', 'el(Z, e) + (el(PM, e / uDim) != 0.0 ? el(D, e) : 0.0)', rows * dim,
-      { inputs: { Z: z, D: d, PM: pairMask }, ints: { uDim: dim } });
-    z.free();
-    d.free();
-    return out;
+  /** x[i, j, c] = sum_k a[i, k, c] b[j, k, c] (outgoing) or a[k, i, c] b[k, j, c] (incoming), as one batched matmul. */
+  _triMatmul(a, b, n, cH, outgoing) {
+    const c = this.ctx;
+    const Ip = Math.ceil(n / 4) * 4;
+    const Kp = Math.ceil(n / 8) * 8;
+    const ib = Kp / 8;
+    const cm = (src, rowsPer) => c.elementwise(`tri-cm-${outgoing ? 'out' : 'in'}`, 'cmv(e)', cH * rowsPer * Kp, {
+      inputs: { S: src }, ints: { uN: n, uC: cH, uR: rowsPer, uK: Kp }, half: 'packed', rowTexels: ib,
+      pre: `float cmv(int e) {
+  int r = e / uK;
+  int k = e - r * uK;
+  int ch = r / uR;
+  int i = r - ch * uR;
+  if (i >= uN || k >= uN) return 0.0;
+  return ${outgoing ? 'el(S, (i * uN + k) * uC + ch)' : 'el(S, (k * uN + i) * uC + ch)'};
+}`,
+    });
+    const A = cm(a, Ip);
+    const B = cm(b, Ip);
+    const rowsAll = cH * Ip;
+    const rq = rowsAll / 4;
+    const qs = [0, 1, 2, 3].map(() => c.tensor(rq * Ip));
+    c.kernel('bmm4x4pk', `
+uniform highp usampler2D X; uniform highp usampler2D Wt; uniform int uIn; uniform int uOut; uniform int uIp;
+void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
+void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
+  int e0 = t * 4;
+  int q = e0 / uOut;
+  int o0 = e0 - q * uOut;
+  int ib = uIn / 8;
+  int ch = (q * 4) / uIp;
+  int xw = textureSize(X, 0).x;
+  int ww = textureSize(Wt, 0).x;
+  ivec2 xc[4];
+  ivec2 wc[4];
+  for (int i = 0; i < 4; i++) {
+    int xt = (q * 4 + i) * ib;
+    xc[i] = ivec2(xt % xw, xt / xw);
+    int wt = (ch * uOut + o0 + i) * ib;
+    wc[i] = ivec2(wt % ww, wt / ww);
+  }
+  vec4 a[4];
+  for (int i = 0; i < 4; i++) a[i] = vec4(0.0);
+  for (int k = 0; k < ib; k++) {
+    ivec2 dk = ivec2(k, 0);
+    vec4 l0, h0, l1, h1, l2, h2, l3, h3;
+    unpack8(texelFetch(Wt, wc[0] + dk, 0), l0, h0);
+    unpack8(texelFetch(Wt, wc[1] + dk, 0), l1, h1);
+    unpack8(texelFetch(Wt, wc[2] + dk, 0), l2, h2);
+    unpack8(texelFetch(Wt, wc[3] + dk, 0), l3, h3);
+    mat4 wl = mat4(l0, l1, l2, l3), wh = mat4(h0, h1, h2, h3);
+    for (int i = 0; i < 4; i++) {
+      vec4 xl, xh;
+      unpack8(texelFetch(X, xc[i] + dk, 0), xl, xh);
+      a[i] += xl * wl + xh * wh;
+    }
+  }
+  r0 = a[0]; r1 = a[1]; r2 = a[2]; r3 = a[3];
+}`, qs, { inputs: { X: A, Wt: B }, ints: { uIn: Kp, uOut: Ip, uIp: Ip }, work: Kp * 2 });
+    A.free();
+    B.free();
+    // Back to [n^2, c]: element (i, j, ch) is row ch * Ip + i, column j of the batched result (rows in planes of 4).
+    const x = c.elementwise('tri-gather', 'gv(e)', n * n * cH, {
+      inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3] }, ints: { uN: n, uC: cH, uIp: Ip },
+      pre: `float gv(int e) {
+  int r = e / uC;
+  int ch = e - r * uC;
+  int i = r / uN;
+  int j = r - i * uN;
+  int R = ch * uIp + i;
+  int qe = (R >> 2) * uIp + j;
+  int p = R & 3;
+  return p == 0 ? el(Q0, qe) : p == 1 ? el(Q1, qe) : p == 2 ? el(Q2, qe) : el(Q3, qe);
+}`,
+    });
+    qs.forEach((t) => t.free());
+    return x;
   }
 
   /** PairReprUpdate (`pair_update.py`), hadamard pair write. */
@@ -562,17 +854,21 @@ vec4 compute(int t) {
 }`,
     });
     pij.free();
-    zz = this.addPair(zz, this.triMul(zz, pairMask, n, P, TRI, 'outgoing', `${prefix}.tri_mult_out`, eps), pairMask, rows, P);
-    zz = this.addPair(zz, this.triMul(zz, pairMask, n, P, TRI, 'incoming', `${prefix}.tri_mult_in`, eps), pairMask, rows, P);
+    for (const dir of ['outgoing', 'incoming']) {
+      const z2 = this.triMul(zz, pairMask, n, P, TRI, dir, `${prefix}.tri_mult_${dir === 'outgoing' ? 'out' : 'in'}`, eps);
+      zz.free();
+      zz = z2;
+    }
     const tp = `${prefix}.transition_out`;
-    const zt = this.norm(zz, rows, P, 'layer_norm', this.W(`${tp}.layer_norm.weight`), this.W(`${tp}.layer_norm.bias`), eps, true);
+    const zt = this.norm(zz, rows, P, 'layer_norm', this.W(`${tp}.layer_norm.weight`), this.W(`${tp}.layer_norm.bias`), eps, this.pk('zt'));
     const l1B = this.W(`${tp}.linear_1.bias`);
     const hidden = l1B.size;
-    const h = this.linear(zt, rows, P, this.W(`${tp}.linear_1.weight`), hidden, l1B, 'relu', true);
+    const h = this.linear(zt, rows, P, this.W(`${tp}.linear_1.weight`), hidden, l1B, 'relu', this.pk('h'));
     zt.free();
-    const tr = this.linear(h, rows, hidden, this.W(`${tp}.linear_2.weight`), P, this.W(`${tp}.linear_2.bias`));
+    const out = this.linear(h, rows, hidden, this.W(`${tp}.linear_2.weight`), P, this.W(`${tp}.linear_2.bias`), null, false, { z: zz, mask: pairMask });
     h.free();
-    return this.addPair(zz, tr, pairMask, rows, P);
+    zz.free();
+    return out;
   }
 
   _masks(mask, n) {
@@ -641,7 +937,7 @@ vec4 compute(int t) {
       const sn = this.norm(s, n, D, norm, this.W('nn.s_cycle_norm.weight'));
       const sd = this.linear(sn, n, D, this.W('nn.s_cycle_proj.weight'), D);
       sn.free();
-      const zn = this.norm(z, n * n, P, norm, this.W('nn.z_cycle_norm.weight'), null, 1e-5, true);
+      const zn = this.norm(z, n * n, P, norm, this.W('nn.z_cycle_norm.weight'), null, 1e-5, this.pk('zc'));
       const zd = this.linear(zn, n * n, P, this.W('nn.z_cycle_proj.weight'), P);
       zn.free();
       s.free();

@@ -32,6 +32,8 @@ export async function main(_device, args) {
   const parts = (opt.parts ?? 'trunk,decoder,encoder').split(',');
   const { cfg, weights } = await loadReleased();
   const model = new Rfd4pModelGL(weights);
+  if (opt.nopacked === '1') model.noPacked = true;
+  if (opt.only) model.noPackedSites = new Set(['zn', 'xn', 'zt', 'h', 'np', 'zc'].filter((x) => x !== opt.only));
   const results = { renderer: model.ctx.renderer };
   // Weights are float16 on the GPU, as the WebGPU path's half mode holds them: its tolerance.
   const tol = 2e-2;
@@ -56,6 +58,7 @@ export async function main(_device, args) {
       pairCond: pairCondFeatures(tt, nnCfg.feats_pair_cond),
     };
     const depth = opt.depth ? Number(opt.depth) : meta.steps[0].n_recycle;
+    if (opt.warm === '1' && opt.profile !== '1') await model.forwardTrunk(n, f, batch.padding_mask.data, nnCfg, 1);
     if (opt.profile === '1') { await model.forwardTrunk(n, f, batch.padding_mask.data, nnCfg, 1); model.ctx.profile = new Map(); model.ctx.lastT = performance.now(); }
     const t0 = performance.now();
     const out = await model.forwardTrunk(n, f, batch.padding_mask.data, nnCfg, depth, { insertion: true });
