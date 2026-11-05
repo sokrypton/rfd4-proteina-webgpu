@@ -91,7 +91,7 @@ export class Rfd4pModelGL {
     const epi = `
 float epi(float v) { return uAct == 1 ? max(v, 0.0) : uAct == 2 ? sigm(v) : v; }`;
     const decl = 'uniform sampler2D X; uniform sampler2D Wt; uniform sampler2D B; uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows;';
-    if (packedOk && outHalf && !resid && rows >= 4096 && outD % 8 === 0 && !this.no48) {
+    if (packedOk && (outHalf || resid) && rows >= 4096 && outD % 8 === 0 && !this.no48) {
       // An output that may be float16 (packed or half): 4 rows x 8 columns a fragment, written as packed halves (four
       // RGBA32UI targets, 32 values a pixel within the 64-byte budget): 12 texel reads per 256 multiply-adds.
       out.free();
@@ -140,7 +140,8 @@ void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
 }`, qs, { inputs: { X: xp, Wt: wp, B: bias ?? w }, ints, work: inD * 3 });
       if (xp !== x) xp.free();
       if (wp !== w && !wp.weight) wp.free();
-      return this._repackPacked(qs, rows, outD, outHalf);
+      // A residual update: the float16 result is the delta; the repack adds it to z in float32.
+      return resid ? this._repackResid(qs, rows, outD, resid) : this._repackPacked(qs, rows, outD, outHalf);
     }
     if (packedOk) {
       // Operands as packed halves (8 a texel): a 4 x 4 block a fragment reads half the texels of the float path (2x on
@@ -339,6 +340,7 @@ float lin(int e) {
       return out;
     }
     const rq = Math.ceil(rows / 4);
+    // (4 rows x 8 columns of both projections, packed outputs, measured 1.2x slower: register pressure, M2.)
     if (inD % 8 === 0 && TW % (inD / 8) === 0 && !this.noPacked) {
       const xp = this._pack(x, rows * inD);
       const wpp = this._packWeight(wp);
@@ -549,6 +551,30 @@ ${packed ? `uvec4 compute(int t) {
 }`}`;
     const res = c.kernel(`repack4p-${packed ? 'pk' : 'h'}`, body, c.tensor(rows * outD, packed ? 'packed' : true),
       { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3] }, ints: { uOut: outD } });
+    qs.forEach((t) => t.free());
+    return res;
+  }
+
+  /** Packed planes of a delta into `z + mask[r] * delta * sigmoid(gate)` (gate optional), float32, a texel at a time. */
+  _repackResid(qs, rows, outD, { z, mask, gate }) {
+    const c = this.ctx;
+    const res = c.kernel(`repack4p-res${gate ? '-g' : ''}`, `
+uniform highp usampler2D Q0; uniform highp usampler2D Q1; uniform highp usampler2D Q2; uniform highp usampler2D Q3;
+uniform sampler2D Z; uniform sampler2D PM; uniform sampler2D G; uniform int uOut;
+uvec4 plane(int i, int t) {
+  int w = textureSize(Q0, 0).x;
+  ivec2 p = ivec2(t % w, t / w);
+  return i == 0 ? texelFetch(Q0, p, 0) : i == 1 ? texelFetch(Q1, p, 0) : i == 2 ? texelFetch(Q2, p, 0) : texelFetch(Q3, p, 0);
+}
+vec4 compute(int t) {
+  int e0 = t * 4;
+  int r = e0 / uOut;
+  int qe = (r >> 2) * uOut + e0 - r * uOut;
+  uvec4 u = plane(r & 3, qe >> 3);
+  vec4 d = (qe & 4) == 0 ? vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)) : vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w));
+  ${gate ? 'd /= vec4(1.0) + exp(-tx(G, t));' : ''}
+  return tx(Z, t) + (el(PM, r) != 0.0 ? d : vec4(0.0));
+}`, c.tensor(rows * outD), { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3], Z: z, PM: mask, G: gate ?? z }, ints: { uOut: outD } });
     qs.forEach((t) => t.free());
     return res;
   }
@@ -807,8 +833,8 @@ vec4 compute(int t) {
     const zn = this.norm(z, rows, cZ, 'layer_norm', W('layer_norm_in.weight'), W('layer_norm_in.bias', true), eps, this.pk('zn'));
     const gated = (side) => this.gatedLinear(zn, rows, cZ, W(`linear_${side}_p.weight`), W(`linear_${side}_p.bias`, true),
       W(`linear_${side}_g.weight`), W(`linear_${side}_g.bias`, true), cH, pairMask, true);
-    const a = gated('a');
-    const b = gated('b');
+    let a = gated('a');
+    let b = gated('b');
     // x[i, j, c] = sum_k a[i, k, c] b[j, k, c] (outgoing) or a[k, i, c] b[k, j, c] (incoming), never n^3 in memory.
     const out = direction === 'outgoing';
     // Per channel the contraction is a matmul, x_c = A_c B_c^T: a and b go channel-major as packed halves (k padded to
@@ -822,6 +848,8 @@ vec4 compute(int t) {
     // A 2 x 2 block of (i, j) a fragment, into four render targets (one per parity of i and j), then repacked: 4 texel
     // reads per 16 multiply-adds rather than 2 per 4. Each operand advances by a fixed stride per k (c4 texels
     // outgoing, n * c4 incoming): its texture coordinate is stepped rather than divided out on every read.
+    if (a.half === 'packed') { const t = this._unpack(a); a.free(); a = t; }
+    if (b.half === 'packed') { const t = this._unpack(b); b.free(); b = t; }
     const n2 = Math.ceil(n / 2);
     const planes = [0, 1, 2, 3].map(() => c.tensor(n2 * n2 * cH));
     c.kernel(`tri2-${out ? 'out' : 'in'}`, `
@@ -894,7 +922,8 @@ vec4 compute(int t) {
     const Ip = Math.ceil(n / 4) * 4;
     const Kp = Math.ceil(n / 8) * 8;
     const ib = Kp / 8;
-    const cm = (src, rowsPer) => c.elementwise(`tri-cm-${outgoing ? 'out' : 'in'}`, 'cmv(e)', cH * rowsPer * Kp, {
+    const rd = (t) => (t.half === 'packed' ? 'elp' : 'el');
+    const cm = (src, rowsPer) => c.elementwise(`tri-cm-${outgoing ? 'out' : 'in'}${src.half === 'packed' ? '-p' : ''}`, 'cmv(e)', cH * rowsPer * Kp, {
       inputs: { S: src }, ints: { uN: n, uC: cH, uR: rowsPer, uK: Kp }, half: 'packed', rowTexels: ib,
       pre: `float cmv(int e) {
   int r = e / uK;
@@ -902,9 +931,12 @@ vec4 compute(int t) {
   int ch = r / uR;
   int i = r - ch * uR;
   if (i >= uN || k >= uN) return 0.0;
-  return ${outgoing ? 'el(S, (i * uN + k) * uC + ch)' : 'el(S, (k * uN + i) * uC + ch)'};
+  return ${outgoing ? `${rd(src)}(S, (i * uN + k) * uC + ch)` : `${rd(src)}(S, (k * uN + i) * uC + ch)`};
 }`,
     });
+    // j padded to 8: a fragment writes 4 rows (i) x 8 columns (j) as packed halves (the 4x8 block, 64 bytes a pixel).
+    const Jp = Math.ceil(n / 8) * 8;
+    // (4 rows x 8 columns as packed halves, j padded to 8, measured slower with the packed gather: M2.)
     const A = cm(a, Ip);
     const B = cm(b, Ip);
     const rowsAll = cH * Ip;
