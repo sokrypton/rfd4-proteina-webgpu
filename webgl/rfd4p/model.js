@@ -803,6 +803,14 @@ vec4 fx(int p, ivec2 c, int k) {
   ${pw ? 'return pwJ < 0 ? v : v + tx(PIJ, pwJ + k) * tx(PIJ, pwI + k);' : 'return v;'}`
       : pw ? 'vec4 v = texelFetch(X0, c + ivec2(k, 0), 0); return pwJ < 0 ? v : v + tx(PIJ, pwJ + k) * tx(PIJ, pwI + k);' : 'return texelFetch(X0, c + ivec2(k, 0), 0);'}
 }
+${zq ? `// Packed texel k8 (eight values) of the row that starts at c in plane p, read once.
+void fx8(int p, ivec2 c, int k8, out vec4 lo, out vec4 hi) {
+  ivec2 cc = c + ivec2(k8, 0);
+  uvec4 u = p == 0 ? texelFetch(Z0, cc, 0) : p == 1 ? texelFetch(Z1, cc, 0) : p == 2 ? texelFetch(Z2, cc, 0) : texelFetch(Z3, cc, 0);
+  lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y));
+  hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w));
+  ${pw ? 'if (pwJ >= 0) { lo += tx(PIJ, pwJ + 2 * k8) * tx(PIJ, pwI + 2 * k8); hi += tx(PIJ, pwJ + 2 * k8 + 1) * tx(PIJ, pwI + 2 * k8 + 1); }' : ''}
+}` : ''}
 // Plane and first texel of row r.
 ivec2 rowAt(int r, int nb, out int p) {
   int w = textureSize(${zq ? 'Z0' : 'X0'}, 0).x;
@@ -823,11 +831,18 @@ vec4 compute(int r) {
   ivec2 rc = rowAt(r, nb, p);
   ${ln ? 'float k0 = fx(p, rc, 0).x;' : 'float k0 = 0.0;'}
   vec4 s1 = vec4(0.0), s2 = vec4(0.0);
-  for (int k = 0; k < nb; k++) {
+  ${zq ? `for (int k8 = 0; k8 < nb / 2; k8++) {
+    vec4 lo, hi;
+    fx8(p, rc, k8, lo, hi);
+    lo -= vec4(k0);
+    hi -= vec4(k0);
+    s1 += lo + hi;
+    s2 += lo * lo + hi * hi;
+  }` : `for (int k = 0; k < nb; k++) {
     vec4 v = fx(p, rc, k) - vec4(k0);
     s1 += v;
     s2 += v * v;
-  }
+  }`}
   float n = float(uDim);
   float m1 = (s1.x + s1.y + s1.z + s1.w) / n;
   float m2 = (s2.x + s2.y + s2.z + s2.w) / n;
@@ -853,8 +868,20 @@ vec4 ap(int t) {
 }`;
     const out = packed
       ? c.kernel(`normapply1-pk${xk}`, `${head}
-uvec4 compute(int t) {
-  vec4 a = ap(2 * t), bb = ap(2 * t + 1);
+${zq ? `uvec4 compute(int t) {
+  int nb = uDim / 4;
+  int r = (2 * t) / nb;
+  int d8 = t - r * (nb / 2);
+  vec4 st = tx(S, r);
+  int p;
+  ivec2 rc = rowAt(r, nb, p);
+  vec4 a, bb;
+  fx8(p, rc, d8, a, bb);
+  a = (a - vec4(st.x)) * st.y;
+  bb = (bb - vec4(st.x)) * st.y;
+  if (uW == 1) { a *= tx(Wn, 2 * d8); bb *= tx(Wn, 2 * d8 + 1); }
+  if (uB == 1) { a += tx(Bn, 2 * d8); bb += tx(Bn, 2 * d8 + 1); }` : `uvec4 compute(int t) {
+  vec4 a = ap(2 * t), bb = ap(2 * t + 1);`}
   return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(bb.xy), packHalf2x16(bb.zw));
 }`, c.tensor(rows * dim, 'packed'), { inputs, ints })
       : c.kernel(`normapply1${xk}`, `${head}
@@ -1128,7 +1155,10 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     k.free();
     if (!biasPre) bias?.free();
     // Row max and 1/sum of exp, per (h, i).
-    const stats = c.kernel('attstats', `
+    // The softmax online, in the same walk over the keys (a running max, the sums rescaled as it rises): no pass of
+    // its own over (h, i) rows, which had too few fragments to hide its serial walk.
+    const online = !this.noOnlineSoftmax;
+    const stats = online ? null : c.kernel('attstats', `
 uniform sampler2D L; uniform int uN;
 vec4 compute(int row) {
   int base = row * uN;
@@ -1138,21 +1168,39 @@ vec4 compute(int row) {
   for (int j = 0; j < uN; j++) s += exp(el(L, base + j) - m);
   return vec4(m, s > 0.0 ? 1.0 / s : 0.0, 0.0, 0.0);
 }`, c.tensor(H * n * 4), { inputs: { L: logits }, ints: { uN: n }, work: 2 * n });
-    // out[i, h*dh + d] = sigmoid(g) * sum_j p[h, i, j] v[j, h*dh + d], four channels of one head a texel.
-    const gated = c.kernel('attpv', `
-uniform sampler2D L; uniform sampler2D S; uniform sampler2D V; uniform sampler2D G; uniform int uN; uniform int uD; uniform int uDh;
-vec4 compute(int t) {
-  int e0 = t * 4;
+    // Eight channels of one head a fragment, written as packed halves (the output projection's operand).
+    const gated = c.kernel(`attpv-pk${online ? '-ol' : ''}`, `
+uniform sampler2D L; uniform sampler2D S; uniform sampler2D V; uniform sampler2D G; uniform int uN; uniform int uD;
+uvec4 compute(int t) {
+  int e0 = t * 8;
   int i = e0 / uD;
   int c0 = e0 - i * uD;
-  int h = c0 / uDh;
+  int h = c0 / ${dh};
   int row = h * uN + i;
-  vec4 st = tx(S, row);
-  vec4 acc = vec4(0.0);
-  for (int j = 0; j < uN; j++) acc += exp(el(L, row * uN + j) - st.x) * st.y * tx(V, (j * uD + c0) / 4);
-  vec4 gv = tx(G, t);
-  return acc / (vec4(1.0) + exp(-gv));
-}`, c.tensor(n * D), { inputs: { L: logits, S: stats, V: v, G: g }, ints: { uN: n, uD: D, uDh: dh }, work: n });
+  vec4 a = vec4(0.0), b = vec4(0.0);
+  ${online ? `float m = -3.4e38, sum = 0.0;
+  for (int j = 0; j < uN; j++) {
+    float l = el(L, row * uN + j);
+    float m2 = max(m, l);
+    float sc = exp(m - m2), p = exp(l - m2);
+    int vb = (j * uD + c0) / 4;
+    a = a * sc + p * tx(V, vb);
+    b = b * sc + p * tx(V, vb + 1);
+    sum = sum * sc + p;
+    m = m2;
+  }
+  float inv = sum > 0.0 ? 1.0 / sum : 0.0;` : `vec4 st = tx(S, row);
+  for (int j = 0; j < uN; j++) {
+    float p = exp(el(L, row * uN + j) - st.x);
+    int vb = (j * uD + c0) / 4;
+    a += p * tx(V, vb);
+    b += p * tx(V, vb + 1);
+  }
+  float inv = st.y;`}
+  a = a * inv / (vec4(1.0) + exp(-tx(G, e0 / 4)));
+  b = b * inv / (vec4(1.0) + exp(-tx(G, e0 / 4 + 1)));
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
+}`, c.tensor(n * D, 'packed'), { inputs: { L: logits, S: stats ?? logits, V: v, G: g }, ints: { uN: n, uD: D }, work: n });
     [logits, stats, v, g].forEach((t) => t.free());
     // `opts.fused`: the output projection's planes, for the block's scale-and-add to read.
     const out = this.linear(gated, n, D, W('to_out_node.weight'), D, W('to_out_node.bias', true), null, opts.fused ? 'cmplanes' : false);
@@ -1251,7 +1299,7 @@ uvec4 compute(int t) {
   b = b * st.y / (vec4(1.0) + exp(-tx(G, e0 / 4 + 1)));
   return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
 }`, c.tensor(n * D, 'packed'), { inputs: { L: logits, S: stats, V: v, G: g }, ints: { uN: n, uD: D }, work: n });
-    [logits, stats, v, g].forEach((t) => t.free());
+    [logits, stats, v, g].forEach((t) => t?.free());
     const out = this.linear(gated, n, D, W('to_out_node.weight'), D, W('to_out_node.bias', true), null, 'cmplanes');
     gated.free();
     return out;
