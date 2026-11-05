@@ -39,6 +39,7 @@ export async function main(_device, args) {
   // `--skip=<regex>`: those kernels' draws not issued (a timing probe: what they cost in a real pass; results wrong).
   if (opt.skip) model.ctx.skipKeys = new RegExp(opt.skip);
   for (const k of (opt.flags ?? '').split(',').filter(Boolean)) model[k] = true;
+  for (const k of (opt.off ?? '').split(',').filter(Boolean)) model[k] = false;
   if (opt.only) model.noPackedSites = new Set(['zn', 'xn', 'zt', 'h', 'np', 'zc'].filter((x) => x !== opt.only));
   const results = { renderer: model.ctx.renderer };
   // Weights are float16 on the GPU, as the WebGPU path's half mode holds them: its tolerance.

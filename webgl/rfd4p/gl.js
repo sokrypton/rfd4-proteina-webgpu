@@ -183,6 +183,15 @@ export class GLContext {
 
   /** As `read`, after the GPU has finished, polled, so the page stays responsive while a long pass runs. */
   async readAsync(t, size = t.size) {
+    await this.idle();
+    return this.read(t, size);
+  }
+
+  /**
+   * Resolves once the GPU has run everything issued so far (a fence, polled, so the page stays responsive). (Polled by
+   * message-channel yields, unclamped, near the expected end: no faster in a trunk pass, M2.)
+   */
+  async idle() {
     const gl = this.gl;
     const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     gl.flush();
@@ -192,7 +201,6 @@ export class GLContext {
       await new Promise((r) => setTimeout(r, 4));
     }
     gl.deleteSync(sync);
-    return this.read(t, size);
   }
 
   _program(key, body) {
