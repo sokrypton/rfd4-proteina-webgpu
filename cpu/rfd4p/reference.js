@@ -972,8 +972,15 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
       pairCond: pairCondFeatures(tt, nnCfg.feats_pair_cond),
     };
 
-    // The insertion head on the last step, and on any step that could end the run.
-    const out = await forwardTrunk(n, f, pad, weights, nnCfg, depths[s], { insertion: s === nsteps - 1 || Boolean(monitor?.mayStopAt(s)) });
+    // Decoded (all-atom) live frames when asked, as Rfd4pGeneratorGpu does (`decodeStep`, `decodeEvery`); a frame
+    // without them is a Cα trace, whose strands have no plane to face.
+    const wantDecodeStep = Boolean(opts.onStep) && ((decodeEvery > 0 && ((s + 1) % decodeEvery === 0 || s + 1 === nsteps))
+      || Boolean(opts.decodeStep?.(s, nsteps)));
+    // The insertion head on the last step, on any step that could end the run, and on decoded live frames when asked
+    // (so an unindexed motif is placed in each frame).
+    const out = await forwardTrunk(n, f, pad, weights, nnCfg, depths[s], {
+      insertion: s === nsteps - 1 || Boolean(monitor?.mayStopAt(s)) || (wantDecodeStep && Boolean(opts.liveInsertion)),
+    });
     for (let i = 0; i < n; i += 1) {
       if (!emit.bb_ca[i]) out.bb_ca.fill(0, i * 3, i * 3 + 3);
       if (!emit.local_latents[i]) out.local_latents.fill(0, i * 32, i * 32 + 32);
@@ -1018,7 +1025,8 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
     const convergence = monitor?.observe(s, x1.bb_ca, sequenceForDecoder(batch, n, lastLogits)) ?? null;
     if (opts.onStep) {
       let liveDecoded = null;
-      if (decodeEvery > 0 && ((s + 1) % decodeEvery === 0 || s + 1 === nsteps)) {
+      // Not on the step the run stops at (the design itself is decoded below).
+      if (wantDecodeStep && (!convergence?.stop || decodeEvery > 0)) {
         const liveSeq = sequenceForDecoder(batch, n, lastLogits);
         const dec = await decodeLatents(batch, {
           n, caNm: x1.bb_ca, z: x1.local_latents, seq: liveSeq, weights, cfg: cfg.autoencoder_config.nn_ae.decoder,
@@ -1034,6 +1042,7 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
         xt: { bb_ca: Float32Array.from(x.bb_ca), local_latents: Float32Array.from(x.local_latents) },
         logits: lastLogits,
         decoded: liveDecoded,
+        insertionLogits: liveDecoded ? lastInsertion : null,
         convergence,
       });
     }
