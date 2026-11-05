@@ -91,6 +91,57 @@ export class Rfd4pModelGL {
     const epi = `
 float epi(float v) { return uAct == 1 ? max(v, 0.0) : uAct == 2 ? sigm(v) : v; }`;
     const decl = 'uniform sampler2D X; uniform sampler2D Wt; uniform sampler2D B; uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows;';
+    if (packedOk && outHalf && !resid && rows >= 4096 && outD % 8 === 0 && !this.no48) {
+      // An output that may be float16 (packed or half): 4 rows x 8 columns a fragment, written as packed halves (four
+      // RGBA32UI targets, 32 values a pixel within the 64-byte budget): 12 texel reads per 256 multiply-adds.
+      out.free();
+      const xp = this._pack(x, rows * inD);
+      const wp = w.weight ? this._packWeight(w) : this._pack(w, outD * inD);
+      const rq = Math.ceil(rows / 4);
+      const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD, 'packed'));
+      c.kernel('linear4x8pk', `
+uniform highp usampler2D X; uniform highp usampler2D Wt; uniform sampler2D B;
+uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows;${epi}
+vec4 epi4(vec4 a) { return vec4(epi(a.x), epi(a.y), epi(a.z), epi(a.w)); }
+void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
+uvec4 pk(vec4 a, vec4 b) { return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw)); }
+void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
+  int e0 = t * 8;
+  int q = e0 / uOut;
+  int o0 = e0 - q * uOut;
+  int ib = uIn / 8;
+  int xw = textureSize(X, 0).x;
+  int ww = textureSize(Wt, 0).x;
+  ivec2 xc[4];
+  bool live[4];
+  for (int i = 0; i < 4; i++) { int r = q * 4 + i; live[i] = r < uRows; int xt = (live[i] ? r : 0) * ib; xc[i] = ivec2(xt % xw, xt / xw); }
+  ivec2 wc[8];
+  for (int j = 0; j < 8; j++) { int wt = (o0 + j) * ib; wc[j] = ivec2(wt % ww, wt / ww); }
+  vec4 a[4], b[4];
+  for (int i = 0; i < 4; i++) { a[i] = vec4(0.0); b[i] = vec4(0.0); }
+  for (int k = 0; k < ib; k++) {
+    ivec2 dk = ivec2(k, 0);
+    vec4 l[8], h[8];
+    for (int j = 0; j < 8; j++) unpack8(texelFetch(Wt, wc[j] + dk, 0), l[j], h[j]);
+    mat4 wla = mat4(l[0], l[1], l[2], l[3]), wha = mat4(h[0], h[1], h[2], h[3]);
+    mat4 wlb = mat4(l[4], l[5], l[6], l[7]), whb = mat4(h[4], h[5], h[6], h[7]);
+    for (int i = 0; i < 4; i++) {
+      vec4 xl, xh;
+      unpack8(texelFetch(X, xc[i] + dk, 0), xl, xh);
+      a[i] += xl * wla + xh * wha;
+      b[i] += xl * wlb + xh * whb;
+    }
+  }
+  vec4 ba = uBias == 1 ? tx(B, o0 / 4) : vec4(0.0), bbv = uBias == 1 ? tx(B, o0 / 4 + 1) : vec4(0.0);
+  r0 = live[0] ? pk(epi4(a[0] + ba), epi4(b[0] + bbv)) : uvec4(0u);
+  r1 = live[1] ? pk(epi4(a[1] + ba), epi4(b[1] + bbv)) : uvec4(0u);
+  r2 = live[2] ? pk(epi4(a[2] + ba), epi4(b[2] + bbv)) : uvec4(0u);
+  r3 = live[3] ? pk(epi4(a[3] + ba), epi4(b[3] + bbv)) : uvec4(0u);
+}`, qs, { inputs: { X: xp, Wt: wp, B: bias ?? w }, ints, work: inD * 3 });
+      if (xp !== x) xp.free();
+      if (wp !== w && !wp.weight) wp.free();
+      return this._repackPacked(qs, rows, outD, outHalf);
+    }
     if (packedOk) {
       // Operands as packed halves (8 a texel): a 4 x 4 block a fragment reads half the texels of the float path (2x on
       // an M2, tools/gpu/bench-webgl.js --packed=1), into four render targets, then repacked.
@@ -471,11 +522,43 @@ vec4 compute(int t) {
     return res;
   }
 
+  /**
+   * `_repack` for packed planes (plane i holds rows 4q + i), into packed halves or float16, a texel at a time (outD a
+   * multiple of 8, so a texel never straddles rows).
+   */
+  _repackPacked(qs, rows, outD, half) {
+    const c = this.ctx;
+    const packed = half === 'packed';
+    const body = `
+uniform highp usampler2D Q0; uniform highp usampler2D Q1; uniform highp usampler2D Q2; uniform highp usampler2D Q3; uniform int uOut;
+uvec4 plane(int i, int t) {
+  int w = textureSize(Q0, 0).x;
+  ivec2 p = ivec2(t % w, t / w);
+  return i == 0 ? texelFetch(Q0, p, 0) : i == 1 ? texelFetch(Q1, p, 0) : i == 2 ? texelFetch(Q2, p, 0) : texelFetch(Q3, p, 0);
+}
+${packed ? `uvec4 compute(int t) {
+  int e0 = t * 8;
+  int r = e0 / uOut;
+  return plane(r & 3, ((r >> 2) * uOut + e0 - r * uOut) >> 3);
+}` : `vec4 compute(int t) {
+  int e0 = t * 4;
+  int r = e0 / uOut;
+  int qe = (r >> 2) * uOut + e0 - r * uOut;
+  uvec4 u = plane(r & 3, qe >> 3);
+  return (qe & 4) == 0 ? vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)) : vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w));
+}`}`;
+    const res = c.kernel(`repack4p-${packed ? 'pk' : 'h'}`, body, c.tensor(rows * outD, packed ? 'packed' : true),
+      { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3] }, ints: { uOut: outD } });
+    qs.forEach((t) => t.free());
+    return res;
+  }
+
   /** RMSNorm (`type` other than 'layer_norm') or LayerNorm over the last `dim` of `[rows, dim]`. */
   norm(x, rows, dim, type, w = null, b = null, eps = 1e-5, half = false) {
     const c = this.ctx;
     const ln = type === 'layer_norm';
     const vec = dim % 4 === 0;
+    if (vec && TW % (dim / 4) === 0 && (half !== 'packed' || dim % 8 === 0) && !this.noFastNorm) return this._normFast(x, rows, dim, ln, w, b, eps, half);
     const stats = c.kernel(`normstats-${ln ? 'ln' : 'rms'}-${vec ? 'v' : 's'}`, `
 uniform sampler2D X; uniform int uDim; uniform float uEps;
 vec4 compute(int r) {
@@ -491,6 +574,59 @@ vec4 compute(int r) {
     const out = c.elementwise(`normapply-${w ? 'w' : ''}${b ? 'b' : ''}`,
       `(el(X, e) - tx(S, e / uDim).x) * tx(S, e / uDim).y${w ? ' * el(Wn, e - (e / uDim) * uDim)' : ''}${b ? ' + el(Bn, e - (e / uDim) * uDim)' : ''}`,
       rows * dim, { inputs: { X: x, S: stats, ...(w ? { Wn: w } : {}), ...(b ? { Bn: b } : {}) }, ints: { uDim: dim }, half: half === 'packed' ? 'packed' : half && this.halfPair });
+    stats.free();
+    return out;
+  }
+
+  /**
+   * `norm` for rows that never wrap (TW): statistics in one walk of the row (sum and sum of squares about the row's
+   * first value, four accumulators), then applied a texel at a time (8 values when packed) rather than a value at a time.
+   */
+  _normFast(x, rows, dim, ln, w, b, eps, half) {
+    const c = this.ctx;
+    const stats = c.kernel(`normstats1-${ln ? 'ln' : 'rms'}`, `
+uniform sampler2D X; uniform int uDim; uniform float uEps;
+vec4 compute(int r) {
+  int nb = uDim / 4;
+  int w = textureSize(X, 0).x;
+  int base = r * nb;
+  ivec2 rc = ivec2(base % w, base / w);
+  ${ln ? 'float k0 = texelFetch(X, rc, 0).x;' : 'float k0 = 0.0;'}
+  vec4 s1 = vec4(0.0), s2 = vec4(0.0);
+  for (int k = 0; k < nb; k++) {
+    vec4 v = texelFetch(X, rc + ivec2(k, 0), 0) - vec4(k0);
+    s1 += v;
+    s2 += v * v;
+  }
+  float n = float(uDim);
+  float m1 = (s1.x + s1.y + s1.z + s1.w) / n;
+  float m2 = (s2.x + s2.y + s2.z + s2.w) / n;
+  ${ln ? 'return vec4(k0 + m1, 1.0 / sqrt(max(m2 - m1 * m1, 0.0) + uEps), 0.0, 0.0);' : 'return vec4(0.0, 1.0 / sqrt(m2 + uEps), 0.0, 0.0);'}
+}`, c.tensor(rows * 4), { inputs: { X: x }, ints: { uDim: dim }, floats: { uEps: eps }, work: dim / 4 });
+    const packed = half === 'packed';
+    const outHalf = packed ? 'packed' : half && this.halfPair;
+    const inputs = { X: x, S: stats, Wn: w ?? x, Bn: b ?? x };
+    const ints = { uDim: dim, uW: w ? 1 : 0, uB: b ? 1 : 0 };
+    const head = `
+uniform sampler2D X; uniform sampler2D S; uniform sampler2D Wn; uniform sampler2D Bn; uniform int uDim; uniform int uW; uniform int uB;
+vec4 ap(int t) {
+  int nb = uDim / 4;
+  int r = t / nb;
+  int d4 = t - r * nb;
+  vec4 st = tx(S, r);
+  vec4 v = (tx(X, t) - vec4(st.x)) * st.y;
+  if (uW == 1) v *= tx(Wn, d4);
+  if (uB == 1) v += tx(Bn, d4);
+  return v;
+}`;
+    const out = packed
+      ? c.kernel('normapply1-pk', `${head}
+uvec4 compute(int t) {
+  vec4 a = ap(2 * t), bb = ap(2 * t + 1);
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(bb.xy), packHalf2x16(bb.zw));
+}`, c.tensor(rows * dim, 'packed'), { inputs, ints })
+      : c.kernel('normapply1', `${head}
+vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs, ints });
     stats.free();
     return out;
   }
@@ -743,7 +879,7 @@ vec4 compute(int t) {
   _triTail(x, zn, rows, cZ, cH, W, eps, z, pairMask) {
     const xn = this.norm(x, rows, cH, 'layer_norm', W('layer_norm_out.weight'), W('layer_norm_out.bias', true), eps, this.pk('xn'));
     x.free();
-    const gp = this.linear(zn, rows, cZ, W('linear_g.weight'), cZ, W('linear_g.bias', true));
+    const gp = this.linear(zn, rows, cZ, W('linear_g.weight'), cZ, W('linear_g.bias', true), null, true);
     zn.free();
     // z + pairMask * linear_z(xn) * sigmoid(gp), in the matmul's epilogue.
     const res = this.linear(xn, rows, cH, W('linear_z.weight'), cZ, W('linear_z.bias', true), null, false, { z, mask: pairMask, gate: gp });
@@ -938,7 +1074,7 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
       const sd = this.linear(sn, n, D, this.W('nn.s_cycle_proj.weight'), D);
       sn.free();
       const zn = this.norm(z, n * n, P, norm, this.W('nn.z_cycle_norm.weight'), null, 1e-5, this.pk('zc'));
-      const zd = this.linear(zn, n * n, P, this.W('nn.z_cycle_proj.weight'), P);
+      const zd = this.linear(zn, n * n, P, this.W('nn.z_cycle_proj.weight'), P, null, null, true);
       zn.free();
       s.free();
       z.free();

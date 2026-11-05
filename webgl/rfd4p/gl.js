@@ -27,6 +27,15 @@ uniform int uOutTexels;
 vec4 tx(sampler2D s, int t) { int w = textureSize(s, 0).x; return texelFetch(s, ivec2(t % w, t / w), 0); }
 float el(sampler2D s, int e) { vec4 v = tx(s, e >> 2); int c = e & 3; return c == 0 ? v.x : c == 1 ? v.y : c == 2 ? v.z : v.w; }
 float sigm(float v) { return 1.0 / (1.0 + exp(-v)); }
+// Element e of a packed tensor (eight float16 values a texel, two a channel).
+float elp(highp usampler2D s, int e) {
+  int w = textureSize(s, 0).x;
+  int t = e >> 3;
+  uvec4 u = texelFetch(s, ivec2(t % w, t / w), 0);
+  int c = (e >> 1) & 3;
+  vec2 h = unpackHalf2x16(c == 0 ? u.x : c == 1 ? u.y : c == 2 ? u.z : u.w);
+  return (e & 1) == 0 ? h.x : h.y;
+}
 `;
 
 export function webgl2Available() {
@@ -206,11 +215,12 @@ export class GLContext {
     // Four outputs (an array of four tensors of one shape): `body` defines compute4(t, r0..r3) writing all of them.
     const outs = Array.isArray(out) ? out : [out];
     const mrt = outs.length > 1;
-    const p = this._program(mrt ? `${key}#mrt` : key, mrt ? `${outs.map((_, i) => `layout(location = ${i}) out vec4 f${i};`).join('\n')}
+    const ot = outs[0].half === 'packed' ? 'uvec4' : 'vec4';
+    const p = this._program(mrt ? `${key}#mrt` : key, mrt ? `${outs.map((_, i) => `layout(location = ${i}) out ${ot} f${i};`).join('\n')}
 ${body}
 void main() {
   int t = int(gl_FragCoord.y) * uOutW + int(gl_FragCoord.x);
-  if (t >= uOutTexels) { ${outs.map((_, i) => `f${i} = vec4(0.0);`).join(' ')} return; }
+  if (t >= uOutTexels) { ${outs.map((_, i) => `f${i} = ${ot}(0);`).join(' ')} return; }
   compute4(t, ${outs.map((_, i) => `f${i}`).join(', ')});
 }` : outs[0].half === 'packed' ? `out uvec4 fragOut;
 ${body}
@@ -285,7 +295,7 @@ void main() {
    */
   elementwise(key, expr, size, { inputs = {}, ints = {}, floats = {}, pre = '', work = 1, out = null, half = false, rowTexels = 0 } = {}) {
     const decl = [
-      ...Object.keys(inputs).map((n) => `uniform sampler2D ${n};`),
+      ...Object.entries(inputs).map(([n, t]) => `uniform ${t.half === 'packed' ? 'highp usampler2D' : 'sampler2D'} ${n};`),
       ...Object.keys(ints).map((n) => `uniform int ${n};`),
       ...Object.keys(floats).map((n) => `uniform float ${n};`),
       'uniform int uSize;',
