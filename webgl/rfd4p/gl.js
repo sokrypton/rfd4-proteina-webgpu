@@ -63,6 +63,7 @@ export class GLContext {
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('WebGL2 here cannot render to float textures');
     this.gl = gl;
     this.maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    this.maxDrawBuffers = Math.min(gl.getParameter(gl.MAX_DRAW_BUFFERS), gl.getParameter(gl.MAX_COLOR_ATTACHMENTS));
     this.programs = new Map();
     this.pool = new Map();
     this.fb = gl.createFramebuffer();
@@ -97,17 +98,17 @@ export class GLContext {
     return tex;
   }
 
-  /** An activation tensor of `size` floats (contents undefined until written). */
-  tensor(size) {
+  /** An activation tensor of `size` floats (contents undefined until written); `half`: stored as float16. */
+  tensor(size, half = false) {
     const { w, h } = this._shape(size);
-    const key = `${w}x${h}`;
+    const key = `${w}x${h}${half ? 'h' : ''}`;
     const free = this.pool.get(key);
-    const tex = free?.length ? free.pop() : this._texture(w, h, false);
-    return new GLTensor(this, size, tex, w, h);
+    const tex = free?.length ? free.pop() : this._texture(w, h, half);
+    return new GLTensor(this, size, tex, w, h, half);
   }
 
   _release(t) {
-    const key = `${t.w}x${t.h}`;
+    const key = `${t.w}x${t.h}${t.half ? 'h' : ''}`;
     if (!this.pool.has(key)) this.pool.set(key, []);
     this.pool.get(key).push(t.tex);
   }
@@ -271,7 +272,7 @@ void main() {
    * `out[e] = expr` for every element `e < size`, `expr` GLSL over `e` (an int) that may read the inputs with
    * `el(name, index)`; `pre` declares helpers. A new tensor unless `out` is given.
    */
-  elementwise(key, expr, size, { inputs = {}, ints = {}, floats = {}, pre = '', work = 1, out = null } = {}) {
+  elementwise(key, expr, size, { inputs = {}, ints = {}, floats = {}, pre = '', work = 1, out = null, half = false } = {}) {
     const decl = [
       ...Object.keys(inputs).map((n) => `uniform sampler2D ${n};`),
       ...Object.keys(ints).map((n) => `uniform int ${n};`),
@@ -285,7 +286,7 @@ vec4 compute(int t) {
   int e = t * 4;
   return vec4(value(e), e + 1 < uSize ? value(e + 1) : 0.0, e + 2 < uSize ? value(e + 2) : 0.0, e + 3 < uSize ? value(e + 3) : 0.0);
 }`;
-    const target = out ?? this.tensor(size);
+    const target = out ?? this.tensor(size, half);
     return this.kernel(`ew:${key}`, body, target, { inputs, ints: { ...ints, uSize: size }, floats, work });
   }
 
