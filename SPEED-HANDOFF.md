@@ -737,3 +737,40 @@ for the first half), measured in the trunk, 3 interleaved rounds: pass 279.7 -> 
 12.8 KB) halves workgroups per core, exactly as f32 staging did, and that costs more than the barriers it saves.
 Reverted. With 15.1 this closes the stock GEMM: occupancy is the only thing that pays for the barriers, and the
 FMAs are at the issue rate.
+
+## 16. 2026-11-05: the "direct" stock GEMM, 1.46x / 1.67x a trunk pass (M2, Chrome 156, stock flags)
+
+**Section 15.1's conclusion was wrong.** The stock GEMM was not at the M2's multiply-add rate; it was at the rate of
+*its* shape. The WebGL2 fallback's fragment-shader matmul (4 rows x 8 columns a fragment, operands read straight from
+textures, no staging) ran its pair GEMMs at 1.4-1.75 TFLOP/s on the same M2, above 15.1's "ceiling", and that lead
+carried over:
+
+- `tools/gpu/bench-wgpu-direct.js` (standalone): the same 4 x 8 thread, packed-f16 operands read straight from memory,
+  no workgroup memory, no barriers. A flat 1D thread order runs 0.6 (storage buffers) / 1.2 (textures) TFLOP/s; blocked
+  in 2D so neighbouring threads share both operands' rows, a 256-thread workgroup as **64 row quads x 4 column
+  groups (256 rows x 32 columns)** runs **2.2-2.3 TFLOP/s on every pair GEMM shape** (10000 and 43264 rows; 384x1408,
+  384x768, 768x384, 256x384). 32 / 16 row quads: 2.07 / 1.21; 128 / 256: 1.95 / 1.14; 128 threads as 32 x 4: 1.73.
+- **Shipped as `gemmDirectSource`** (engine.js), chosen in `gemm()` for stock, half weights, unit-stride rows aligned
+  to 8 halves (A f16) or 4 floats (A f32), K % 8 == 0, at least `directMinRows` = 1024 rows, with a row-major
+  epilogue (bias, act, gate, accumulate, fused `inNorm: 'ln'`, f16/f32 I/O), any `pairOut` epilogue (SwiGLU, the
+  chunked triProjG), or triProjG's fused aT/bT/gz epilogue (written transposed straight from registers: a thread holds
+  four channels of four rows). Each thread keeps `gemmSource`'s columns (tn0..tn0+3 and tn0+64..tn0+67) and accumulator
+  names, so the epilogues are the same code. `gemmVariant: { direct: false }` measures the old kernel.
+- **In the trunk** (`bench-kernels.js`, 3 interleaved rounds, stock flags): pass **278.5 -> 190.9 ms (1.46x) at
+  n = 100, 1134.5 -> 681.4 ms (1.67x) at n = 208**; triProjG 1.84x / 1.88x, the 768x384 LN-in GEMM 1.72x / 1.75x,
+  384x768 1.82x / 1.84x, the gated 384x256 1.89x / 1.91x. Token GEMMs (100 rows) were 0.70-0.74x on it, hence the row
+  floor. The subgroup-matrix path (developer flags) is untouched: 131 / 531 ms a pass, so it is now ~1.4x stock, not
+  2.3x (the card's notice says "up to 1.5x").
+- **Numerics:** A is used in f32 (the old kernel staged it as f16), so outputs move slightly: `zRel` 8e-4 / 1.8e-3 against
+  the old kernel. Gates: `check-rfd4p --half=1` (stock) all ok, trunk bb_ca 3.2e-4; `check-generate --half=1` stock
+  allOk, final backbone 0.0454 A (was 0.0377), structure 0.0494 A (was 0.0395), rtDiff 0; developer flags unchanged,
+  0.0564 / 0.0622 A bit for bit; `check-webapp` 3/3 ok; `check-recovery` allOk.
+- **What this says about the M2:** in a GEMM, what neighbouring threads (a SIMD group and its workgroup) read together
+  matters more than workgroup-memory staging. Staging through workgroup memory with barriers lost to plain cached
+  loads once the thread order shares rows. Untried yet with this kernel: the token / decoder GEMMs at small M
+  (another thread map), `inNorm` for triProjG on the stock path (z read directly, no LN-apply pass), f16 A and
+  wider per-thread blocks.
+- **Whole designs** (`tools/gpu/bench-generate.js`: the GPU generator, 60 steps, one trunk pass a step, early stop
+  off, seed 7, 2 interleaved rounds after a warm-up, stock flags): **n = 100 17.09 -> 10.98 s (1.56x), n = 208
+  74.98 -> 57.36 s (1.31x)**; final Cα 0.04 A from the old kernel's. (Fixed step counts on purpose: with early stop a
+  numerics change could move the stopping step and confound the timing.)

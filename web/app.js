@@ -791,7 +791,7 @@ class Rfd4pStudioApp {
   }
 
   /**
-   * Desktop Chrome exposes subgroup matrices (about 2x faster designs, `hasSubgroupMatrix` in the engine) only behind
+   * Desktop Chrome exposes subgroup matrices (about 1.4x faster designs on an M2, `hasSubgroupMatrix` in the engine) only behind
    * chrome://flags/#enable-unsafe-webgpu. Pages cannot open chrome:// URLs, so the hint offers to copy the address.
    */
   _initSpeedHint() {
@@ -1897,7 +1897,7 @@ class Rfd4pStudioApp {
       this._prefetchFoldWeights();
       const stopNote = earlyStops.length ? ` Converged early at step ${earlyStops.join(', ')}.` : '';
       const seeds = numSamples > 1 ? `seeds ${baseSeed}–${baseSeed + numSamples - 1}` : `seed ${baseSeed}`;
-      const faster = this.speedHintOn ? ' Up to 2× faster with Chrome\'s experimental WebGPU (see above).' : '';
+      const faster = this.speedHintOn ? ' Up to 1.5× faster with Chrome\'s experimental WebGPU (see above).' : '';
       this.setStatus(`Generated from input revision ${inputRevision} with ${seeds} (${elapsedS} s on ${backendLabel}).${stopNote}${faster}`);
       if (!this.seedPinned) this._rollSeed();
     } catch (err) {
