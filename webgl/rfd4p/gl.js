@@ -10,9 +10,12 @@
  * Needs WebGL2 and EXT_color_buffer_float (rendering to float textures): Safari 15+, Chrome 56+, Firefox 51+.
  */
 
-// 3072 texels (12288 floats) a row: every row width of the model in texels (64, 96, 128, 192, 384, 768) divides it, so
-// no matrix row wraps onto the next texture row, and a kernel can walk one with a fixed texture row.
-export const TW = 3072;
+// 384 texels (1536 floats) a row: the row widths the fast paths walk (24, 48, 64, 96, 128, 192, 384 texels) divide it,
+// so no such row wraps onto the next texture row and a kernel walks one with a fixed texture row (a kernel checks, and
+// takes its general path otherwise). Narrow rather than wide: a GPU tile of fragments then covers nearby rows of its
+// operands, which stay in the texture cache (a trunk pass at n = 208 on an M2: 2.35 s at 3072 texels, 1.64 s at 768,
+// 1.47 s at 384, 1.59 s at 192). A tensor too tall at this width takes a multiple of it, so its rows stay whole.
+export const TW = 384;
 const VERT = `#version 300 es
 in vec2 p;
 void main() { gl_Position = vec4(p, 0.0, 1.0); }`;
@@ -91,7 +94,11 @@ export class GLContext {
   /** `per`: values a texel holds (4 floats, or 8 packed halves). */
   _shape(size, per = 4, rowTexels = 0) {
     const texels = Math.max(1, Math.ceil(size / per));
-    const w = rowTexels > 0 && TW % rowTexels ? Math.min(texels, rowTexels * Math.max(1, Math.floor(TW / rowTexels))) : Math.min(TW, texels);
+    // `rowTexels` not dividing TW: a multiple of it instead, so rows of that length stay whole.
+    const unit = rowTexels > 0 && TW % rowTexels ? rowTexels * Math.max(1, Math.floor(TW / rowTexels)) : TW;
+    let w = Math.min(unit, texels);
+    // Too tall: wider by whole units (still a multiple of every row length that divides the unit).
+    for (let m = 2; Math.ceil(texels / w) > this.maxSize && unit * m <= this.maxSize; m *= 2) w = Math.min(unit * m, texels);
     const h = Math.ceil(texels / w);
     if (h > this.maxSize) throw new Error(`tensor of ${size} floats is too large for this GPU's textures`);
     return { w, h };

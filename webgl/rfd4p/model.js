@@ -70,7 +70,9 @@ export class Rfd4pModelGL {
    */
   linear(x, rows, inD, w, outD, bias = null, act = null, half = false, resid = null) {
     const c = this.ctx;
-    const out = c.tensor(rows * outD);
+    // The output of the paths that write one tensor, made when one of them is taken.
+    let outT = null;
+    const out = { free() { outT?.free(); outT = null; }, get t() { return (outT ??= c.tensor(rows * outD)); } };
     const outHalf = half === 'packed' ? 'packed' : half && this.halfPair;
     const packedOk = rows >= 64 && inD % 8 === 0 && outD % 4 === 0 && TW % (inD / 8) === 0 && !this.noPacked;
     if (resid && !packedOk) {
@@ -285,7 +287,7 @@ vec4 compute(int t) {
   }
   if (uBias == 1) acc += tx(B, o0 / 4);
   return vec4(epi(acc.x), epi(acc.y), epi(acc.z), epi(acc.w));
-}`, out, { inputs, ints, work: inD });
+}`, out.t, { inputs, ints, work: inD });
     }
     if (inD % 4 === 0 && outD % 4 === 0) {
       return c.kernel('linear4', `${decl}${epi}
@@ -306,11 +308,11 @@ vec4 compute(int t) {
   }
   if (uBias == 1) acc += tx(B, o0 / 4);
   return vec4(epi(acc.x), epi(acc.y), epi(acc.z), epi(acc.w));
-}`, out, { inputs, ints, work: inD });
+}`, out.t, { inputs, ints, work: inD });
     }
     // Odd widths (feature inputs, heads): one value at a time, by texels when the input width allows.
     return c.elementwise(`linear1-${inD % 4 === 0 ? 'v' : 's'}`, 'lin(e)', rows * outD, {
-      inputs, ints, work: inD * 4, out,
+      inputs, ints, work: inD * 4, out: out.t,
       pre: `${epi}
 float lin(int e) {
   int r = e / uOut;
