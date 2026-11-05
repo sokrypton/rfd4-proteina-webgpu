@@ -774,3 +774,8 @@ carried over:
   off, seed 7, 2 interleaved rounds after a warm-up, stock flags): **n = 100 17.09 -> 10.98 s (1.56x), n = 208
   74.98 -> 57.36 s (1.31x)**; final Cα 0.04 A from the old kernel's. (Fixed step counts on purpose: with early stop a
   numerics change could move the stopping step and confound the timing.)
+- **Token, decoder and encoder GEMMs (fewer than 1024 rows) on the direct kernel too, with 32 x 8 workgroups**
+  (`tr` in `gemmDirectSource`; `gemmVariant.directTr`, `directSmall: false` measures without): 1.25-1.40x on the
+  token GEMMs, a pass 178 -> 171 ms at n = 100 and 700 -> 688 ms at n = 208 (3 interleaved rounds). 64 x 4 at those
+  rows was 0.7x (most of a 256-row tile idle); 16 x 16 1.06-1.29x. Gates: `check-rfd4p --half=1` stock all ok,
+  `check-generate --half=1` 0.0443 A backbone, 0.0502 A structure, rtDiff 0.

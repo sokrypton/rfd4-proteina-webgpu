@@ -354,7 +354,9 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
  * rows, K a multiple of 8. Pair epilogues: `pairOut` ones, and `triProjG`'s transposed aT/bT/gz (`triAB`).
  */
 function gemmDirectSource({ pair = null, gate = false, aF16 = false, cF16 = false, gF16 = false, vecEpilogue = false,
-  addOnly = false, gSigm = true, hasAlpha = false, hasBias = false, actType = 0, acc = false, inLn = false, triAB = null }) {
+  addOnly = false, gSigm = true, hasAlpha = false, hasBias = false, actType = 0, acc = false, inLn = false, triAB = null, tr = 64 }) {
+  // `tr` row quads x `cg` column groups a workgroup (64 x 4 for the pair GEMMs; shorter for few rows).
+  const cg = 256 / tr;
   const rows = [0, 1, 2, 3];
   const EC = (vecEpilogue || pair?.cVec4) ? ((pair?.cF16 ?? cF16) ? 'vec2<u32>' : 'vec4<f32>') : ((pair?.cF16 ?? cF16) ? 'f16' : 'f32');
   const EG = vecEpilogue ? (gF16 ? 'vec2<u32>' : 'vec4<f32>') : (gF16 ? 'f16' : 'f32');
@@ -456,24 +458,24 @@ ${pair.body ?? ''}` : 'fn bRow(v: u32) -> u32 { return v; }'}
 @compute @workgroup_size(256)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
   let tilesN = (p.n + 127u) / 128u;
-  let tilesM = (p.m + 255u) / 256u;
+  let tilesM = (p.m + ${4 * tr - 1}u) / ${4 * tr}u;
   let flat = wid.x + wid.y * 65535u;
   ${pair || !hasBias ? '_ = bias[0];' : ''}
-  let per = tilesM * tilesN * 4u;
+  let per = tilesM * tilesN * ${16 / cg}u;
   let batch = flat / per;
   let inBatch = batch < p.batches;
   let bat = min(batch, p.batches - 1u);
   let rem = flat % per;
-  let sub = rem % 4u;
-  let rest = rem / 4u;
+  let sub = rem % ${16 / cg}u;
+  let rest = rem / ${16 / cg}u;
   let n0 = (rest % tilesN) * 128u;
-  let m0 = (rest / tilesN) * 256u;
+  let m0 = (rest / tilesN) * ${4 * tr}u;
   let b0 = bat / p.b1;
   let b1 = bat % p.b1;
   let baseA = p.offA + b0 * p.sA0 + b1 * p.sA1;
   let baseB = p.offB + b0 * p.sB0 + b1 * p.sB1;
-  let tm4 = li / 4u;
-  let tx = sub * 4u + li % 4u;
+  let tm4 = li / ${cg}u;
+  let tx = sub * ${cg}u + li % ${cg}u;
   let tm = tm4 * 4u;
   let tn0 = tx * 4u;
   let tn1 = tn0 + 64u;
@@ -2903,16 +2905,19 @@ export class Rfd4pEngine {
     // Direct (`gemmDirectSource`): stock, half weights, unit-stride rows aligned to 8 halves (or 4 floats), K % 8 == 0,
     // row-major output or a `pairOut` / `triProjG` epilogue.
     const triAB = Boolean(spec.pair?.key?.startsWith('triprojg-ab'));
-    const direct = !submat && !small && (this.gemmVariant?.direct ?? true) && m >= (this.gemmVariant?.directMinRows ?? 1024) && half && B.k === 1 && A.k === 1 && k % 8 === 0 &&
+    const direct = !submat && !small && (this.gemmVariant?.direct ?? true) && m >= Math.min(this.gemmVariant?.directMinRows ?? 1024, (this.gemmVariant?.directSmall ?? true) ? 0 : Infinity) && half && B.k === 1 && A.k === 1 && k % 8 === 0 &&
       [B.n, B.off, B.s0, B.s1].every((v) => v % 8 === 0) && [A.m, A.off, A.s0, A.s1].every((v) => v % (aF16 ? 8 : 4) === 0) &&
       (spec.pair ? (triAB || (spec.pair.body && !spec.pair.epilogueBody)) : vecEpilogue) &&
       (!spec.inNorm || spec.inNorm === 'ln');
     if (direct) {
-      const dKey = `gemm-d${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${vecEpilogue ? '-ve' : ''}${spec.inNorm === 'ln' ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate ? `-g${gF16 ? '16' : ''}${addOnly ? 'a' : gSigm ? 's' : 'm'}` : ''}${spec.pair ? `-p-${spec.pair.key}` : ''}`;
+      // 64 x 4 for the pair GEMMs; below 1024 rows (token, decoder, encoder) 32 x 8: 1.27-1.47x on the token GEMMs over
+      // the staged kernel (16 x 16: 1.06-1.29x; 64 x 4 at those rows: 0.7x).
+      const tr = m >= (this.gemmVariant?.directMinRows ?? 1024) ? 64 : (this.gemmVariant?.directTr ?? 32);
+      const dKey = `gemm-d${tr}${aF16 ? '-a16' : ''}${cF16 ? '-c16' : ''}${vecEpilogue ? '-ve' : ''}${spec.inNorm === 'ln' ? '-ln' : ''}${hasAlpha ? '-al' : ''}${hasBias ? '-b' : ''}${actType ? `-act${actType}` : ''}${acc ? '-ac' : ''}${hasGate ? `-g${gF16 ? '16' : ''}${addOnly ? 'a' : gSigm ? 's' : 'm'}` : ''}${spec.pair ? `-p-${spec.pair.key}` : ''}`;
       const dSrc = gemmDirectSource({ pair: spec.pair ?? null, gate: hasGate, aF16, cF16, gF16, vecEpilogue: !spec.pair && vecEpilogue,
         addOnly, gSigm, hasAlpha, hasBias, actType, acc: acc === 1, inLn: spec.inNorm === 'ln',
-        triAB: triAB ? { f16Out: Boolean(spec.pair.cF16) } : null });
-      const dGroups = Math.ceil(m / 256) * Math.ceil(n / 128) * 4 * B0 * B1;
+        triAB: triAB ? { f16Out: Boolean(spec.pair.cF16) } : null, tr });
+      const dGroups = Math.ceil(m / (4 * tr)) * Math.ceil(n / 128) * (16 / (256 / tr)) * B0 * B1;
       const bufs = [spec.a, spec.b, spec.c, spec.bias ?? this.dummy, ...(hasGate ? [spec.gate.sc] : []), ...(spec.pair?.buffers ?? [])];
       return this.step(dKey, dSrc, dGroups, bufs, u, spec.label ?? `gemm ${m}x${n}x${k}${B0 * B1 > 1 ? `[${B0 * B1}]` : ''}`);
     }

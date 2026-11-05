@@ -74,7 +74,7 @@ export async function main(device, args) {
         speedup: Number((base.total / best[k].total).toFixed(3)),
         sRel: Number(relRms(outputs[k].s, outputs[0].s).toExponential(2)),
         zRel: Number(relRms(outputs[k].z, outputs[0].z).toExponential(2)),
-        top: [...best[k].kernels].sort((a, b) => b[1].ms - a[1].ms).slice(0, 6)
+        top: [...best[k].kernels].sort((a, b) => b[1].ms - a[1].ms).slice(0, Number(opt.top ?? 6))
           .map(([label, { ms }]) => `${label} ${ms.toFixed(1)} (${((base.kernels.get(label)?.ms ?? ms) / ms).toFixed(2)}x)`),
       })),
     });
