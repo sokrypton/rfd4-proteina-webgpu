@@ -86,6 +86,47 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
 }`;
 }
 
+/** R rows x C columns a thread (C a multiple of 4), storage buffers, `tr` row groups x `cg` column groups a workgroup. */
+function blockSource(R, C, tr, cg) {
+  const wg = tr * cg;
+  const rs = [...Array(R).keys()];
+  const cs = [...Array(C).keys()];
+  const c4 = C / 4;
+  return `
+@group(0) @binding(0) var<storage, read> A: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> W: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read_write> Cc: array<vec4<u32>>;
+struct P { m: u32, k: u32, n: u32, groupsX: u32 }
+@group(0) @binding(3) var<uniform> p: P;
+fn lo(u: vec4<u32>) -> vec4<f32> { return vec4<f32>(unpack2x16float(u.x), unpack2x16float(u.y)); }
+fn hi(u: vec4<u32>) -> vec4<f32> { return vec4<f32>(unpack2x16float(u.z), unpack2x16float(u.w)); }
+@compute @workgroup_size(${wg})
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+  let g = wid.x + wid.y * p.groupsX;
+  let nb = p.n / ${C}u;
+  let cbs = nb / ${cg}u;
+  let gq = g / cbs;
+  let gc = g - gq * cbs;
+  let q = gq * ${tr}u + li / ${cg}u;
+  let ob = gc * ${cg}u + li % ${cg}u;
+  if (q * ${R}u >= p.m) { return; }
+  let o0 = ob * ${C}u;
+  let ib = p.k / 8u;
+  ${rs.map((i) => `let r${i} = min(q * ${R}u + ${i}u, p.m - 1u) * ib;`).join(' ')}
+  ${cs.map((j) => `let wr${j} = (o0 + ${j}u) * ib;`).join(' ')}
+  ${rs.map((i) => [...Array(c4).keys()].map((b) => `var a${i}_${b} = vec4<f32>(0.0);`).join(' ')).join('\n  ')}
+  for (var k = 0u; k < ib; k++) {
+    ${[...Array(c4).keys()].map((b) => `let wu${b}_0 = W[wr${b * 4} + k]; let wu${b}_1 = W[wr${b * 4 + 1} + k]; let wu${b}_2 = W[wr${b * 4 + 2} + k]; let wu${b}_3 = W[wr${b * 4 + 3} + k];
+    let wl${b} = mat4x4<f32>(lo(wu${b}_0), lo(wu${b}_1), lo(wu${b}_2), lo(wu${b}_3));
+    let wh${b} = mat4x4<f32>(hi(wu${b}_0), hi(wu${b}_1), hi(wu${b}_2), hi(wu${b}_3));`).join('\n    ')}
+    ${rs.map((i) => `{ let x = A[r${i} + k]; let xl = lo(x); let xh = hi(x); ${[...Array(c4).keys()].map((b) => `a${i}_${b} += xl * wl${b} + xh * wh${b};`).join(' ')} }`).join('\n    ')}
+  }
+  let rowT = p.n / 8u;
+  ${c4 === 1 ? rs.map((i) => `if (q * ${R}u + ${i}u < p.m) { Cc[(q * ${R}u + ${i}u) * rowT + o0 / 8u] = vec4<u32>(pack2x16float(a${i}_0.xy), pack2x16float(a${i}_0.zw), 0u, 0u); }`).join('\n  ') : ''}
+  ${c4 === 1 ? '' : rs.map((i) => `if (q * ${R}u + ${i}u < p.m) { ${[...Array(Math.floor(c4 / 2)).keys()].map((b) => `Cc[(q * ${R}u + ${i}u) * rowT + o0 / 8u + ${b}u] = vec4<u32>(pack2x16float(a${i}_${2 * b}.xy), pack2x16float(a${i}_${2 * b}.zw), pack2x16float(a${i}_${2 * b + 1}.xy), pack2x16float(a${i}_${2 * b + 1}.zw));`).join(' ')} }`).join('\n  ')}
+}`;
+}
+
 export async function main(device, args) {
   const opt = Object.fromEntries(args.filter((a) => a.includes('=')).map((a) => { const i = a.indexOf('='); return [a.slice(2, i), a.slice(i + 1)]; }));
   const ui = (x) => Math.max(16, Math.ceil(x / 16) * 16);
@@ -117,7 +158,32 @@ export async function main(device, args) {
   if (!Number.isFinite(M * N)) return results;
   const cBufs = [0, 1].map(() => device.createBuffer({ size: ui(M * N * 2), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC }));
   const configs = opt.configs ? JSON.parse(opt.configs) : [['tex', 256, 8, 16], ['tex', 256, 8, 8], ['tex', 256, 8, 32], ['buf', 256, 8, 16], ['buf', 256, 8, 8], ['buf', 256, 8, 32], ['buf', 128, 8, 8], ['tex', 128, 8, 4]];
-  for (const [mode, wg, cols, tileR] of configs) {
+  for (const cfgItem of configs) {
+    if (cfgItem[0] === 'blk') {
+      const [, R, C, tr, cg] = cfgItem;
+      const nbk = N / C;
+      if (nbk % cg) continue;
+      const groups = Math.ceil(Math.ceil(M / R) / tr) * (nbk / cg);
+      const gx = Math.min(groups, 65535);
+      const gy = Math.ceil(groups / gx);
+      const uni = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(uni, 0, new Uint32Array([M, K, N, gx]));
+      const pipe = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: blockSource(R, C, tr, cg) }), entryPoint: 'main' } });
+      const bgs = cBufs.map((cb) => device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [
+        { binding: 0, resource: { buffer: aBuf } }, { binding: 1, resource: { buffer: wBuf } }, { binding: 2, resource: { buffer: cb } }, { binding: 3, resource: { buffer: uni } }] }));
+      const run = (count) => {
+        const enc = device.createCommandEncoder();
+        for (let i = 0; i < count; i += 1) { const pass = enc.beginComputePass(); pass.setPipeline(pipe); pass.setBindGroup(0, bgs[i & 1]); pass.dispatchWorkgroups(gx, gy); pass.end(); }
+        device.queue.submit([enc.finish()]);
+        return device.queue.onSubmittedWorkDone();
+      };
+      await run(2);
+      let best = Infinity;
+      for (let r = 0; r < 3; r += 1) { const t0 = performance.now(); await run(reps); best = Math.min(best, (performance.now() - t0) / reps); }
+      results[`blk-r${R}-c${C}-${tr}x${cg}`] = { ms: Number(best.toFixed(2)), tflops: Number(((2 * M * K * N) / best / 1e9).toFixed(2)) };
+      continue;
+    }
+    const [mode, wg, cols, tileR] = cfgItem;
     const nbk = N / cols;
     if (tileR && nbk % (wg / tileR)) continue;
     const groups = tileR ? Math.ceil(Math.ceil(M / 4) / tileR) * (nbk / (wg / tileR)) : Math.ceil((Math.ceil(M / 4) * nbk) / wg);

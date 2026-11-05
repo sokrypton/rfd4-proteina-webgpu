@@ -44,6 +44,7 @@ export async function main(_device, args) {
   if (opt.packed === '1' || opt.p88 === '1') results.packed8x8 = benchPacked88(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5));
   if (opt.p88 === '1') results.packed4x8 = benchPacked48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5));
   if (opt.p88 === '1') results.packed4x8small = benchPacked48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5), true);
+  if (opt.outw) for (const ow of opt.outw.split(',').map(Number)) results[`packed4x8-w${ow}`] = benchPacked48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5), false, ow);
   if (opt.quad === '1') results.quad4x8 = benchQuad48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5));
   if (opt.quad === '1') results.packed4x8 = benchPacked48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5));
   if (opt.p88 === '1') results.packed4x8named = benchPacked48(c, x32, w, rows, inD, outD, Number(opt.reps ?? 5), 'named');
@@ -108,7 +109,7 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
 }
 
 /** 4 rows x 8 columns a fragment, outputs packed halves (one RGBA32UI target a row, 8 values): 32 outputs a pixel. */
-function benchPacked48(c, x32, w32, rows, inD, outD, reps, small = false) {
+function benchPacked48(c, x32, w32, rows, inD, outD, reps, small = false, outW = 0) {
   const pack = (src, size) => c.kernel('pack8', `
 uniform sampler2D S;
 uvec4 compute(int t) {
@@ -121,7 +122,7 @@ uvec4 compute(int t) {
   const rq = Math.ceil(rows / 4);
   const run = () => {
     // `small`: the same loop, half the output bytes (a probe of the output's cost; not a matmul).
-    const qs = [0, 1, 2, 3].map(() => (small === true ? c.tensor(rq * outD / 2, true) : c.tensor(rq * outD, 'packed')));
+    const qs = [0, 1, 2, 3].map(() => (small === true ? c.tensor(rq * outD / 2, true) : c.tensor(rq * outD, 'packed', 0, outW)));
     c.kernel(small === 'named' ? 'linear4x8pk-named' : small ? 'linear4x8pk-probe-small' : 'linear4x8pk', `
 uniform highp usampler2D X; uniform highp usampler2D Wt; uniform int uIn; uniform int uOut; uniform int uRows;
 void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }

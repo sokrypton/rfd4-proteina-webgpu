@@ -779,3 +779,14 @@ carried over:
   token GEMMs, a pass 178 -> 171 ms at n = 100 and 700 -> 688 ms at n = 208 (3 interleaved rounds). 64 x 4 at those
   rows was 0.7x (most of a 256-row tile idle); 16 x 16 1.06-1.29x. Gates: `check-rfd4p --half=1` stock all ok,
   `check-generate --half=1` 0.0443 A backbone, 0.0502 A structure, rtDiff 0.
+- **The triangle contraction (`tri-in` / `tri-out`) on the direct kernel too:** its B is a float16 activation, not a
+  weight, but the same packed words (`directF16B`, default on; the chunked arm's stride-transposed incoming read stays
+  on the old kernel): 1.81-1.86x on the contraction, a pass 169 -> 163.5 ms at n = 100, 679 -> 645 ms at n = 208.
+  `check-generate --half=1` 0.0345 A backbone, 0.0408 A structure, rtDiff 0.
+- **Tried and lost:** per-thread blocks other than 4 x 8 in the direct kernel (`bench-wgpu-direct --configs` with
+  `["blk", R, C, tr, cg]`: 8 x 8 1.5-1.6, 4 x 16 0.64-0.67, 8 x 4 1.96-2.16, 2 x 8 1.72 TFLOP/s against 2.34 for 4 x 8);
+  the fused input norm's sums kept as vec4 accumulators (one reduction at the end): the LN-in GEMM 21.1 -> 25.4 ms
+  (registers).
+- **Float16 rounding** (`tools/gpu/probe-f16-round.js`): WebGPU here rounds f32 -> f16 to nearest in all three forms the
+  engine uses (`pack2x16float`, `vec2<f16>`, `array<f16>` stores). The WebGL2 path found its float16 render-target
+  writes truncating on the same M2 and rounds in the shader; nothing to fix on this side.

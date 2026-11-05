@@ -1621,7 +1621,9 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     const hidden = l1B.size;
     let h;
     if (zz.zplanes && !this.noLnFold) {
-      // The norm folded into linear_1, which reads z's planes itself: only the statistics pass.
+      // The norm folded into linear_1, which reads z's planes itself: only the statistics pass. (Its statistics gathered
+      // in the matmul's own row walk instead, as WebGPU's fused input norm does: 1.07x slower a pass, M2: every one of a
+      // row's 48 column blocks repeats them, and the extra arithmetic in the k loop costs more than the pass.)
       const st = this.norm(zz, rows, P, 'layer_norm', null, null, eps, 'stats');
       const f = this._lnFold(`${tp}#lnfold`, `${tp}.layer_norm.weight`, `${tp}.layer_norm.bias`, `${tp}.linear_1.weight`, `${tp}.linear_1.bias`, hidden, P);
       h = this.linear({ planes: zz.zplanes, packedPlanes: true }, rows, P, f.w, hidden, f.b, 'relu', 'planes', null, { stats: st, S: f.S });

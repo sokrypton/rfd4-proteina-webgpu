@@ -99,8 +99,10 @@ export class GLContext {
   }
 
   /** `per`: values a texel holds (4 floats, or 8 packed halves). */
-  _shape(size, per = 4, rowTexels = 0) {
+  _shape(size, per = 4, rowTexels = 0, width = 0) {
     const texels = Math.max(1, Math.ceil(size / per));
+    // An explicit width (benchmarks of output layouts).
+    if (width) return { w: Math.min(width, texels), h: Math.ceil(texels / Math.min(width, texels)) };
     // `rowTexels` not dividing TW: a multiple of it instead, so rows of that length stay whole.
     const unit = rowTexels > 0 && TW % rowTexels ? rowTexels * Math.max(1, Math.floor(TW / rowTexels)) : TW;
     let w = Math.min(unit, texels);
@@ -124,8 +126,8 @@ export class GLContext {
   }
 
   /** An activation tensor of `size` floats (contents undefined until written); `half`: stored as float16. */
-  tensor(size, half = false, rowTexels = 0) {
-    const { w, h } = this._shape(size, half === 'packed' ? 8 : 4, rowTexels);
+  tensor(size, half = false, rowTexels = 0, width = 0) {
+    const { w, h } = this._shape(size, half === 'packed' ? 8 : 4, rowTexels, width);
     const key = `${w}x${h}:${half === 'packed' ? 'u32' : half ? 'f16' : 'f32'}`;
     const free = this.pool.get(key);
     const tex = free?.length ? free.pop() : this._texture(w, h, half);

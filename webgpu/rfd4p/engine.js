@@ -2905,7 +2905,8 @@ export class Rfd4pEngine {
     // Direct (`gemmDirectSource`): stock, half weights, unit-stride rows aligned to 8 halves (or 4 floats), K % 8 == 0,
     // row-major output or a `pairOut` / `triProjG` epilogue.
     const triAB = Boolean(spec.pair?.key?.startsWith('triprojg-ab'));
-    const direct = !submat && !small && (this.gemmVariant?.direct ?? true) && m >= Math.min(this.gemmVariant?.directMinRows ?? 1024, (this.gemmVariant?.directSmall ?? true) ? 0 : Infinity) && half && B.k === 1 && A.k === 1 && k % 8 === 0 &&
+    const direct = !submat && !small && (this.gemmVariant?.direct ?? true) && m >= Math.min(this.gemmVariant?.directMinRows ?? 1024, (this.gemmVariant?.directSmall ?? true) ? 0 : Infinity) &&
+      (half || (wordB && (this.gemmVariant?.directF16B ?? true))) && B.k === 1 && A.k === 1 && k % 8 === 0 &&
       [B.n, B.off, B.s0, B.s1].every((v) => v % 8 === 0) && [A.m, A.off, A.s0, A.s1].every((v) => v % (aF16 ? 8 : 4) === 0) &&
       (spec.pair ? (triAB || (spec.pair.body && !spec.pair.epilogueBody)) : vecEpilogue) &&
       (!spec.inNorm || spec.inNorm === 'ln');
