@@ -73,8 +73,21 @@ export class Rfd4pModelGL {
     // The output of the paths that write one tensor, made when one of them is taken.
     let outT = null;
     const out = { free() { outT?.free(); outT = null; }, get t() { return (outT ??= c.tensor(rows * outD)); } };
-    const outHalf = half === 'packed' ? 'packed' : half && this.halfPair;
+    // `half` 'planes': packed halves, left as the 4 x 8 kernel's four planes (plane i holds rows 4q + i) when it runs,
+    // for a consumer that reads them (a 4 x 8 matmul's x, `_repackResid`'s gate): { planes, packedPlanes: true }.
+    // Otherwise float16 (`half` true), which every reader of a gate or an x takes.
     const packedOk = rows >= 64 && inD % 8 === 0 && outD % 4 === 0 && TW % (inD / 8) === 0 && !this.noPacked;
+    const go48 = packedOk && (half || resid) && rows >= 4096 && outD % 8 === 0 && !this.no48;
+    const keepPlanes = half === 'planes' && go48 && !resid && !this.noKeepPlanes;
+    if (half === 'planes') half = keepPlanes ? 'packed' : true;
+    const outHalf = half === 'packed' ? 'packed' : half && this.halfPair;
+    if (x.packedPlanes && !go48) {
+      const xr = this._repackPacked(x.planes, rows, inD, 'packed', true);
+      out.free();
+      const y = this.linear(xr, rows, inD, w, outD, bias, act, keepPlanes ? 'planes' : half, resid);
+      xr.free();
+      return y;
+    }
     if (resid && !packedOk) {
       out.free();
       const y = this.linear(x, rows, inD, w, outD, bias, act);
@@ -95,16 +108,17 @@ export class Rfd4pModelGL {
     const epi = `
 float epi(float v) { return uAct == 1 ? max(v, 0.0) : uAct == 2 ? sigm(v) : v; }`;
     const decl = 'uniform sampler2D X; uniform sampler2D Wt; uniform sampler2D B; uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows;';
-    if (packedOk && (outHalf || resid) && rows >= 4096 && outD % 8 === 0 && !this.no48) {
+    if (go48) {
       // An output that may be float16 (packed or half): 4 rows x 8 columns a fragment, written as packed halves (four
       // RGBA32UI targets, 32 values a pixel within the 64-byte budget): 12 texel reads per 256 multiply-adds.
       out.free();
-      const xp = this._pack(x, rows * inD);
+      const xp = x.packedPlanes ? x : this._pack(x, rows * inD);
       const wp = w.weight ? this._packWeight(w) : this._pack(w, outD * inD);
       const rq = Math.ceil(rows / 4);
       const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD, 'packed'));
-      c.kernel('linear4x8pk', `
-uniform highp usampler2D X; uniform highp usampler2D Wt; uniform sampler2D B;
+      const xq = Boolean(x.packedPlanes);
+      c.kernel(`linear4x8pk${xq ? '-xq' : ''}`, `
+uniform highp usampler2D X; uniform highp usampler2D Wt; uniform sampler2D B;${xq ? ' uniform highp usampler2D X1; uniform highp usampler2D X2; uniform highp usampler2D X3;' : ''}
 uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows;${epi}
 vec4 epi4(vec4 a) { return vec4(epi(a.x), epi(a.y), epi(a.z), epi(a.w)); }
 void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
@@ -118,7 +132,7 @@ void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
   int ww = textureSize(Wt, 0).x;
   ivec2 xc[4];
   bool live[4];
-  for (int i = 0; i < 4; i++) { int r = q * 4 + i; live[i] = r < uRows; int xt = (live[i] ? r : 0) * ib; xc[i] = ivec2(xt % xw, xt / xw); }
+  for (int i = 0; i < 4; i++) { int r = q * 4 + i; live[i] = r < uRows; int xt = ${xq ? 'q' : '(live[i] ? r : 0)'} * ib; xc[i] = ivec2(xt % xw, xt / xw); }
   ivec2 wc[8];
   for (int j = 0; j < 8; j++) { int wt = (o0 + j) * ib; wc[j] = ivec2(wt % ww, wt / ww); }
   vec4 a[4], b[4];
@@ -129,23 +143,25 @@ void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
     for (int j = 0; j < 8; j++) unpack8(texelFetch(Wt, wc[j] + dk, 0), l[j], h[j]);
     mat4 wla = mat4(l[0], l[1], l[2], l[3]), wha = mat4(h[0], h[1], h[2], h[3]);
     mat4 wlb = mat4(l[4], l[5], l[6], l[7]), whb = mat4(h[4], h[5], h[6], h[7]);
-    for (int i = 0; i < 4; i++) {
+    ${xq ? ['X', 'X1', 'X2', 'X3'].map((xs, i) => `{ vec4 xl, xh; unpack8(texelFetch(${xs}, xc[${i}] + dk, 0), xl, xh); a[${i}] += xl * wla + xh * wha; b[${i}] += xl * wlb + xh * whb; }`).join('\n    ') : `for (int i = 0; i < 4; i++) {
       vec4 xl, xh;
       unpack8(texelFetch(X, xc[i] + dk, 0), xl, xh);
       a[i] += xl * wla + xh * wha;
       b[i] += xl * wlb + xh * whb;
-    }
+    }`}
   }
   vec4 ba = uBias == 1 ? tx(B, o0 / 4) : vec4(0.0), bbv = uBias == 1 ? tx(B, o0 / 4 + 1) : vec4(0.0);
   r0 = live[0] ? pk(epi4(a[0] + ba), epi4(b[0] + bbv)) : uvec4(0u);
   r1 = live[1] ? pk(epi4(a[1] + ba), epi4(b[1] + bbv)) : uvec4(0u);
   r2 = live[2] ? pk(epi4(a[2] + ba), epi4(b[2] + bbv)) : uvec4(0u);
   r3 = live[3] ? pk(epi4(a[3] + ba), epi4(b[3] + bbv)) : uvec4(0u);
-}`, qs, { inputs: { X: xp, Wt: wp, B: bias ?? w }, ints, work: inD * 3 });
+}`, qs, { inputs: { X: xq ? x.planes[0] : xp, Wt: wp, B: bias ?? w, ...(xq ? { X1: x.planes[1], X2: x.planes[2], X3: x.planes[3] } : {}) }, ints, work: inD * 3 });
       if (xp !== x) xp.free();
       if (wp !== w && !wp.weight) wp.free();
       // A residual update: the float16 result is the delta; the repack adds it to z in float32.
-      return resid ? this._repackResid(qs, rows, outD, resid) : this._repackPacked(qs, rows, outD, outHalf);
+      if (resid) return this._repackResid(qs, rows, outD, resid);
+      if (keepPlanes) return { planes: qs, packedPlanes: true, free() { qs.forEach((t) => t.free()); } };
+      return this._repackPacked(qs, rows, outD, outHalf);
     }
     if (packedOk) {
       // Operands as packed halves (8 a texel): a 4 x 4 block a fragment reads half the texels of the float path (2x on
@@ -332,7 +348,7 @@ float lin(int e) {
    * `mask[r] * (X Wp^T + bp) * sigmoid(X Wg^T + bg)`, both projections of one input in one pass (the triangle update's
    * a and b): 4 rows x 4 columns of each a fragment, four render targets, then repacked.
    */
-  gatedLinear(x, rows, inD, wp, bp, wg, bg, outD, mask, half = false, planes = false) {
+  gatedLinear(x, rows, inD, wp, bp, wg, bg, outD, mask, half = false, planes = false, virt = null) {
     const c = this.ctx;
     const ib = inD / 4;
     if (inD % 4 || outD % 4 || TW % ib) {
@@ -353,10 +369,15 @@ float lin(int e) {
       const xp = this._pack(x, rows * inD);
       const wpp = this._packWeight(wp);
       const wgp = this._packWeight(wg);
-      const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD, planes ? true : false));
-      c.kernel('gatedlinear4x4pk', `
+      // `virt` ({ n, Kp, outgoing }, the triangle update's sides): row i * Kp + k of the result (k padded to Kp, a multiple
+      // of 8; zero past n) is row i * n + k (outgoing) or k * n + i (incoming) of x, so in the planes 8 consecutive k of a
+      // channel are two texels (`_triMatmul`'s transpose).
+      const rowsV = virt ? virt.n * virt.Kp : rows;
+      const rqV = Math.ceil(rowsV / 4);
+      const qs = [0, 1, 2, 3].map(() => c.tensor(rqV * outD, planes ? true : false));
+      c.kernel(`gatedlinear4x4pk${virt ? `-v${virt.outgoing ? 'o' : 'i'}` : ''}`, `
 uniform highp usampler2D X; uniform highp usampler2D Wp; uniform highp usampler2D Wg; uniform sampler2D Bp; uniform sampler2D Bg; uniform sampler2D M;
-uniform int uIn; uniform int uOut; uniform int uRows; uniform int uBp; uniform int uBg;
+uniform int uIn; uniform int uOut; uniform int uRows; uniform int uBp; uniform int uBg; uniform int uN; uniform int uKp;
 void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
 void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
   int e0 = t * 4;
@@ -367,7 +388,13 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
   int ww = textureSize(Wp, 0).x;
   ivec2 xc[4];
   bool live[4];
-  for (int i = 0; i < 4; i++) { int r = q * 4 + i; live[i] = r < uRows && el(M, r) != 0.0; int xt = (r < uRows ? r : 0) * ib; xc[i] = ivec2(xt % xw, xt / xw); }
+  for (int i = 0; i < 4; i++) {
+    ${virt ? `int v = q * 4 + i; int vi = v / uKp; int vk = v - vi * uKp; bool ok = vi < uN && vk < uN;
+    int r = ok ? ${virt.outgoing ? 'vi * uN + vk' : 'vk * uN + vi'} : 0;` : 'int r = q * 4 + i; bool ok = r < uRows; r = ok ? r : 0;'}
+    live[i] = ok && el(M, r) != 0.0;
+    int xt = r * ib;
+    xc[i] = ivec2(xt % xw, xt / xw);
+  }
   ivec2 wc[4];
   for (int i = 0; i < 4; i++) { int wt = (o0 + i) * ib; wc[i] = ivec2(wt % ww, wt / ww); }
   vec4 p[4], g[4];
@@ -393,15 +420,18 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     }
   }
   vec4 bpv = uBp == 1 ? tx(Bp, o0 / 4) : vec4(0.0), bgv = uBg == 1 ? tx(Bg, o0 / 4) : vec4(0.0);
-  r0 = live[0] ? (p[0] + bpv) / (vec4(1.0) + exp(-(g[0] + bgv))) : vec4(0.0);
-  r1 = live[1] ? (p[1] + bpv) / (vec4(1.0) + exp(-(g[1] + bgv))) : vec4(0.0);
-  r2 = live[2] ? (p[2] + bpv) / (vec4(1.0) + exp(-(g[2] + bgv))) : vec4(0.0);
-  r3 = live[3] ? (p[3] + bpv) / (vec4(1.0) + exp(-(g[3] + bgv))) : vec4(0.0);
+  vec4 v[4];
+  for (int i = 0; i < 4; i++) v[i] = live[i] ? (p[i] + bpv) / (vec4(1.0) + exp(-(g[i] + bgv))) : vec4(0.0);
+  ${virt
+    ? `// Transposed: target j is channel o0 + j of the four rows.
+  r0 = vec4(v[0].x, v[1].x, v[2].x, v[3].x); r1 = vec4(v[0].y, v[1].y, v[2].y, v[3].y);
+  r2 = vec4(v[0].z, v[1].z, v[2].z, v[3].z); r3 = vec4(v[0].w, v[1].w, v[2].w, v[3].w);`
+    : 'r0 = v[0]; r1 = v[1]; r2 = v[2]; r3 = v[3];'}
 }`, qs, { inputs: { X: xp, Wp: wpp, Wg: wgp, Bp: bp ?? mask, Bg: bg ?? mask, M: mask },
-        ints: { uIn: inD, uOut: outD, uRows: rows, uBp: bp ? 1 : 0, uBg: bg ? 1 : 0 }, work: inD * 4 });
+        ints: { uIn: inD, uOut: outD, uRows: rowsV, uBp: bp ? 1 : 0, uBg: bg ? 1 : 0, uN: virt?.n ?? 0, uKp: virt?.Kp ?? 1 }, work: inD * 4 });
       if (xp !== x) xp.free();
       // `planes`: the four float16 planes as they are (plane i holds rows 4q + i), for a consumer that reads them.
-      if (planes) return { planes: qs, free() { qs.forEach((t) => t.free()); } };
+      if (planes || virt) return { planes: qs, virt, free() { qs.forEach((t) => t.free()); } };
       return this._repack(qs, rows, outD, half && this.halfPair);
     }
     if (x.half === 'packed') {
@@ -567,7 +597,7 @@ vec4 compute(int t) {
    * `_repack` for packed planes (plane i holds rows 4q + i), into packed halves or float16, a texel at a time (outD a
    * multiple of 8, so a texel never straddles rows).
    */
-  _repackPacked(qs, rows, outD, half) {
+  _repackPacked(qs, rows, outD, half, keep = false) {
     const c = this.ctx;
     const packed = half === 'packed';
     const body = `
@@ -590,16 +620,18 @@ ${packed ? `uvec4 compute(int t) {
 }`}`;
     const res = c.kernel(`repack4p-${packed ? 'pk' : 'h'}`, body, c.tensor(rows * outD, packed ? 'packed' : true),
       { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3] }, ints: { uOut: outD } });
-    qs.forEach((t) => t.free());
+    if (!keep) qs.forEach((t) => t.free());
     return res;
   }
 
   /** Packed planes of a delta into `z + mask[r] * delta * sigmoid(gate)` (gate optional), float32, a texel at a time. */
   _repackResid(qs, rows, outD, { z, mask, gate }) {
     const c = this.ctx;
-    const res = c.kernel(`repack4p-res${gate ? '-g' : ''}`, `
+    // A gate left as planes (`linear` 'planes', the same rows and columns as qs): read where qs are read.
+    const gq = Boolean(gate?.packedPlanes);
+    const res = c.kernel(`repack4p-res${gq ? '-gq' : gate ? '-g' : ''}`, `
 uniform highp usampler2D Q0; uniform highp usampler2D Q1; uniform highp usampler2D Q2; uniform highp usampler2D Q3;
-uniform sampler2D Z; uniform sampler2D PM; uniform sampler2D G; uniform int uOut;
+uniform sampler2D Z; uniform sampler2D PM; uniform sampler2D G; uniform int uOut;${gq ? '\nuniform highp usampler2D G0; uniform highp usampler2D G1; uniform highp usampler2D G2; uniform highp usampler2D G3;' : ''}
 uvec4 plane(int i, int t) {
   int w = textureSize(Q0, 0).x;
   ivec2 p = ivec2(t % w, t / w);
@@ -611,9 +643,13 @@ vec4 compute(int t) {
   int qe = (r >> 2) * uOut + e0 - r * uOut;
   uvec4 u = plane(r & 3, qe >> 3);
   vec4 d = (qe & 4) == 0 ? vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)) : vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w));
-  ${gate ? 'd /= vec4(1.0) + exp(-tx(G, t));' : ''}
+  ${gq ? `int w = textureSize(G0, 0).x; ivec2 gc = ivec2((qe >> 3) % w, (qe >> 3) / w); int gp = r & 3;
+  uvec4 gu = gp == 0 ? texelFetch(G0, gc, 0) : gp == 1 ? texelFetch(G1, gc, 0) : gp == 2 ? texelFetch(G2, gc, 0) : texelFetch(G3, gc, 0);
+  d /= vec4(1.0) + exp(-((qe & 4) == 0 ? vec4(unpackHalf2x16(gu.x), unpackHalf2x16(gu.y)) : vec4(unpackHalf2x16(gu.z), unpackHalf2x16(gu.w))));`
+    : gate ? 'd /= vec4(1.0) + exp(-tx(G, t));' : ''}
   return tx(Z, t) + (el(PM, r) != 0.0 ? d : vec4(0.0));
-}`, c.tensor(rows * outD), { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3], Z: z, PM: mask, G: gate ?? z }, ints: { uOut: outD } });
+}`, c.tensor(rows * outD), { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3], Z: z, PM: mask, G: gq ? z : gate ?? z,
+      ...(gq ? { G0: gate.planes[0], G1: gate.planes[1], G2: gate.planes[2], G3: gate.planes[3] } : {}) }, ints: { uOut: outD } });
     qs.forEach((t) => t.free());
     return res;
   }
@@ -623,7 +659,7 @@ vec4 compute(int t) {
     const c = this.ctx;
     const ln = type === 'layer_norm';
     const vec = dim % 4 === 0;
-    if (vec && TW % (dim / 4) === 0 && (half !== 'packed' || dim % 8 === 0) && !this.noFastNorm) return this._normFast(x, rows, dim, ln, w, b, eps, half);
+    if (x.jplanes || (vec && TW % (dim / 4) === 0 && (half !== 'packed' || dim % 8 === 0) && !this.noFastNorm)) return this._normFast(x, rows, dim, ln, w, b, eps, half);
     const stats = c.kernel(`normstats-${ln ? 'ln' : 'rms'}-${vec ? 'v' : 's'}`, `
 uniform sampler2D X; uniform int uDim; uniform float uEps;
 vec4 compute(int r) {
@@ -649,17 +685,29 @@ vec4 compute(int r) {
    */
   _normFast(x, rows, dim, ln, w, b, eps, half) {
     const c = this.ctx;
-    const stats = c.kernel(`normstats1-${ln ? 'ln' : 'rms'}`, `
-uniform sampler2D X; uniform int uDim; uniform float uEps;
+    // `x.jplanes` (the triangle gather's, `_triMatmul`): row (i, j) is row i * Jq + (j >> 2) of plane j & 3.
+    const jp = x.jplanes;
+    const xin = jp ? { X0: jp[0], X1: jp[1], X2: jp[2], X3: jp[3] } : { X0: x };
+    const xhead = `
+uniform sampler2D X0;${jp ? ' uniform sampler2D X1; uniform sampler2D X2; uniform sampler2D X3; uniform int uN; uniform int uJq;' : ''}
+vec4 fx(int p, ivec2 c) { return ${jp ? 'p == 0 ? texelFetch(X0, c, 0) : p == 1 ? texelFetch(X1, c, 0) : p == 2 ? texelFetch(X2, c, 0) : texelFetch(X3, c, 0)' : 'texelFetch(X0, c, 0)'}; }
+// Plane and first texel of row r.
+ivec2 rowAt(int r, int nb, out int p) {
+  int w = textureSize(X0, 0).x;
+  ${jp ? 'int i = r / uN; int j = r - i * uN; p = j & 3; int base = (i * uJq + (j >> 2)) * nb;' : 'p = 0; int base = r * nb;'}
+  return ivec2(base % w, base / w);
+}`;
+    const xints = jp ? { uN: x.n, uJq: x.Jq } : {};
+    const stats = c.kernel(`normstats1-${ln ? 'ln' : 'rms'}${jp ? '-jp' : ''}`, `${xhead}
+uniform int uDim; uniform float uEps;
 vec4 compute(int r) {
   int nb = uDim / 4;
-  int w = textureSize(X, 0).x;
-  int base = r * nb;
-  ivec2 rc = ivec2(base % w, base / w);
-  ${ln ? 'float k0 = texelFetch(X, rc, 0).x;' : 'float k0 = 0.0;'}
+  int p;
+  ivec2 rc = rowAt(r, nb, p);
+  ${ln ? 'float k0 = fx(p, rc).x;' : 'float k0 = 0.0;'}
   vec4 s1 = vec4(0.0), s2 = vec4(0.0);
   for (int k = 0; k < nb; k++) {
-    vec4 v = texelFetch(X, rc + ivec2(k, 0), 0) - vec4(k0);
+    vec4 v = fx(p, rc + ivec2(k, 0)) - vec4(k0);
     s1 += v;
     s2 += v * v;
   }
@@ -667,30 +715,32 @@ vec4 compute(int r) {
   float m1 = (s1.x + s1.y + s1.z + s1.w) / n;
   float m2 = (s2.x + s2.y + s2.z + s2.w) / n;
   ${ln ? 'return vec4(k0 + m1, 1.0 / sqrt(max(m2 - m1 * m1, 0.0) + uEps), 0.0, 0.0);' : 'return vec4(0.0, 1.0 / sqrt(m2 + uEps), 0.0, 0.0);'}
-}`, c.tensor(rows * 4), { inputs: { X: x }, ints: { uDim: dim }, floats: { uEps: eps }, work: dim / 4 });
+}`, c.tensor(rows * 4), { inputs: xin, ints: { uDim: dim, ...xints }, floats: { uEps: eps }, work: dim / 4 });
     const packed = half === 'packed';
     const outHalf = packed ? 'packed' : half && this.halfPair;
-    const inputs = { X: x, S: stats, Wn: w ?? x, Bn: b ?? x };
-    const ints = { uDim: dim, uW: w ? 1 : 0, uB: b ? 1 : 0 };
-    const head = `
-uniform sampler2D X; uniform sampler2D S; uniform sampler2D Wn; uniform sampler2D Bn; uniform int uDim; uniform int uW; uniform int uB;
+    const inputs = { ...xin, S: stats, Wn: w ?? stats, Bn: b ?? stats };
+    const ints = { uDim: dim, uW: w ? 1 : 0, uB: b ? 1 : 0, ...xints };
+    const head = `${xhead}
+uniform sampler2D S; uniform sampler2D Wn; uniform sampler2D Bn; uniform int uDim; uniform int uW; uniform int uB;
 vec4 ap(int t) {
   int nb = uDim / 4;
   int r = t / nb;
   int d4 = t - r * nb;
   vec4 st = tx(S, r);
-  vec4 v = (tx(X, t) - vec4(st.x)) * st.y;
+  int p;
+  ivec2 rc = rowAt(r, nb, p);
+  vec4 v = (fx(p, rc + ivec2(d4, 0)) - vec4(st.x)) * st.y;
   if (uW == 1) v *= tx(Wn, d4);
   if (uB == 1) v += tx(Bn, d4);
   return v;
 }`;
     const out = packed
-      ? c.kernel('normapply1-pk', `${head}
+      ? c.kernel(`normapply1-pk${jp ? '-jp' : ''}`, `${head}
 uvec4 compute(int t) {
   vec4 a = ap(2 * t), bb = ap(2 * t + 1);
   return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(bb.xy), packHalf2x16(bb.zw));
 }`, c.tensor(rows * dim, 'packed'), { inputs, ints })
-      : c.kernel('normapply1', `${head}
+      : c.kernel(`normapply1${jp ? '-jp' : ''}`, `${head}
 vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs, ints });
     stats.free();
     return out;
@@ -899,8 +949,10 @@ vec4 compute(int t) {
     const zn = this.norm(z, rows, cZ, 'layer_norm', W('layer_norm_in.weight'), W('layer_norm_in.bias', true), eps, this.pk('zn'));
     // (Written straight into the batched matmul's channel-major layout, 8 k x 2 channels a fragment, the even and odd
     // channels as two targets: 2.2x slower in a whole pass, M2; neighbouring fragments then share no rows of zn.)
+    const virt = !this.noTriMM && !this.noVirt && cZ % 8 === 0 && TW % (cZ / 8) === 0 && cH % 4 === 0
+      ? { n, Kp: Math.ceil(n / 8) * 8, outgoing: direction === 'outgoing' } : null;
     const gated = (side) => this.gatedLinear(zn, rows, cZ, W(`linear_${side}_p.weight`), W(`linear_${side}_p.bias`, true),
-      W(`linear_${side}_g.weight`), W(`linear_${side}_g.bias`, true), cH, pairMask, true, !this.noTriMM && !this.noPlanes);
+      W(`linear_${side}_g.weight`), W(`linear_${side}_g.bias`, true), cH, pairMask, true, !this.noTriMM && !this.noPlanes, virt);
     let a = gated('a');
     let b = gated('b');
     // x[i, j, c] = sum_k a[i, k, c] b[j, k, c] (outgoing) or a[k, i, c] b[k, j, c] (incoming), never n^3 in memory.
@@ -975,7 +1027,7 @@ vec4 compute(int t) {
   _triTail(x, zn, rows, cZ, cH, W, eps, z, pairMask) {
     const xn = this.norm(x, rows, cH, 'layer_norm', W('layer_norm_out.weight'), W('layer_norm_out.bias', true), eps, this.pk('xn'));
     x.free();
-    const gp = this.linear(zn, rows, cZ, W('linear_g.weight'), cZ, W('linear_g.bias', true), null, true);
+    const gp = this.linear(zn, rows, cZ, W('linear_g.weight'), cZ, W('linear_g.bias', true), null, 'planes');
     zn.free();
     // z + pairMask * linear_z(xn) * sigmoid(gp), in the matmul's epilogue.
     const res = this.linear(xn, rows, cH, W('linear_z.weight'), cZ, W('linear_z.bias', true), null, false, { z, mask: pairMask, gate: gp });
@@ -992,7 +1044,24 @@ vec4 compute(int t) {
     const ib = Kp / 8;
     const rd = (t) => (t.half === 'packed' ? 'elp' : 'el');
     // From a tensor, or from the gated projection's planes (row r in plane r & 3, as row r >> 2).
-    const cm = (src, rowsPer) => c.elementwise(`tri-cm-${outgoing ? 'out' : 'in'}${src.planes ? '-q' : src.half === 'packed' ? '-p' : ''}`, 'cmv(e)', cH * rowsPer * Kp, {
+    // From the gated kernel's virtual-row planes (row i * Kp + k; plane j texel q * cH/4 + c4: channel 4 c4 + j of rows
+    // 4q to 4q + 3): a texel of 8 k is two plane texels.
+    const cmVirt = (src, rowsPer) => c.kernel(`tri-cm-v`, `
+uniform sampler2D Q0; uniform sampler2D Q1; uniform sampler2D Q2; uniform sampler2D Q3; uniform int uN; uniform int uC; uniform int uR; uniform int uK8;
+vec4 pl(int p, int t) { return p == 0 ? tx(Q0, t) : p == 1 ? tx(Q1, t) : p == 2 ? tx(Q2, t) : tx(Q3, t); }
+uvec4 compute(int t) {
+  int r = t / uK8;
+  int k8 = t - r * uK8;
+  int ch = r / uR;
+  int i = r - ch * uR;
+  if (i >= uN) return uvec4(0u);
+  int q0 = (i * uK8 + k8) * 2;
+  int c4 = uC / 4;
+  vec4 a = pl(ch & 3, q0 * c4 + (ch >> 2)), b = pl(ch & 3, (q0 + 1) * c4 + (ch >> 2));
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
+}`, c.tensor(cH * rowsPer * Kp, 'packed', ib), { inputs: { Q0: src.planes[0], Q1: src.planes[1], Q2: src.planes[2], Q3: src.planes[3] },
+      ints: { uN: n, uC: cH, uR: rowsPer, uK8: ib } });
+    const cm = (src, rowsPer) => src.virt ? cmVirt(src, rowsPer) : c.elementwise(`tri-cm-${outgoing ? 'out' : 'in'}${src.planes ? '-q' : src.half === 'packed' ? '-p' : ''}`, 'cmv(e)', cH * rowsPer * Kp, {
       inputs: src.planes ? { Q0: src.planes[0], Q1: src.planes[1], Q2: src.planes[2], Q3: src.planes[3] } : { S: src },
       ints: { uN: n, uC: cH, uR: rowsPer, uK: Kp }, half: 'packed', rowTexels: ib,
       pre: `float at(int r, int ch) {
@@ -1056,7 +1125,33 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
 }`, qs, { inputs: { X: A, Wt: B }, ints: { uIn: Kp, uOut: Ip, uIp: Ip }, work: Kp * 2 });
     A.free();
     B.free();
-    // Back to [n^2, c]: element (i, j, ch) is row ch * Ip + i, column j of the batched result (rows in planes of 4).
+    // Back to pairs: element (i, j, ch) is row ch * Ip + i (plane i & 3, as Ip is a multiple of 4), column j of the
+    // batched result. A fragment reads 4 channels' texels (4 j each) and writes the 4 j as 4 targets: planes by j & 3,
+    // row i * Jq + (j >> 2), which the LayerNorm after it reads (`jplanes`).
+    if (TW % (cH / 4) === 0 && !this.noJPlanes) {
+      const Jq = Ip / 4;
+      const jplanes = [0, 1, 2, 3].map(() => c.tensor(n * Jq * cH));
+      c.kernel('tri-gather4', `
+uniform sampler2D Q0; uniform sampler2D Q1; uniform sampler2D Q2; uniform sampler2D Q3; uniform int uC; uniform int uIp;
+vec4 pl(int p, int t) { return p == 0 ? tx(Q0, t) : p == 1 ? tx(Q1, t) : p == 2 ? tx(Q2, t) : tx(Q3, t); }
+void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
+  int c4n = uC / 4;
+  int pr = t / c4n;
+  int c4 = t - pr * c4n;
+  int Jq = uIp / 4;
+  int i = pr / Jq;
+  int jq = pr - i * Jq;
+  int p = i & 3;
+  vec4 f[4];
+  for (int m = 0; m < 4; m++) f[m] = pl(p, (((4 * c4 + m) * uIp + i) >> 2) * Jq + jq);
+  r0 = vec4(f[0].x, f[1].x, f[2].x, f[3].x);
+  r1 = vec4(f[0].y, f[1].y, f[2].y, f[3].y);
+  r2 = vec4(f[0].z, f[1].z, f[2].z, f[3].z);
+  r3 = vec4(f[0].w, f[1].w, f[2].w, f[3].w);
+}`, jplanes, { inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3] }, ints: { uC: cH, uIp: Ip } });
+      qs.forEach((t) => t.free());
+      return { jplanes, n, Jq, free() { jplanes.forEach((t) => t.free()); } };
+    }
     const x = c.elementwise('tri-gather', 'gv(e)', n * n * cH, {
       inputs: { Q0: qs[0], Q1: qs[1], Q2: qs[2], Q3: qs[3] }, ints: { uN: n, uC: cH, uIp: Ip },
       pre: `float gv(int e) {
@@ -1107,7 +1202,7 @@ vec4 compute(int t) {
     const zt = this.norm(zz, rows, P, 'layer_norm', this.W(`${tp}.layer_norm.weight`), this.W(`${tp}.layer_norm.bias`), eps, this.pk('zt'));
     const l1B = this.W(`${tp}.linear_1.bias`);
     const hidden = l1B.size;
-    const h = this.linear(zt, rows, P, this.W(`${tp}.linear_1.weight`), hidden, l1B, 'relu', this.pk('h'));
+    const h = this.linear(zt, rows, P, this.W(`${tp}.linear_1.weight`), hidden, l1B, 'relu', 'planes');
     zt.free();
     const out = this.linear(h, rows, hidden, this.W(`${tp}.linear_2.weight`), P, this.W(`${tp}.linear_2.bias`), null, false, { z: zz, mask: pairMask });
     h.free();
