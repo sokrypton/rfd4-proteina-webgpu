@@ -32,6 +32,8 @@ export class Rfd4pModelGL {
     // The triangle contraction's result (the batched matmul's planes, the gather's j-planes) in float16 too (WebGPU's
     // `x` under `triF16`).
     this.xHalf = true;
+    // z held as packed planes (`_toZPlanes`; with zHalf).
+    this.zPlanes = true;
   }
 
   get backendName() {
@@ -101,6 +103,7 @@ export class Rfd4pModelGL {
       xr.free();
       return y;
     }
+    if ((resid?.z.zplanes || resid?.z.pw?.z.zplanes) && !go48) throw new Error('linear: a z-planes residual needs the 4 x 8 path');
     if (resid?.gate?.packedPlanes && !go48) {
       // A gate left as planes, read by a path that takes a tensor.
       const g = this._repackPacked(resid.gate.planes, rows, outD, true, true);
@@ -145,8 +148,18 @@ float epi(float v) { return uAct == 1 ? max(v, 0.0) : uAct == 2 ? sigm(v) : v; }
       const rq = Math.ceil(rows / 4);
       const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD, 'packed'));
       const xq = Boolean(x.packedPlanes);
-      c.kernel(`linear4x8pk${xq ? '-xq' : ''}`, `
+      // A residual update of z held as packed planes (`_toZPlanes`): the new z written here, in the planes' own layout
+      // (the old z read where the new is written, the gate's planes too, a pair-write view's outer product added).
+      const zv = resid?.z.zplanes ? resid.z : resid?.z.pw?.z.zplanes ? resid.z.pw.z : null;
+      const zpw = zv && resid.z.pw ? resid.z.pw : null;
+      const zg = zv && resid.gate ? resid.gate : null;
+      if (zg && !zg.packedPlanes) throw new Error('linear: a z-planes residual takes its gate as planes');
+      const zkey = zv ? `-zr${zg ? 'g' : ''}${zpw ? 'p' : ''}` : '';
+      c.kernel(`linear4x8pk${xq ? '-xq' : ''}${zkey}`, `
 uniform highp usampler2D X; uniform highp usampler2D Wt; uniform sampler2D B;${xq ? ' uniform highp usampler2D X1; uniform highp usampler2D X2; uniform highp usampler2D X3;' : ''}
+${zv ? `uniform highp usampler2D Z0; uniform highp usampler2D Z1; uniform highp usampler2D Z2; uniform highp usampler2D Z3; uniform sampler2D PM;
+${zg ? 'uniform highp usampler2D G0; uniform highp usampler2D G1; uniform highp usampler2D G2; uniform highp usampler2D G3;' : ''}
+${zpw ? 'uniform sampler2D PIJ; uniform int uN;' : ''}` : ''}
 uniform int uIn; uniform int uOut; uniform int uBias; uniform int uAct; uniform int uRows;${epi}
 vec4 epi4(vec4 a) { return vec4(epi(a.x), epi(a.y), epi(a.z), epi(a.w)); }
 void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
@@ -179,13 +192,38 @@ void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
     }`}
   }
   vec4 ba = uBias == 1 ? tx(B, o0 / 4) : vec4(0.0), bbv = uBias == 1 ? tx(B, o0 / 4 + 1) : vec4(0.0);
-  r0 = live[0] ? pk(epi4(a[0] + ba), epi4(b[0] + bbv)) : uvec4(0u);
+  ${zv ? `int zw = textureSize(Z0, 0).x;
+  ivec2 tc = ivec2(t % zw, t / zw);
+  uvec4 zu[4];
+  zu[0] = texelFetch(Z0, tc, 0); zu[1] = texelFetch(Z1, tc, 0); zu[2] = texelFetch(Z2, tc, 0); zu[3] = texelFetch(Z3, tc, 0);
+  ${zg ? 'uvec4 gu[4]; gu[0] = texelFetch(G0, tc, 0); gu[1] = texelFetch(G1, tc, 0); gu[2] = texelFetch(G2, tc, 0); gu[3] = texelFetch(G3, tc, 0);' : ''}
+  uvec4 zo[4];
+  for (int i = 0; i < 4; i++) {
+    int r = q * 4 + i;
+    vec4 zl, zh;
+    unpack8(zu[i], zl, zh);
+    if (live[i] && el(PM, r) != 0.0) {
+      vec4 dl = a[i] + ba, dh = b[i] + bbv;
+      ${zg ? 'vec4 gl, gh; unpack8(gu[i], gl, gh); dl /= vec4(1.0) + exp(-gl); dh /= vec4(1.0) + exp(-gh);' : ''}
+      ${zpw ? `int it = r / uN; int jt = r - it * uN;
+      int pj = (jt * 2 * uOut + o0) / 4, pi = (it * 2 * uOut + uOut + o0) / 4;
+      zl += tx(PIJ, pj) * tx(PIJ, pi); zh += tx(PIJ, pj + 1) * tx(PIJ, pi + 1);` : ''}
+      zl += dl; zh += dh;
+    }
+    zo[i] = live[i] ? pk(zl, zh) : uvec4(0u);
+  }
+  r0 = zo[0]; r1 = zo[1]; r2 = zo[2]; r3 = zo[3];` : `r0 = live[0] ? pk(epi4(a[0] + ba), epi4(b[0] + bbv)) : uvec4(0u);
   r1 = live[1] ? pk(epi4(a[1] + ba), epi4(b[1] + bbv)) : uvec4(0u);
   r2 = live[2] ? pk(epi4(a[2] + ba), epi4(b[2] + bbv)) : uvec4(0u);
-  r3 = live[3] ? pk(epi4(a[3] + ba), epi4(b[3] + bbv)) : uvec4(0u);
-}`, qs, { inputs: { X: xq ? x.planes[0] : xp, Wt: wp, B: bias ?? w, ...(xq ? { X1: x.planes[1], X2: x.planes[2], X3: x.planes[3] } : {}) }, ints, work: inD * 3 });
+  r3 = live[3] ? pk(epi4(a[3] + ba), epi4(b[3] + bbv)) : uvec4(0u);`}
+}`, qs, { inputs: { X: xq ? x.planes[0] : xp, Wt: wp, B: bias ?? w, ...(xq ? { X1: x.planes[1], X2: x.planes[2], X3: x.planes[3] } : {}),
+          ...(zv ? { Z0: zv.zplanes[0], Z1: zv.zplanes[1], Z2: zv.zplanes[2], Z3: zv.zplanes[3], PM: resid.mask } : {}),
+          ...(zg ? { G0: zg.planes[0], G1: zg.planes[1], G2: zg.planes[2], G3: zg.planes[3] } : {}),
+          ...(zpw ? { PIJ: zpw.pij } : {}) },
+        ints: { ...ints, ...(zpw ? { uN: zpw.n } : {}) }, work: inD * 3 });
       if (xp !== x) xp.free();
       if (wp !== w && !wp.weight) wp.free();
+      if (zv) return { zplanes: qs, rows, P: outD, free() { qs.forEach((t) => t.free()); } };
       // A residual update: the float16 result is the delta; the repack adds it to z in float32.
       if (resid) return this._repackResid(qs, rows, outD, resid);
       if (keepPlanes) return { planes: qs, packedPlanes: true, free() { qs.forEach((t) => t.free()); } };
@@ -711,7 +749,7 @@ vec4 compute(int t) {
     const c = this.ctx;
     const ln = type === 'layer_norm';
     const vec = dim % 4 === 0;
-    if (x.jplanes || (vec && TW % (dim / 4) === 0 && (half !== 'packed' || dim % 8 === 0) && !this.noFastNorm)) return this._normFast(x, rows, dim, ln, w, b, eps, half);
+    if (x.jplanes || x.zplanes || x.pw?.z.zplanes || (vec && TW % (dim / 4) === 0 && (half !== 'packed' || dim % 8 === 0) && !this.noFastNorm)) return this._normFast(x, rows, dim, ln, w, b, eps, half);
     if (x.pw) {
       const xm = this._pairWrite(x.pw);
       const y = this.norm(xm, rows, dim, type, w, b, eps, half);
@@ -745,28 +783,39 @@ vec4 compute(int r) {
     const c = this.ctx;
     // `x.jplanes` (the triangle gather's, `_triMatmul`): row (i, j) is row i * Jq + (j >> 2) of plane j & 3.
     // `x.pw` (`_pairWriteView`): z plus the pair update's outer product, made as it is read.
+    // `x.zplanes` (z as packed planes, `_toZPlanes`): row r is row r >> 2 of plane r & 3, eight values a texel.
     const jp = x.jplanes;
     const pw = x.pw;
-    const xin = jp ? { X0: jp[0], X1: jp[1], X2: jp[2], X3: jp[3] } : pw ? { X0: pw.z, PIJ: pw.pij, PM: pw.pm } : { X0: x };
+    const zsrc = pw ? pw.z : x;
+    const zq = zsrc.zplanes;
+    const xin = jp ? { X0: jp[0], X1: jp[1], X2: jp[2], X3: jp[3] }
+      : zq ? { Z0: zq[0], Z1: zq[1], Z2: zq[2], Z3: zq[3], ...(pw ? { PIJ: pw.pij, PM: pw.pm } : {}) }
+        : pw ? { X0: pw.z, PIJ: pw.pij, PM: pw.pm } : { X0: x };
+    const zfetch = `uvec4 u = p == 0 ? texelFetch(Z0, c + ivec2(k >> 1, 0), 0) : p == 1 ? texelFetch(Z1, c + ivec2(k >> 1, 0), 0) : p == 2 ? texelFetch(Z2, c + ivec2(k >> 1, 0), 0) : texelFetch(Z3, c + ivec2(k >> 1, 0), 0);
+  vec4 v = (k & 1) == 0 ? vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)) : vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w));`;
     const xhead = `
-uniform sampler2D X0;${jp ? ' uniform sampler2D X1; uniform sampler2D X2; uniform sampler2D X3; uniform int uN; uniform int uJq;' : ''}${pw ? ' uniform sampler2D PIJ; uniform sampler2D PM; uniform int uN; uniform int uP;' : ''}
+${zq ? 'uniform highp usampler2D Z0; uniform highp usampler2D Z1; uniform highp usampler2D Z2; uniform highp usampler2D Z3;' : 'uniform sampler2D X0;'}${jp ? ' uniform sampler2D X1; uniform sampler2D X2; uniform sampler2D X3; uniform int uN; uniform int uJq;' : ''}${pw ? ' uniform sampler2D PIJ; uniform sampler2D PM; uniform int uN; uniform int uP;' : ''}
 int pwJ, pwI;
+// Texel k (four values) of the row that starts at c in plane p.
 vec4 fx(int p, ivec2 c, int k) {
-  ${jp ? 'return p == 0 ? texelFetch(X0, c, 0) : p == 1 ? texelFetch(X1, c, 0) : p == 2 ? texelFetch(X2, c, 0) : texelFetch(X3, c, 0);'
-    : pw ? 'vec4 v = texelFetch(X0, c, 0); return pwJ < 0 ? v : v + tx(PIJ, pwJ + k) * tx(PIJ, pwI + k);' : 'return texelFetch(X0, c, 0);'}
+  ${jp ? 'ivec2 cc = c + ivec2(k, 0); return p == 0 ? texelFetch(X0, cc, 0) : p == 1 ? texelFetch(X1, cc, 0) : p == 2 ? texelFetch(X2, cc, 0) : texelFetch(X3, cc, 0);'
+    : zq ? `${zfetch}
+  ${pw ? 'return pwJ < 0 ? v : v + tx(PIJ, pwJ + k) * tx(PIJ, pwI + k);' : 'return v;'}`
+      : pw ? 'vec4 v = texelFetch(X0, c + ivec2(k, 0), 0); return pwJ < 0 ? v : v + tx(PIJ, pwJ + k) * tx(PIJ, pwI + k);' : 'return texelFetch(X0, c + ivec2(k, 0), 0);'}
 }
 // Plane and first texel of row r.
 ivec2 rowAt(int r, int nb, out int p) {
-  int w = textureSize(X0, 0).x;
+  int w = textureSize(${zq ? 'Z0' : 'X0'}, 0).x;
   ${jp ? 'int i = r / uN; int j = r - i * uN; p = j & 3; int base = (i * uJq + (j >> 2)) * nb;'
-    : pw ? `p = 0; int base = r * nb;
-  int i = r / uN; int j = r - i * uN;
+    : zq ? 'p = r & 3; int base = (r >> 2) * (nb / 2);' : 'p = 0; int base = r * nb;'}
+  ${pw ? `int i = r / uN; int j = r - i * uN;
   bool live = el(PM, r) != 0.0;
-  pwJ = live ? (j * 2 * uP) / 4 : -1; pwI = (i * 2 * uP + uP) / 4;` : 'p = 0; int base = r * nb;'}
+  pwJ = live ? (j * 2 * uP) / 4 : -1; pwI = (i * 2 * uP + uP) / 4;` : ''}
   return ivec2(base % w, base / w);
 }`;
     const xints = jp ? { uN: x.n, uJq: x.Jq } : pw ? { uN: pw.n, uP: pw.P } : {};
-    const stats = c.kernel(`normstats1-${ln ? 'ln' : 'rms'}${jp ? '-jp' : pw ? '-pw' : ''}`, `${xhead}
+    const xk = jp ? '-jp' : `${zq ? '-zq' : ''}${pw ? '-pw' : ''}`;
+    const stats = c.kernel(`normstats1-${ln ? 'ln' : 'rms'}${xk}`, `${xhead}
 uniform int uDim; uniform float uEps;
 vec4 compute(int r) {
   int nb = uDim / 4;
@@ -775,7 +824,7 @@ vec4 compute(int r) {
   ${ln ? 'float k0 = fx(p, rc, 0).x;' : 'float k0 = 0.0;'}
   vec4 s1 = vec4(0.0), s2 = vec4(0.0);
   for (int k = 0; k < nb; k++) {
-    vec4 v = fx(p, rc + ivec2(k, 0), k) - vec4(k0);
+    vec4 v = fx(p, rc, k) - vec4(k0);
     s1 += v;
     s2 += v * v;
   }
@@ -797,18 +846,18 @@ vec4 ap(int t) {
   vec4 st = tx(S, r);
   int p;
   ivec2 rc = rowAt(r, nb, p);
-  vec4 v = (fx(p, rc + ivec2(d4, 0), d4) - vec4(st.x)) * st.y;
+  vec4 v = (fx(p, rc, d4) - vec4(st.x)) * st.y;
   if (uW == 1) v *= tx(Wn, d4);
   if (uB == 1) v += tx(Bn, d4);
   return v;
 }`;
     const out = packed
-      ? c.kernel(`normapply1-pk${jp ? '-jp' : pw ? '-pw' : ''}`, `${head}
+      ? c.kernel(`normapply1-pk${xk}`, `${head}
 uvec4 compute(int t) {
   vec4 a = ap(2 * t), bb = ap(2 * t + 1);
   return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(bb.xy), packHalf2x16(bb.zw));
 }`, c.tensor(rows * dim, 'packed'), { inputs, ints })
-      : c.kernel(`normapply1${jp ? '-jp' : pw ? '-pw' : ''}`, `${head}
+      : c.kernel(`normapply1${xk}`, `${head}
 vec4 compute(int t) { return ap(t); }`, c.tensor(rows * dim, outHalf), { inputs, ints });
     stats.free();
     return out;
@@ -1507,6 +1556,7 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
     // z + pairMask * (p_j (x) p_i), never written: the first triangle update's norm and residual read z and pij and add
     // it as they read (a pass of its own was 5.7 ms at n = 208).
     const view = { n, P, z, pij, pm: pairMask };
+    if (z.zplanes && this.noPwView) throw new Error('pairUpdate: z as planes needs the pair-write view');
     let zz = this.noPwView ? this._pairWrite(view) : { pw: view, free() {} };
     for (const dir of ['outgoing', 'incoming']) {
       const z2 = this.triMul(zz, pairMask, n, P, TRI, dir, `${prefix}.tri_mult_${dir === 'outgoing' ? 'out' : 'in'}`, eps);
@@ -1535,6 +1585,28 @@ void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
   // ---- networks -----------------------------------------------------------------------------------------------
 
   /** As `forwardTrunkCpu(n, f, mask, weights, cfg, nRecycle, opts)`; returns `{bb_ca, local_latents, logits, insertion}`. */
+  /**
+   * `[rows, P]` floats as z's packed planes: row r is row r >> 2 of plane r & 3, eight values a texel (the 4 x 8
+   * matmul's output layout, so a residual update writes the new z in its epilogue). { zplanes, rows, P }.
+   */
+  _toZPlanes(t, rows, P) {
+    const rq = Math.ceil(rows / 4);
+    const planes = [0, 1, 2, 3].map(() => this.ctx.tensor(rq * P, 'packed'));
+    this.ctx.kernel('to-zplanes', `
+uniform sampler2D X; uniform int uRows;
+uvec4 pk8(int r, int c8) {
+  if (r >= uRows) return uvec4(0u);
+  vec4 a = tx(X, r * ${P / 4} + 2 * c8), b = tx(X, r * ${P / 4} + 2 * c8 + 1);
+  return uvec4(packHalf2x16(a.xy), packHalf2x16(a.zw), packHalf2x16(b.xy), packHalf2x16(b.zw));
+}
+void compute4(int t, out uvec4 r0, out uvec4 r1, out uvec4 r2, out uvec4 r3) {
+  int q = t / ${P / 8};
+  int c8 = t - q * ${P / 8};
+  r0 = pk8(4 * q, c8); r1 = pk8(4 * q + 1, c8); r2 = pk8(4 * q + 2, c8); r3 = pk8(4 * q + 3, c8);
+}`, planes, { inputs: { X: t }, ints: { uRows: rows } });
+    return { zplanes: planes, rows, P, free() { planes.forEach((x) => x.free()); } };
+  }
+
   /** `z + pm * (p_j (x) p_i)` written out (PairReprUpdate's hadamard pair write), a texel at a time. */
   _pairWrite({ n, P, z, pij, pm }) {
     return this.ctx.kernel('pairwrite4', `
@@ -1577,7 +1649,41 @@ vec4 compute(int t) {
     const outD = layers.length * H;
     const rq = Math.ceil(rows / 4);
     const qs = [0, 1, 2, 3].map(() => c.tensor(rq * outD));
-    c.kernel('pairbias4x4', `
+    if (z.zplanes) {
+      // z as packed planes: the fragment's row i is row q of plane i, eight values a texel.
+      c.kernel('pairbias4x4-zq', `
+uniform highp usampler2D Z0; uniform highp usampler2D Z1; uniform highp usampler2D Z2; uniform highp usampler2D Z3; uniform sampler2D Wt;
+uniform int uIn; uniform int uOut; uniform float uEps;
+void unpack8(uvec4 u, out vec4 lo, out vec4 hi) { lo = vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); hi = vec4(unpackHalf2x16(u.z), unpackHalf2x16(u.w)); }
+void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
+  int e0 = t * 4;
+  int q = e0 / uOut;
+  int o0 = e0 - q * uOut;
+  int ib = uIn / 8;
+  int zw = textureSize(Z0, 0).x;
+  int ww = textureSize(Wt, 0).x;
+  int xt = q * ib;
+  ivec2 xc = ivec2(xt % zw, xt / zw);
+  ivec2 wc[4];
+  for (int i = 0; i < 4; i++) { int wt = (o0 + i) * (uIn / 4); wc[i] = ivec2(wt % ww, wt / ww); }
+  vec4 a[4];
+  vec4 ss = vec4(0.0);
+  for (int i = 0; i < 4; i++) a[i] = vec4(0.0);
+  for (int k = 0; k < ib; k++) {
+    ivec2 d0 = ivec2(2 * k, 0), d1 = ivec2(2 * k + 1, 0);
+    mat4 wl = mat4(texelFetch(Wt, wc[0] + d0, 0), texelFetch(Wt, wc[1] + d0, 0), texelFetch(Wt, wc[2] + d0, 0), texelFetch(Wt, wc[3] + d0, 0));
+    mat4 wh = mat4(texelFetch(Wt, wc[0] + d1, 0), texelFetch(Wt, wc[1] + d1, 0), texelFetch(Wt, wc[2] + d1, 0), texelFetch(Wt, wc[3] + d1, 0));
+    ivec2 dk = ivec2(k, 0);
+    vec4 xl, xh;
+    unpack8(texelFetch(Z0, xc + dk, 0), xl, xh); a[0] += xl * wl + xh * wh; ss.x += dot(xl, xl) + dot(xh, xh);
+    unpack8(texelFetch(Z1, xc + dk, 0), xl, xh); a[1] += xl * wl + xh * wh; ss.y += dot(xl, xl) + dot(xh, xh);
+    unpack8(texelFetch(Z2, xc + dk, 0), xl, xh); a[2] += xl * wl + xh * wh; ss.z += dot(xl, xl) + dot(xh, xh);
+    unpack8(texelFetch(Z3, xc + dk, 0), xl, xh); a[3] += xl * wl + xh * wh; ss.w += dot(xl, xl) + dot(xh, xh);
+  }
+  vec4 rs = inversesqrt(ss / float(uIn) + vec4(uEps));
+  r0 = a[0] * rs.x; r1 = a[1] * rs.y; r2 = a[2] * rs.z; r3 = a[3] * rs.w;
+}`, qs, { inputs: { Z0: z.zplanes[0], Z1: z.zplanes[1], Z2: z.zplanes[2], Z3: z.zplanes[3], Wt: w }, ints: { uIn: P, uOut: outD }, floats: { uEps: eps }, work: P / 2 });
+    } else c.kernel('pairbias4x4', `
 uniform sampler2D X; uniform sampler2D Wt; uniform int uIn; uniform int uOut; uniform int uRows; uniform float uEps;
 void compute4(int t, out vec4 r0, out vec4 r1, out vec4 r2, out vec4 r3) {
   int e0 = t * 4;
@@ -1813,18 +1919,30 @@ vec4 compute(int t) {
     pcT.free();
     const zCond = this.norm(zcLin, 1, PC, norm, this.W('nn.pair_repr_builder.cond_factory.ln_out.weight'));
     zcLin.free();
-    const zInit = this.adaLN(zMasked, zCond, pm, n * n, P, 1, PC, norm, 'nn.pair_repr_builder.adaln', 1e-5, null, this.zh && !this.zInit32);
+    let zInit = this.adaLN(zMasked, zCond, pm, n * n, P, 1, PC, norm, 'nn.pair_repr_builder.adaln', 1e-5, null, this.zh && !this.zInit32);
     zMasked.free();
     zCond.free();
 
     let s = null;
     let z = null;
+    // z as packed planes (`_toZPlanes`) when the pair rows take the 4 x 8 path: residual updates then write it in their
+    // epilogue, with no repack, and its readers fetch half the texels.
+    const zp = this.zh && this.zPlanes && n * n >= 4096 && P % 8 === 0 && TW % (P / 8) === 0;
+    if (zp) {
+      const t = zInit;
+      zInit = this._toZPlanes(t, n * n, P);
+      t.free();
+    }
     let zInitOwn = zInit;
     for (let cycle = 0; cycle < Math.max(1, nRecycle); cycle += 1) {
       if (cycle === 0) {
         // s and z start at zero, so their recycle terms (a weight-only norm, a bias-free projection) are zero too.
         s = c.elementwise('copy', 'el(A, e)', n * D, { inputs: { A: sInit } });
-        if (nRecycle > 1) {
+        if (zp) {
+          // zInit itself (kept for the later cycles: z's first update writes new planes, and this view frees nothing).
+          z = nRecycle > 1 ? { zplanes: zInit.zplanes, rows: n * n, P, free() {} } : zInit;
+          if (nRecycle <= 1) zInitOwn = null;
+        } else if (nRecycle > 1) {
           z = c.elementwise('copy', 'el(A, e)', n * n * P, { inputs: { A: zInit }, half: this.zh && !this.zInit32 });
         } else if (this.zInit32) {
           z = c.elementwise('copy', 'el(A, e)', n * n * P, { inputs: { A: zInit } });
@@ -1837,14 +1955,21 @@ vec4 compute(int t) {
         const sd = this.linear(sn, n, D, this.W('nn.s_cycle_proj.weight'), D);
         sn.free();
         const zn = this.norm(z, n * n, P, norm, this.W('nn.z_cycle_norm.weight'), null, 1e-5, this.pk('zc'));
-        const zd = this.linear(zn, n * n, P, this.W('nn.z_cycle_proj.weight'), P, null, null, true);
-        zn.free();
         s.free();
-        z.free();
+        if (zp) {
+          // z = zInit + z_cycle_proj(zn), written as new planes by the projection's epilogue (masked pairs are zero on both sides).
+          const z2 = this.linear(zn, n * n, P, this.W('nn.z_cycle_proj.weight'), P, null, null, false, { z: zInit, mask: pm });
+          z.free();
+          z = z2;
+        } else {
+          const zd = this.linear(zn, n * n, P, this.W('nn.z_cycle_proj.weight'), P, null, null, true);
+          z.free();
+          z = c.elementwise('add', 'el(A, e) + el(B, e)', n * n * P, { inputs: { A: zInit, B: zd }, half: this.zh });
+          zd.free();
+        }
+        zn.free();
         s = c.elementwise('add', 'el(A, e) + el(B, e)', n * D, { inputs: { A: sInit, B: sd } });
-        z = c.elementwise('add', 'el(A, e) + el(B, e)', n * n * P, { inputs: { A: zInit, B: zd }, half: this.zh });
         sd.free();
-        zd.free();
       }
       const cc = cycle === 0 ? c0 : c1;
       const cp = this.noCondProj ? null : this._condProj(cc, n, C, D, cfg.nlayers, 'nn.transformer_layers', norm);
