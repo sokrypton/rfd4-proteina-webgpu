@@ -1039,6 +1039,7 @@ export async function generateRfd4pCpu(batch, weights, cfg, opts = {}) {
     insertionLogits: lastInsertion,
     inputAtoms,
     batch,
+    inputFrame: Boolean(opts.inputFrame),
   });
   return {
     n,

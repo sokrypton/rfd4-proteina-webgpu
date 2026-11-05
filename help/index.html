@@ -84,7 +84,7 @@
       file in its place (an example's structure, say); the <span class="ui">×</span> that shows beside it takes it out.</li>
     <li><span class="ui">Undo</span> steps back through every edit.</li>
   </ul>
-  <figure class="narrow"><img src="img/card.webp" alt="The protein binder example: PD-L1 in the viewer, its sequence above, and the card with chain A fixed with 3 hotspots and chain B as 50–120 new residues" loading="lazy"><figcaption>The binder example's card: the target kept with three hotspots, a new chain of 50–120 residues to design.</figcaption></figure>
+  <figure class="narrow"><img src="img/card.webp" alt="The protein binder example: PD-L1 in the viewer, its sequence above, and the card with chain A backbone rigid with 3 hotspots and chain B as 50–120 new residues" loading="lazy"><figcaption>The binder example's card: the target kept with three hotspots, a new chain of 50–120 residues to design.</figcaption></figure>
   <p>Every setting is <span class="ui">fixed</span> (kept as given) or <span class="ui">free</span> (the model decides).</p>
 
   <h2 id="pieces">Pieces</h2>
@@ -111,9 +111,9 @@
   </table></div>
   <p>Chains from the same structure that are rigid move as one body, so an antibody's heavy and light chains keep their pairing.</p>
   <p class="note">Designing a binder: crop the target to the domain around the site (the crop bar), give it two or three
-    hotspots, and add the binder with <span class="ui">+ seq</span>. The target can stay fixed, or be made rigid with Atoms
-    backbone, as the model's own binder recipe does (its shape kept, placed by the model with the binder). There is no
-    need to centre it.</p>
+    hotspots, and add the binder with <span class="ui">+ seq</span>. The target is then made rigid with Atoms backbone and its
+    sequence fixed, as the model's own binder recipe does: its shape is kept and the model places it with the binder, which
+    gives fewer binders that copy the target. Set it back to fixed to hold it where it is. There is no need to centre it.</p>
   <h3>More</h3>
   <ul>
     <li><span class="ui">Shape</span>: H helix, E strand or C loop (the card shows the letter). <span class="ui">Exposure</span>: buried, intermediate or exposed.</li>

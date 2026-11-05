@@ -757,6 +757,28 @@ export function alignAtomsToInputFrame(atoms, cwiCoords, anchorIndices) {
   return atoms;
 }
 
+/** See `inputFrame` in `processSampleToAtoms`. True when the atoms were moved onto the input. */
+function alignOntoRigidGroup(outAtoms, inputAtoms) {
+  const hotChains = new Set();
+  const hot = inputAtoms?.condition_hotspot_1_atom ?? inputAtoms?.annotations?.condition_hotspot_1_atom;
+  if (hot) for (let i = 0; i < hot.length; i += 1) if (hot[i]) hotChains.add(String(inputAtoms.chain_id[i]));
+  const groups = new Map();
+  outAtoms.forEach((a, i) => {
+    if (!(a.coordGroup > 0) || !a.inCoord) return;
+    if (!groups.has(a.coordGroup)) groups.set(a.coordGroup, { idx: [], hot: false });
+    const g = groups.get(a.coordGroup);
+    g.idx.push(i);
+    if (hotChains.has(String(a.chainId))) g.hot = true;
+  });
+  const best = [...groups.values()].filter((g) => g.idx.length >= 3)
+    .sort((x, y) => Number(y.hot) - Number(x.hot) || y.idx.length - x.idx.length)[0];
+  if (!best) return false;
+  const ref = new Float32Array(outAtoms.length * 3);
+  for (const i of best.idx) ref.set(outAtoms[i].inCoord, i * 3);
+  alignAtomsToInputFrame(outAtoms, ref, best.idx);
+  return true;
+}
+
 /**
  * Convert a single decoded sample (`coors`, `atomMask`, `residueType`, `paddingMask`, `insertionLogits`)
  * and `inputAtoms` (or `batch`) into the final aligned atom array, mirroring:
@@ -787,6 +809,7 @@ export function processSampleToAtoms({
   insertionLogits = null,
   inputAtoms = null,
   batch = null,
+  inputFrame = false,
 }) {
   const nTotal = residueType.length;
 
@@ -1015,6 +1038,9 @@ export function processSampleToAtoms({
           coordGroup,
           crd: hasCrd ? [Number(crdRaw[0]), Number(crdRaw[1]), Number(crdRaw[2])] : null,
           intCrd: hasIntCrd ? [Number(intCrdRaw[0]), Number(intCrdRaw[1]), Number(intCrdRaw[2])] : null,
+          // Where an atom of a rigid (internal-coordinate) group sits in the input, for `inputFrame`.
+          inCoord: coordGroup > 0 && ai !== undefined && inputAtoms.coord?.[ai]?.every?.(Number.isFinite)
+            ? [Number(inputAtoms.coord[ai][0]), Number(inputAtoms.coord[ai][1]), Number(inputAtoms.coord[ai][2])] : null,
         };
         outAtoms.push(rec);
         tokenAtomList.push(rec);
@@ -1153,9 +1179,15 @@ export function processSampleToAtoms({
       a.z = Math.fround(a.z + shift[2]);
     }
   }
+  // With nothing held in place (a binder's target held rigid, upstream's default), upstream leaves the design in the
+  // model's own frame; `inputFrame` lays it on the input instead, superposing a rigid group onto where its atoms were
+  // loaded: the group on a chain with hotspots (the target), else the largest. Display only; the shape is the model's.
+  let inInputFrame = anchorIndices.length > 0;
+  if (inputFrame && !inInputFrame) inInputFrame = alignOntoRigidGroup(outAtoms, inputAtoms);
 
   return {
     atoms: outAtoms,
+    inputFrame: inInputFrame,
     predictedInsertionMapping,
     cwiCoords,
   };

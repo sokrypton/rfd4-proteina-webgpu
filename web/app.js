@@ -1709,9 +1709,11 @@ class Rfd4pStudioApp {
               inputAtoms: atoms,
               batch,
               insertionLogits: info.insertionLogits ?? null,
+              inputFrame: true,
             });
-            // processSampleToAtoms already aligns coordinate-conditioned designs onto the input (motif) frame.
-            if (!fixedAnchors && !isAnchored(structure.atoms) && referenceCaNm) {
+            // processSampleToAtoms already aligns coordinate-conditioned designs onto the input (motif) frame, and with
+            // `inputFrame` one held only by a rigid target onto that target as loaded.
+            if (!fixedAnchors && !structure.inputFrame && !isAnchored(structure.atoms) && referenceCaNm) {
               alignStructureAtomsToCa(structure.atoms, referenceCaNm, n);
             }
             liveSequence.update(structure.atoms);
@@ -1785,6 +1787,8 @@ class Rfd4pStudioApp {
           inverseFolding,
           partialTrajectoryFractionSteps,
           inputAtoms: atoms,
+          // A design with nothing held in place but a rigid target is laid on the target as loaded.
+          inputFrame: true,
           onStep,
           decodeStep: wantLiveFrame,
           liveInsertion: hasUnindexedMotif,
@@ -1806,7 +1810,7 @@ class Rfd4pStudioApp {
           window.atomworksStudio?.setLiveMode?.(false);
         }
 
-        if (!fixedAnchors && referenceCaNm && result.structure?.atoms && !isAnchored(result.structure.atoms) &&
+        if (!fixedAnchors && referenceCaNm && result.structure?.atoms && !result.structure.inputFrame && !isAnchored(result.structure.atoms) &&
             alignStructureAtomsToCa(result.structure.atoms, referenceCaNm, n)) {
           result.cif = toCifString(result.structure);
           result.pdb = toPdbString(result.structure);

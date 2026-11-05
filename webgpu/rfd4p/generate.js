@@ -434,6 +434,7 @@ export class Rfd4pGeneratorGpu {
       insertionLogits: lastInsertion,
       inputAtoms,
       batch,
+      inputFrame: Boolean(opts.inputFrame),
     });
     return {
       n,
