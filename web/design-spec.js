@@ -306,7 +306,8 @@ export function heldAtomsOf(r) {
   const isBb = (n) => BACKBONE_ATOMS.has(n) || n === 'OXT';
   const bb = heavy.filter(isBb);
   const side = heavy.filter((n) => !isBb(n));
-  if (held.size === bb.length && bb.every((n) => held.has(n))) return 'backbone';
+  // N, CA, C and O held, with or without the C-terminal OXT (upstream's backbone is [N,CA,C,O]).
+  if ([...held].every(isBb) && heavy.filter((n) => BACKBONE_ATOMS.has(n)).every((n) => held.has(n))) return 'backbone';
   if (held.size === side.length && side.every((n) => held.has(n))) return 'sidechain';
   return heavy.filter((n) => held.has(n)).join(', ');
 }
@@ -366,6 +367,13 @@ function chainPieces(residues, segmentWhere) {
       p.atoms = 'backbone';
       if (p.keep === 'all' && run.keep === 'backbone') p.keep = 'backbone';
     }
+    // A glycine holding its backbone at the head of a run (the chain's first residue) joins the backbone-only run
+    // after it, as one inside a run does.
+    if (run?.glycine && run.count === 1 && run.atoms === 'all' && p.atoms === 'backbone' && run.keep === (p.keep === 'backbone' ? 'all' : p.keep)
+      && run.anywhere === p.anywhere) {
+      run.atoms = 'backbone';
+      if (run.keep === 'all') run.keep = p.keep;
+    }
     Object.assign(p, { ss: r.ss, rasa: r.rasa, inter: r.inter });
     const sameRun = run && run.kind === p.kind && run.keep === p.keep && run.anywhere === p.anywhere && run.atoms === p.atoms
       && run.ss === p.ss && run.rasa === p.rasa && run.inter === p.inter
@@ -378,12 +386,13 @@ function chainPieces(residues, segmentWhere) {
       run.atomIndices.push(...r.atomIndices);
     } else {
       run = { ...p, start: r.resId, end: r.resId, count: 1, atomIndices: [...r.atomIndices], hotspots: [],
-        src, srcEnd: src?.[1] ?? null };
+        src, srcEnd: src?.[1] ?? null, glycine: r.heavyNames.every((n) => BACKBONE_ATOMS.has(n) || n === 'OXT') };
       out.push(run);
     }
     if (r.hotspots > 0) run.hotspots.push(r.resId);
   }
   for (const p of out) {
+    delete p.glycine;
     if (p.src && (p.src[1] !== p.start || p.srcEnd !== p.end)) {
       p.source = p.src[1] === p.srcEnd ? `${p.src[0]}${p.src[1]}` : `${p.src[0]}${p.src[1]}–${p.srcEnd}`;
     }

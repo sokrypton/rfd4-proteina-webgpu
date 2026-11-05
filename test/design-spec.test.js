@@ -196,3 +196,11 @@ test('held atoms of a residue placed anywhere are read against all its atoms, no
   // In place, atoms without coordinates (unresolved) are not counted.
   assert.equal(heldAtomsOf({ unindexed: false, allHeavyNames: asp, heavyNames: ['N', 'CA', 'C', 'O'], heldNames: ['N', 'CA', 'C', 'O'] }), 'all');
 });
+
+test('a C-terminal residue holding N, CA, C and O reads backbone, its OXT or not', () => {
+  // 6MRR held rigid by its backbone split into three pieces: A68 (with an OXT) read "N, CA, C, O".
+  const heavy = ['N', 'CA', 'C', 'O', 'CB', 'CG', 'OXT'];
+  assert.equal(heldAtomsOf({ heldNames: ['N', 'CA', 'C', 'O'], heavyNames: heavy }), 'backbone');
+  assert.equal(heldAtomsOf({ heldNames: ['N', 'CA', 'C', 'O', 'OXT'], heavyNames: heavy }), 'backbone');
+  assert.equal(heldAtomsOf({ heldNames: ['N', 'CA', 'C'], heavyNames: heavy }), 'N, CA, C');
+});
