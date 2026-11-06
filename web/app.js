@@ -781,7 +781,7 @@ class Rfd4pStudioApp {
       return;
     }
     try {
-      await window.atomworksStudio?.openSession(sessionId, trajUrl);
+      await window.atomworksStudio?.openSession(sessionId, trajUrl ? { trajectoryUrl: trajUrl } : undefined);
       // Display-only reference motif and motif side chains beside a finished design (not part of the saved document).
       await showDesignOverlays(this.generatedViews.get(sessionId)?.overlays);
       this.designPanel?.showHotspots();
@@ -1763,6 +1763,8 @@ class Rfd4pStudioApp {
             tLl: info.t.local_latents,
             depth: info.depth,
             caCoordsNm: alignedCaNm,
+            // The sequence the model had at this step, so the saved trajectory shows it settling.
+            residueType: info.decoded?.residueType ?? null,
           });
 
           const isStopping = info.step > 0 && (info.step === info.nsteps - 1 || Boolean(info.convergence?.stop));

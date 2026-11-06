@@ -3737,7 +3737,9 @@ export function buildTrajectoryCifFromFrames(trajectoryFrames, tokens, finalResi
   let atomId = 1;
   for (let m = 0; m < sampled.length; m += 1) {
     const modelNum = m + 1;
-    const rows = buildBackboneRowsFromCa(sampled[m].caCoordsNm, tokens, finalResidueType, vocabTokens);
+    // Each frame names the residues the model had at that step; the last is the design's own.
+    const residueType = m === sampled.length - 1 ? finalResidueType : (sampled[m].residueType ?? finalResidueType);
+    const rows = buildBackboneRowsFromCa(sampled[m].caCoordsNm, tokens, residueType, vocabTokens);
     for (const a of rows) {
       const eid = chainToEntity.get(a.chainId) ?? 1;
       lines.push(
