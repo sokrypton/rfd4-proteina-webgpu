@@ -33,6 +33,12 @@ export async function main(device, args = []) {
   const errors = [];
   win.addEventListener('error', (e) => errors.push(`error: ${e.message}`));
   win.addEventListener('unhandledrejection', (e) => errors.push(`rejection: ${String(e.reason)}`));
+  // ...and what the page logs as an error (a failed refold is logged, not thrown).
+  const consoleError = win.console.error.bind(win.console);
+  win.console.error = (...parts) => {
+    errors.push(`console: ${parts.map((p) => (p instanceof Error ? `${p.message} @ ${(p.stack ?? '').split('\n').slice(0, 3).join(' < ')}` : String(p))).join(' ')}`);
+    consoleError(...parts);
+  };
 
   const t0 = performance.now();
   while (!win.rfd4pApp || win.rfd4pApp.els.predictBtn.disabled) {
@@ -101,7 +107,9 @@ export async function main(device, args = []) {
   const view = app.generatedViews?.get(app.studioSessionId) ?? null;
   const refolds = view?.refolds ?? [];
   if (app.refoldAbort !== null) throw new Error('refold left an abort controller behind');
-  if (refolds.length !== 1) throw new Error(`expected one recorded refold, got ${refolds.length}`);
+  if (refolds.length !== 1) {
+    throw new Error(`expected one recorded refold, got ${refolds.length}: ${text || '(no failure line)'}; errors: ${errors.slice(0, 4).join(' | ')}`);
+  }
   const [refold] = refolds;
   if (refold.model !== model) throw new Error(`recorded refold is ${refold.model}, not ${model}`);
   if (!refold.pdb || !refold.cif) throw new Error('recorded refold carries no structure');
