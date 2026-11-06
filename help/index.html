@@ -54,7 +54,7 @@
   <p class="lead">Set up a design, run it on your own GPU, and compare the results. Nothing is uploaded: the model runs in
     Chrome through WebGPU.</p>
   <nav class="toc" aria-label="Contents">
-    <a href="#start">Start</a><a href="#card">The design card</a><a href="#pieces">Pieces</a><a href="#select">Picking residues</a>
+    <a href="#start">Start</a><a href="#card">The design card</a><a href="#kept">Fixed, rigid, free</a><a href="#pieces">Pieces</a><a href="#select">Picking residues</a>
     <a href="#chains">Chains</a><a href="#look">Colours</a><a href="#run">Running</a><a href="#designs">Designs</a>
     <a href="#examples">Examples</a><a href="#terms">Words</a>
   </nav>
@@ -64,10 +64,11 @@
   <ul>
     <li><span class="ui">+ new</span>: a new chain for the model to design, 60–100 residues to start.</li>
     <li><span class="ui">+ pdb</span>: chains from a PDB entry (<code>5O45</code>, or <code>1J79 A C</code> for some chains, with the
-      ligands filed under them; <code>9FJX B LVY</code> names a ligand by its code) or a file, kept as they are; residues
+      ligands filed under them; <code>9FJX B LVY</code> names a ligand by its code) or a file, everything fixed; residues
       the entry did not resolve (missing ends and loops) are left out. A file can also be dropped anywhere on the page:
       on the start screen it opens as a new job, with a job open its chains are added.</li>
-    <li><span class="ui">+ lig</span>: a small molecule by its PDB code (<code>HEM</code>, <code>ATP</code>, <code>ZN</code>), placed by the model.</li>
+    <li><span class="ui">+ lig</span>: a small molecule by its PDB code (<code>HEM</code>, <code>ATP</code>, <code>ZN</code>), placed by
+      the model (its Structure free).</li>
   </ul>
   <figure class="narrow"><img src="img/start.webp" alt="The start screen: + new, + pdb, + lig, and the examples" loading="lazy"><figcaption>Start from parts, or from an example.</figcaption></figure>
   <p>Or open one of the <a href="#examples">examples</a>: each is fetched from its PDB entry and set up for you.
@@ -76,7 +77,8 @@
   <h2 id="card">The design card</h2>
   <p>The card lists each chain as pieces, in order: what is kept, what is free, and where new residues go.</p>
   <ul>
-    <li>A piece reads like <code>A17–131 · fixed · 3 hotspots</code>, <code>H99–109 · free</code> or <code>50–120 · new</code>.</li>
+    <li>A piece reads like <code>A17–131 · fixed · 3 hotspots</code>, <code>H99–109 · free</code> or <code>50–120 · new</code>
+      (the words are explained <a href="#kept">below</a>).</li>
     <li>Click a piece to change it. Its residues are selected in the viewer while its popup is open, and brought to the
       middle of the view.</li>
     <li><span class="ui">+</span> between pieces adds residues there: new ones of a length, or, in a chain from a PDB entry, residues of
@@ -86,23 +88,50 @@
     <li><span class="ui">Undo</span> steps back through every edit.</li>
   </ul>
   <figure class="narrow"><img src="img/card.webp" alt="The protein binder example: PD-L1 in the viewer, its sequence above, and the card with chain A backbone rigid with 3 hotspots and chain B as 50–120 new residues" loading="lazy"><figcaption>The binder example's card: the target kept with three hotspots, a new chain of 50–120 residues to design.</figcaption></figure>
-  <p>Every setting is <span class="ui">fixed</span> (kept as given) or <span class="ui">free</span> (the model decides).</p>
+
+  <h2 id="kept">Fixed, rigid, free</h2>
+  <p>Every setting is <span class="ui">fixed</span> (kept as given) or <span class="ui">free</span> (the model decides).
+    Structure has a third choice, <span class="ui">rigid</span>, between the two.</p>
+  <div class="table-wrap"><table>
+    <tr><th></th><th>Structure</th><th>Sequence</th></tr>
+    <tr><td><b>fixed</b></td><td>The atoms keep their coordinates: the design is built around them exactly where they
+      are.</td><td>These amino acids are kept.</td></tr>
+    <tr><td><b>rigid</b></td><td>The atoms keep their shape, but the model decides where the whole body goes and which way it
+      faces. Rigid chains from the same structure are one body and move together.</td><td>—</td></tr>
+    <tr><td><b>free</b></td><td>Nothing is kept: the model builds it. Faded in the viewer.</td><td>The model chooses the
+      amino acids.</td></tr>
+  </table></div>
+  <p>With a fixed or rigid structure, <span class="ui">Atoms</span> says which atoms are held: all, the backbone, the side
+    chains, or named ones (<code>CG, OD1</code>); the rest are free. <span class="ui">Position</span> fixed keeps a residue at
+    its place in the chain; free lets the model put it anywhere in the chain. <b>New residues</b> are free residues that are
+    not in the input at all, a length range.</p>
+  <p>The card names the combination:</p>
+  <div class="table-wrap"><table>
+    <tr><th>Card says</th><th>Structure</th><th>Sequence</th></tr>
+    <tr><td><code>fixed</code></td><td>fixed</td><td>fixed</td></tr>
+    <tr><td><code>structure fixed</code></td><td>fixed</td><td>free (inverse folding)</td></tr>
+    <tr><td><code>sequence fixed</code></td><td>free</td><td>fixed</td></tr>
+    <tr><td><code>rigid</code></td><td>rigid</td><td>as set in the popup</td></tr>
+    <tr><td><code>free</code></td><td>free</td><td>free</td></tr>
+    <tr><td><code>new</code></td><td colspan="2">new residues: free, with a length range</td></tr>
+  </table></div>
+  <p>Held atoms come first when only some are: <code>backbone fixed</code>, <code>backbone rigid</code>,
+    <code>side chains fixed</code>, <code>CG, OD1 fixed</code>. <code>position free</code> is added when the residue may go
+    anywhere in the chain.</p>
 
   <h2 id="pieces">Pieces</h2>
   <h3>Residues</h3>
-  <p>Residues are a range, from – to; <span class="ui">+</span> adds another (1 – 40 and 60 – 115), × drops one. Under it, a bar shows the chain as it was loaded: drag either end
-    in to crop the piece, or out to bring residues back (up to the next piece). The structure previews it as you drag:
-    residues about to be cut nearly vanish.</p>
-  <figure><img src="img/piece.webp" alt="A piece popup with its crop bar dragged in; the residues to be cut have faded in the structure" loading="lazy"><figcaption>Dragging the crop bar: residues 1–39 are about to be cut and fade away; what stays is outlined.</figcaption></figure>
-  <ul>
-    <li><span class="ui">Rest</span>: what happens to residues outside the ranges: removed (the default), free, or unchanged.</li>
-    <li><span class="ui">Between</span>: with several ranges, a length for the gaps, which become new residues (for a variable linker).</li>
-  </ul>
+  <p>A piece's residues are one range, from – to. Under it, a bar shows the chain as it was loaded: drag either end in to
+    crop the piece, or out to bring residues back (up to the next piece). Typing the range does the same. While you
+    edit, the structure shows what Apply will keep, solid, with the rest of the chain as loaded faint behind it.</p>
+  <figure><img src="img/piece.webp" alt="A piece popup with its crop bar dragged in; the residues to be cut have faded in the structure" loading="lazy"><figcaption>Cropping PD-L1 to residues 40–115: the residues to be cut show faint.</figcaption></figure>
+  <p>To change only part of a piece (free a loop in a fixed chain, say), pick those residues instead: see
+    <a href="#select">Picking residues</a>.</p>
   <h3>Structure, Sequence, Position</h3>
   <div class="table-wrap"><table>
     <tr><th>Setting</th><th>Options</th></tr>
     <tr><td>Structure</td><td><b>fixed</b>: kept where it is. <b>rigid</b>: kept as it is, but the model places it (a framework
-      docking onto a target). <b>free</b>: the model builds it. With fixed or rigid, <b>Atoms</b> says which: all, backbone,
+      docking onto a target). <b>free</b>: the model builds it. With fixed or rigid, <b>Atoms</b> says which atoms: all, backbone,
       side chains, or named (<code>CG, OD1</code>).</td></tr>
     <tr><td>Sequence</td><td><b>fixed</b>: these amino acids. <b>free</b>: the model writes them.</td></tr>
     <tr><td>Position</td><td><b>fixed</b>: at this place in the chain. <b>free</b>: anywhere in the chain (a catalytic residue the model places).</td></tr>
@@ -110,11 +139,12 @@
       <b>new residues</b>, each design picking one length from the range.</td></tr>
     <tr><td>Hotspots</td><td>Residues of this chain a binder should touch: <code>A56, A60-62</code>, or some atoms: <code>A56(CG,OH)</code>.</td></tr>
   </table></div>
-  <p>Chains from the same structure that are rigid move as one body, so an antibody's heavy and light chains keep their pairing.</p>
+  <p>Rigid chains from the same structure move as one body, so an antibody's heavy and light chains keep their pairing;
+    rigid chains from different structures move apart.</p>
   <p class="note">Designing a binder: crop the target to the domain around the site (the crop bar), give it two or three
     hotspots, and add the binder with <span class="ui">+ new</span>. The target is then made rigid with Atoms backbone and its
-    sequence fixed, as the model's own binder recipe does: its shape is kept and the model places it with the binder, which
-    gives fewer binders that copy the target. Set it back to fixed to hold it where it is. There is no need to centre it.</p>
+    sequence fixed and side chains free, as the model's own binder recipe does: its shape is kept and the model places it
+    with the binder, which gives fewer binders that copy the target. Set it back to fixed to hold it where it is. There is no need to centre it.</p>
   <h3>More</h3>
   <ul>
     <li><span class="ui">Shape</span>: H helix, E strand or C loop (the card shows the letter). <span class="ui">Exposure</span>: buried, intermediate or exposed.</li>
@@ -125,8 +155,8 @@
   </ul>
   <h3>New residues</h3>
   <p>A <code>50–120 · new</code> piece has a Length range, a Shape, an Exposure and the chain's Fold. New residues that replaced
-    residues show <span class="ui">was 7</span>: click it, or set Structure or Sequence to fixed, to bring the originals back
-    with their coordinates.</p>
+    residues show <span class="ui">was 7</span>: click it and Apply, or set Structure or Sequence to fixed, to bring the
+    originals back in place with their coordinates.</p>
 
   <h2 id="select">Picking residues</h2>
   <p>Click residues in the viewer or the sequence bar for a shorter popup: Structure, Sequence, Length for one free
@@ -137,7 +167,9 @@
 
   <h2 id="chains">Chains</h2>
   <p>Click a chain's letter for its name, its place in the job, and a <span class="ui">Fold</span> for it to take
-    (CATH: helix bundle, β-sandwich, immunoglobulin-like, ferredoxin-like, Rossmann-like, TIM barrel, or any code).</p>
+    (CATH: helix bundle, up-down helix bundle, β-barrel, β-sandwich, immunoglobulin-like, ferredoxin-like, Rossmann-like,
+    TIM barrel, or any code). A block of new residues can take a fold of its own, so one chain can hold domains of different
+    folds.</p>
 
   <h2 id="look">Colours</h2>
   <ul>
@@ -174,20 +206,20 @@
     <tr><td>Backbone K, Latents K</td><td>Sampling temperature for the structure and the sequence: lower is hotter, more varied.</td></tr>
     <tr><td>Early stop</td><td>Stop once the structure and sequence stop changing.</td></tr>
   </table></div>
-  <p>A job where every chain keeps its backbone and only the sequence is free runs as inverse folding: the backbone comes
-    back exactly as given.</p>
+  <p>A job where every chain keeps its backbone and only the sequence is free (<code>structure fixed</code>) runs as
+    inverse folding: the backbone comes back as given, and only the sequence and side chains are designed.</p>
 
   <h2 id="designs">Designs</h2>
-  <p>Two tabs: <span class="ui">Input</span>, the structure the designs were made from (open it to go back to editing), and
-    <span class="ui">Outputs</span>, the designs. Every design is a row, named by its seed (the same seed and settings make it
-    again); click one to see it. A new Generate shows its first design, and a refold the design it refolded. Generate again with the input unchanged
+  <p>Two tabs: <span class="ui">Input</span>, the job you are editing, and <span class="ui">Outputs</span>, the designs.
+    In Outputs the first row, Input, is the structure the designs were made from; every design is a row after it, named by
+    its seed (the same seed and settings make it again); click one to see it. A new Generate shows its first design, and a refold the design it refolded. Generate again with the input unchanged
     and the new designs join the list; change the input and the next Generate starts a new list (save what you want to
     keep first).</p>
   <ul>
     <li><span class="ui">Refold all</span> folds each design's sequence again with AlphaFold 3 or OpenBind-0 and scores how well it comes
       back. <span class="ui">↻</span> refolds one design; <span class="ui">⤓</span> downloads it. The
-      <span class="ui">Refold</span> box holds its settings: model, seed, recycles (3) and diffusion steps (25; AlphaFold 3 was
-      trained with 200). Change any of them and Refold all folds every design again with the new ones; go back to settings already used and
+      <span class="ui">Refold</span> box holds its settings: model, seed, recycles (3) and diffusion steps (25; AlphaFold 3 itself
+      uses 200). Change any of them and Refold all folds every design again with the new ones; go back to settings already used and
       their refolds are shown again, nothing folded twice. Every refold is kept for Save all.</li>
     <li>Rows are in the order made; click a column head to sort by it.</li>
     <li><span class="ui">Save all (.zip)</span>: the input, every design with its trajectory, every refold, and the table as
@@ -198,15 +230,16 @@
     <tr><th>Column</th><th>Meaning</th><th>Better</th></tr>
     <tr><td>RMSD</td><td>Å between the design and its refold. For a binder or antibody, after fitting on the target, so where it sits counts.</td><td>lower</td></tr>
     <tr><td>pLDDT</td><td>The refold model's confidence, 0–100.</td><td>higher</td></tr>
-    <tr><td>ipTM</td><td>Its confidence in the interface, 0–1.</td><td>higher</td></tr>
-    <tr><td>iPAE</td><td>Å: the lowest predicted error between a designed residue and the rest.</td><td>lower</td></tr>
+    <tr><td>ipTM</td><td>Its confidence in the interface, 0–1 (jobs with more than one chain).</td><td>higher</td></tr>
+    <tr><td>iPAE</td><td>Å: the minimum interface PAE, the lowest predicted aligned error between any designed residue and any
+      residue of another chain.</td><td>lower</td></tr>
   </table></div>
   <p>The <code>passes</code> column of <code>summary.csv</code> says whether a design meets the model's own pass criteria:</p>
   <div class="table-wrap"><table>
     <tr><th>Job</th><th>Passes when</th></tr>
     <tr><td>Monomer</td><td>RMSD ≤ 1.5 Å</td></tr>
-    <tr><td>Binder</td><td>the binder's pTM ≥ 0.80, iPAE ≤ 1.5, RMSD on the target ≤ 2.5 Å</td></tr>
-    <tr><td>Antibody</td><td>iPAE ≤ 2.0, RMSD on the target ≤ 2.0 Å</td></tr>
+    <tr><td>Binder</td><td>the binder's pTM ≥ 0.80, iPAE ≤ 1.5 Å, RMSD on the target ≤ 2.5 Å</td></tr>
+    <tr><td>Antibody</td><td>iPAE ≤ 2.0 Å, RMSD on the target ≤ 2.0 Å</td></tr>
   </table></div>
   <p>Motif, enzyme and small-molecule jobs get the numbers but no verdict: their criteria also need motif and ligand RMSDs not
     computed here. Passing is a computational check; binding still needs an experiment.</p>
@@ -216,23 +249,31 @@
   <h2 id="examples">Examples</h2>
   <div class="table-wrap"><table>
     <tr><th>Example</th><th>Set-up</th></tr>
-    <tr><td>Protein from scratch</td><td>One free chain of 250 residues.</td></tr>
+    <tr><td>Protein from scratch</td><td>One chain of 250 new residues.</td></tr>
     <tr><td>Blueprint</td><td>A ferredoxin-like fold drawn as blocks, E-H-E-E-H-E with C loops between, each a block of new residues with its shape.</td></tr>
-    <tr><td>Protein binder</td><td>PD-L1 (5O45) fixed with three hotspots; a new binder of 50–120 residues.</td></tr>
-    <tr><td>Small-molecule binder</td><td>SAM (1XVA), placed by the model; a 150-residue protein around it.</td></tr>
-    <tr><td>Motif scaffolding</td><td>Three residues of 1QJG fixed; the rest rebuilt as four stretches of new residues.</td></tr>
-    <tr><td>Enzyme</td><td>A catalytic Asp's tip atoms (position free), Zn and part of orotate (1J79) fixed; 180 new residues.</td></tr>
-    <tr><td>Antibody loop</td><td>HER2 (1N8Z) fixed with hotspots; heavy and light frameworks rigid as one body; CDR H3 free.</td></tr>
-    <tr><td>Nanobody (VHH)</td><td>PD-L1 (3EAK) fixed with hotspots; the 4Z18 framework rigid; three CDRs as new residues.</td></tr>
-    <tr><td>Redesign a sequence</td><td>2KL8's backbone kept, its sequence free (inverse folding).</td></tr>
+    <tr><td>Protein binder</td><td>PD-L1 (5O45, residues 1–115) backbone rigid, sequence fixed, three hotspots; a new binder
+      of 50–120 residues.</td></tr>
+    <tr><td>Small-molecule binder</td><td>SAM (1XVA) free, placed by the model; a 150-residue protein around it.</td></tr>
+    <tr><td>Motif scaffolding</td><td>Three residues of 1QJG (A38, A14, A99) fixed; four stretches of new residues around
+      them.</td></tr>
+    <tr><td>Enzyme</td><td>A catalytic Asp's tip atoms, CG and OD1, fixed with position free; Zn and four atoms of orotate
+      (1J79) fixed; 180 new residues.</td></tr>
+    <tr><td>Antibody loop</td><td>HER2 (1N8Z), cropped to the epitope, fixed with hotspots; heavy and light frameworks rigid
+      as one body; CDR H3 free.</td></tr>
+    <tr><td>Nanobody (VHH)</td><td>PD-L1 (4Z18) backbone rigid with three hotspots; the nanobody framework (3EAK) backbone
+      rigid, a body of its own; three CDRs as new residues.</td></tr>
+    <tr><td>Redesign a sequence</td><td>2KL8 structure fixed, sequence free (inverse folding).</td></tr>
     <tr><td>Diversify a structure</td><td>2KL8 free, starting 40% of the way from it (partial diffusion).</td></tr>
   </table></div>
   <p>The examples reproduce the inputs of the model's own demo, fetched from their PDB entries.</p>
 
   <h2 id="terms">Words</h2>
   <ul>
-    <li><b>Fixed / free</b>: kept as given / decided by the model.</li>
-    <li><b>Rigid</b>: kept as it is, placed by the model.</li>
+    <li><b>Fixed</b>: kept as given; a fixed structure stays exactly where it is.</li>
+    <li><b>Rigid</b>: a structure kept in shape, which the model moves and turns as one body.</li>
+    <li><b>Free</b>: decided by the model.</li>
+    <li><b>Atoms</b>: which atoms of a fixed or rigid structure are held (all, backbone, side chains, or named).</li>
+    <li><b>Position free</b>: a residue the model may put anywhere in its chain.</li>
     <li><b>New residues</b>: residues with no starting structure, a length range; each design picks one length.</li>
     <li><b>Hotspot</b>: a target residue a binder should touch.</li>
     <li><b>Partial diffusion</b>: start from the input structure part of the way, for variants close to it.</li>
