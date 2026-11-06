@@ -155,6 +155,120 @@ export function assembleParts(pieces) {
     + `\nvoid main() {\n${pieces.map((_, index) => `  ${index ? "else " : ""}if (KERNEL == ${index}) kernel${index}();`).join("\n")}\n}`;
 }
 
+/** The PRELUDE without its `#version` line, which is where `sized` injects its uniforms. */
+const PRELUDE_BODY = PRELUDE.slice(PRELUDE.indexOf("\n") + 1);
+
+/** A stable 32-bit digest, for naming one kernel's declarations apart from another's. */
+function digestOf(text) {
+  let hash = 2166136261;
+  for (let at = 0; at < text.length; at += 1) hash = Math.imul(hash ^ text.charCodeAt(at), 16777619);
+  return (hash >>> 0).toString(36);
+}
+
+/**
+ * A kernel's module-scope declarations, split: each statement and each function definition, or
+ * null if anything is left over that is neither.
+ */
+function headStatements(head) {
+  const items = [];
+  let depth = 0;
+  let from = 0;
+  for (let at = 0; at < head.length; at += 1) {
+    const character = head[at];
+    if (character === "{") depth += 1;
+    else if (character === "}") {
+      depth -= 1;
+      if (depth < 0) return null;
+      if (depth === 0) { items.push(head.slice(from, at + 1)); from = at + 1; }
+    } else if (character === ";" && depth === 0) {
+      items.push(head.slice(from, at + 1));
+      from = at + 1;
+    }
+  }
+  return depth === 0 && head.slice(from).trim() === ""
+    ? items.map((item) => item.trim()).filter(Boolean) : null;
+}
+
+/**
+ * The same kernel as a PART, read off a finished source - or null if it cannot be one.
+ *
+ * 🔴 BECAUSE THE BLOCKER WAS NEVER THE SHAPE OF `part`, IT WAS THAT PARTS SHARE ONE NAMESPACE.
+ * Seven of this tree's ~150 kernels are written as parts; the rest are finished strings carrying
+ * their widths as `const int` - which `sized` deliberately leaves as constants so a loop keeps its
+ * compile-time bound - and their own helper functions, and two kernels cannot both declare `CH4`
+ * or `coordinateOf` in one program. So each kernel's own declarations are RENAMED by a digest of
+ * its source, along with every reference to them in its uniforms, helpers and body. The UNIFORMS
+ * keep their names, which is what lets two kernels share a sampler unit. Nothing is rewritten by
+ * hand and no kernel loses a bound.
+ *
+ * Refused, by design rather than as a limitation: a kernel with SEVERAL render targets, since a
+ * part writes `result` - which is what keeps the heavy projections and attentions out - and one
+ * whose module scope holds anything but uniforms, constants and functions (a struct, a global).
+ *
+ * @param {string} code a finished fragment source built on PRELUDE
+ * @returns {{sizes: string[], uniforms: string[], helpers: string, body: string} | null}
+ */
+export function partFromSource(code) {
+  const mainAt = code.indexOf("void main()");
+  if (mainAt < 0 || !code.includes(PRELUDE_BODY)) return null;
+  const head = code.slice(0, mainAt).replace(/^#version[^\n]*\n/, "").replace(PRELUDE_BODY, "")
+    // GLSL has no strings, so the comments can come out before anything else is read.
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const items = headStatements(head);
+  if (items === null) return null;
+  const uniforms = [];
+  const declarations = [];
+  const names = [];
+  let targets = 0;
+  for (const item of items) {
+    if (item === "out vec4 result;") targets += 1;
+    else if (item.startsWith("uniform ")) uniforms.push(item.slice("uniform ".length, -1));
+    else if (item.startsWith("const ")) {
+      const name = item.match(/^const\s+\S+\s+([A-Za-z_]\w*)/)?.[1];
+      if (name === undefined) return null;
+      names.push(name);
+      declarations.push(item);
+    } else if (item.endsWith("}")) {
+      // A function definition, named by the first identifier that an open bracket follows.
+      const name = item.match(/([A-Za-z_]\w*)\s*\(/)?.[1];
+      if (name === undefined) return null;
+      names.push(name);
+      declarations.push(item);
+    } else return null;
+  }
+  if (targets !== 1) return null;
+  const opens = code.indexOf("{", mainAt);
+  const closes = code.lastIndexOf("}");
+  if (opens < 0 || closes < opens) return null;
+  let rename = (text) => text;
+  if (names.length > 0) {
+    const prefix = `p${digestOf(code)}_`;
+    // 🔴 NO LOOKBEHIND: Safari before 16.4 fails a whole MODULE that contains one at load, which
+    // `npm run check:safari` exists to catch. The character before the name is matched and put
+    // back instead, so that a field or a swizzle - `.x`, `.count` - is never renamed.
+    const pattern = new RegExp(`(^|[^.\\w])(${names.join("|")})\\b`, "g");
+    rename = (text) => text.replace(pattern, `$1${prefix}$2`);
+  }
+  return {
+    sizes: [],
+    uniforms: uniforms.map(rename),
+    helpers: declarations.map(rename).join("\n"),
+    body: rename(code.slice(opens + 1, closes)),
+  };
+}
+
+/**
+ * A part's samplers, each with whether it is an INTEGER one (`usampler2D`, for packed codes).
+ *
+ * 🔴 THE TYPE IS CARRIED BECAUSE ONE PLACEHOLDER CANNOT SERVE BOTH. A combined draw points the
+ * samplers it does not use at a one-texel texture of its own, and two samplers of different types
+ * on one texture unit is GL_INVALID_OPERATION - which arrived as
+ * `bioemu2.fourier-add:68x768: GL error 0x502 after the draw` the moment a bin held an int5
+ * kernel's `usampler2D` beside a float kernel's `sampler2D`.
+ */
+const samplersOf = (piece) => piece.uniforms.filter((uniform) => /sampler/.test(uniform))
+  .map((uniform) => ({ name: uniform.split(/\s+/).at(-1), integer: /\busampler|\bisampler/.test(uniform) }));
+
 /** `count` render targets named result0..result{count-1}, for a wide kernel. */
 export const targetDeclarations = (count) => Array.from(
   { length: count }, (_, t) => `layout(location = ${t}) out vec4 result${t};`).join("\n") + "\n";
@@ -324,6 +438,23 @@ export class Execution {
      */
     this.noAttendDot4 = options.noAttendDot4 ?? false;
     /**
+     * The control arm for the combined programs (`combine`, `part`, `partFromSource`): every
+     * kernel its own program, as this backend did before it had any. A link costs ~40 ms on this
+     * M2's Chrome whatever the program holds, so what it measures is the SIZE of that win and
+     * whether sharing one program cost the draws anything.
+     */
+    this.noCombine = options.noCombine ?? false;
+    /**
+     * How much GLSL one combined program may hold, in characters.
+     *
+     * 🔴 BECAUSE A BIN IS NOT FREE TO FILL: on this M2's Chrome 53 AF2 programs link in 519 ms
+     * and the same kernels in 36 programs take 1226, where ESMFold2's 82 in 5 bins go 719 to 274.
+     * The fixed cost of a link is ~40 ms either way; what differs is the CONTENT, and a bin that
+     * merges a dozen loop-heavy kernels costs the driver more than the twelve separately. The cap
+     * is swept rather than argued - `--combine-bytes=`.
+     */
+    this.combineBytes = options.combineBytes ?? 0;
+    /**
      * Where the HOST time inside `dispatch` goes, when asked for.
      *
      * 🔴 BECAUSE THE GPU IS 3% OF AN AF2 WebGL FOLD AND NOTHING SAID SO.
@@ -354,6 +485,10 @@ export class Execution {
     /** The parts (`part`) dispatch has met, by their own code, and those put in a combined program. */
     this.parts = new Map();
     this.combined = new Map();
+    /** The one-texel textures a combined draw's unused samplers are pointed at, by type. */
+    this.placeholders = {};
+    /** Draws given back the zero an unset scalar uniform has on its own, by kernel and name. */
+    this.unsetUniforms = new Map();
 
     this.dispatches = 0;
     this.draws = 0;
@@ -492,21 +627,24 @@ export class Execution {
    * @param {Iterable<string>} sources
    */
   combine(sources) {
+    if (this.noCombine) return;
     // ...packed into programs of at most MAX_TEXTURE_IMAGE_UNITS samplers each (16 here: one
     // part alone, the per-atom conditioning, reads 11), a part that does not fit opening the next.
-    const units = this.gl.getParameter(this.gl.MAX_TEXTURE_IMAGE_UNITS);
-    const samplers = (pieces) => new Set(pieces.flatMap((piece) => piece.uniforms
-      .filter((uniform) => /sampler/.test(uniform)).map((uniform) => uniform.split(/\s+/).at(-1)))).size;
+    // ...and one unit kept back for the placeholders the draws point their spare samplers at.
+    const units = this.gl.getParameter(this.gl.MAX_TEXTURE_IMAGE_UNITS) - 2;
+    const samplers = (pieces) => new Set(pieces.flatMap(samplersOf).map(({ name }) => name)).size;
     const bins = [];
     for (const source of new Set(sources)) {
-      const piece = this.parts.get(source);
-      if (piece === undefined || this.combined.has(source)) continue;
+      if (this.combined.has(source)) continue;
+      // A kernel written as a part, else the same kernel read off its finished source.
+      const piece = this.parts.get(source) ?? partFromSource(source);
+      if (piece === undefined || piece === null) continue;
       const fits = (bin) => {
         const pieces = [...bin.map(([, held]) => held), piece];
         if (samplers(pieces) > units) return false;
         try {
-          assembleParts(pieces);
-          return true;
+          const assembled = assembleParts(pieces);
+          return this.combineBytes === 0 || assembled.length <= this.combineBytes;
         } catch {
           return false; // declared differently from one already in
         }
@@ -519,9 +657,36 @@ export class Execution {
       if (bin.length < 2) continue;
       const pieces = bin.map(([, piece]) => piece);
       const code = assembleParts(pieces);
-      const names = [...new Set(pieces.flatMap((piece) => piece.uniforms
-        .filter((uniform) => /sampler/.test(uniform)).map((uniform) => uniform.split(/\s+/).at(-1))))];
-      bin.forEach(([source], index) => this.combined.set(source, { code, index, samplers: names }));
+      const held = new Map(pieces.flatMap(samplersOf).map((sampler) => [sampler.name, sampler]));
+      const names = [...held.values()];
+      bin.forEach(([source], index) => this.combined.set(source, { code, index, samplers: names,
+        // ...and the SCALAR uniforms this part itself declares, with their type: a draw of it that
+        // does not set one gets a zero rather than the last kernel's value (see `dispatch`).
+        reads: bin[index][1].uniforms.filter((uniform) => !/sampler/.test(uniform))
+          .map((uniform) => ({ name: uniform.split(/\s+/).at(-1),
+                               integer: /\bu?int\b/.test(uniform) })) }));
+    }
+  }
+
+  /**
+   * The programs `run` would draw with, in the order it first draws with them, and nothing else:
+   * a dry run on VIRTUAL tensors (`Storage.virtual`), so no texture is created, no draw is issued
+   * and every read returns zeros. What `prepare` wants, for a model whose fold is one call.
+   *
+   * @param {() => void | Promise<void>} run the fold, or a stage of it; awaited if it returns a
+   *   promise, since two of the four drivers here yield to the page
+   * @returns {Promise<Map<string, string>>} source -> the label of the first dispatch that wanted it
+   */
+  async collectPrograms(run) {
+    const held = this.collect;
+    this.collect = new Map();
+    this.storage.virtual = true;
+    try {
+      await run();
+      return this.collect;
+    } finally {
+      this.collect = held;
+      this.storage.virtual = false;
     }
   }
 
@@ -820,24 +985,36 @@ export class Execution {
     // draw gave them, and one holding this draw's target is a feedback loop (GL error 0x502) though
     // nothing reads it. They are pointed at a one-texel texture of their own.
     if (combined !== undefined) {
-      const spare = combined.samplers.filter((name) => !(name in inputs));
-      if (spare.length > 0) {
+      const spare = combined.samplers.filter(({ name }) => !(name in inputs));
+      // One placeholder unit per sampler TYPE in use, since a float and an integer sampler cannot
+      // share a unit; `samplersOf` says why.
+      for (const integer of [false, true]) {
+        const named = spare.filter((sampler) => sampler.integer === integer);
+        if (named.length === 0) continue;
         // ...on its own unit, made there: binding it while the last input's unit was active
         // replaced that input (every combined draw read a one-texel texture for its mask).
         gl.activeTexture(gl.TEXTURE0 + unit);
-        if (this.placeholder === undefined) {
-          this.placeholder = gl.createTexture();
-          gl.bindTexture(gl.TEXTURE_2D, this.placeholder);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 1, 0, gl.RGBA, gl.FLOAT, null);
+        const kind = integer ? "words" : "floats";
+        if (this.placeholders[kind] === undefined) {
+          const texture = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, texture);
+          if (integer) {
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32UI, 1, 1, 0,
+              gl.RGBA_INTEGER, gl.UNSIGNED_INT, null);
+          } else {
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 1, 0, gl.RGBA, gl.FLOAT, null);
+          }
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+          this.placeholders[kind] = texture;
         }
-        gl.bindTexture(gl.TEXTURE_2D, this.placeholder);
-        this.boundUnits[unit] = this.placeholder;
-        for (const name of spare) {
+        gl.bindTexture(gl.TEXTURE_2D, this.placeholders[kind]);
+        this.boundUnits[unit] = this.placeholders[kind];
+        for (const { name } of named) {
           const location = this.#uniform(entry, name);
           if (location !== null) gl.uniform1i(location, unit);
         }
+        unit += 1;
       }
     }
     const inputsAt = this.host === null ? 0 : performance.now();
@@ -863,6 +1040,26 @@ export class Execution {
       if (location !== null) gl.uniform1i(location, value);
     }
 
+    // 🔴 A COMBINED PROGRAM'S SCALAR UNIFORMS PERSIST BETWEEN DRAWS, SO A KERNEL THAT LEAVES ONE
+    // UNSET WOULD READ ANOTHER KERNEL'S VALUE. On its own a program's uniforms start at zero and a
+    // kernel may lean on that - `triangle.contract` ends `result = sum + bias` and no caller has
+    // ever set `bias` - so sharing a program takes that zero away, and the symptom is a wrong
+    // number with nothing to point at. Measured over the four folds, 112 to 1159 draws a fold
+    // leave one of their own scalars unset (mostly `scale`, which the shared elementwise part reads
+    // in one branch of five), so this is not hypothetical: each is given its zero back. The folds
+    // are identical either way, so it was latent - and latent by luck of the bin composition.
+    // `halfDither` is excepted - it is this class's, and already set where it is not zero.
+    if (combined !== undefined) {
+      for (const { name, integer } of combined.reads) {
+        if (name === "halfDither" || name in ints || name in floats || name in optionalInts) continue;
+        const location = this.#uniform(entry, name);
+        if (location === null) continue; // the compiler removed it: nothing in here reads it
+        if (integer) gl.uniform1i(location, 0);
+        else gl.uniform1f(location, 0);
+        const key = `${label.split(":")[0]}:${name}`;
+        this.unsetUniforms.set(key, (this.unsetUniforms.get(key) ?? 0) + 1);
+      }
+    }
     if (this.halfDither !== 0) {
       // Set where the kernel has it and skip where it does not: a kernel that
       // never rounds has no such uniform, and that is not an error.
@@ -1007,6 +1204,12 @@ export class Execution {
       framebufferHits: this.framebufferHits,
       framebufferMisses: this.framebufferMisses,
       dispatches: this.dispatches, draws: this.draws, programs: this.programs.size,
+      // Kernels sharing a program, and how many programs they share (`combine`): the two numbers
+      // that say what the compile queue was spared, since a link costs the same whatever it holds.
+      ...(this.unsetUniforms.size === 0 ? {}
+        : { unsetUniforms: Object.fromEntries(this.unsetUniforms) }),
+      combinedKernels: this.combined.size,
+      combinedPrograms: new Set([...this.combined.values()].map(({ code }) => code)).size,
       framebuffers: this.framebuffers.size, framebufferBuilds: this.framebufferBuilds,
       ...(this.nanWatch ? { nanWatchSkipped: this.nanWatchSkipped } : {}),
       ...(this.host === null ? {} : { host: Object.fromEntries(
