@@ -336,16 +336,19 @@ export class DesignPanel {
   /**
    * A structure file dropped anywhere on the page does what the visible "Open a file…" would: on the start screen it
    * opens as a new job (Studio's own file input), with a job open its chains are added (+ pdb). Taken in the capture
-   * phase, so Mol*'s own drop (which loads the file into the viewer only, outside any job) never sees it.
+   * phase, so Mol*'s own drop (which loads the file into the viewer only, outside any job) never sees it, nor the
+   * dragenter that shows its "Load Files" overlay: the overlay goes away on Mol*'s drop, so it stayed up.
    */
   _bindDrop() {
     const isFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files');
-    window.addEventListener('dragover', (e) => {
-      if (!isFiles(e)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer.dropEffect = 'copy';
-    }, true);
+    for (const type of ['dragenter', 'dragover']) {
+      window.addEventListener(type, (e) => {
+        if (!isFiles(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'copy';
+      }, true);
+    }
     window.addEventListener('drop', (e) => {
       if (!isFiles(e)) return;
       e.preventDefault();
