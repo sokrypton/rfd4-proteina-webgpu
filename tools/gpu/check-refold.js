@@ -126,10 +126,20 @@ export async function main(device, args = []) {
     longestStallMs = 0;
     lastTick = performance.now();
     const t2 = performance.now();
-    const tick2 = win.setInterval(() => { const now = performance.now(); longestStallMs = Math.max(longestStallMs, now - lastTick - 20); lastTick = now; }, 20);
+    const stalls2 = [];
+    let lastStatus2 = statusNow();
+    const tick2 = win.setInterval(() => {
+      const now = performance.now();
+      const late = now - lastTick - 20;
+      longestStallMs = Math.max(longestStallMs, late);
+      const status = statusNow();
+      if (late > 150) stalls2.push({ atMs: Math.round(now - t2), ms: Math.round(late), before: lastStatus2, after: status });
+      lastStatus2 = status;
+      lastTick = now;
+    }, 20);
     await app._refoldDesigns(null);
     win.clearInterval(tick2);
-    again = { refoldMs: Math.round(performance.now() - t2), longestStallMs: Math.round(longestStallMs), refolds: view.refolds.length };
+    again = { refoldMs: Math.round(performance.now() - t2), longestStallMs: Math.round(longestStallMs), stalls: stalls2.slice(0, 12), refolds: view.refolds.length };
   }
   return {
     ok: true, again, preset, overrides, model, offered, designMs, refoldMs, longestStallMs: Math.round(longestStallMs), stalls: stalls.slice(0, 12), backend: app.els.webgpuBadge?.textContent,
