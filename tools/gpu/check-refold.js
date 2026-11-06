@@ -141,8 +141,21 @@ export async function main(device, args = []) {
     win.clearInterval(tick2);
     again = { refoldMs: Math.round(performance.now() - t2), longestStallMs: Math.round(longestStallMs), stalls: stalls2.slice(0, 12), refolds: view.refolds.length };
   }
+  // Is either structure a chain at all? Consecutive Cα spacing (3.8 Å in a protein), design and refold.
+  const caSpacing = (pdb) => {
+    const ca = pdb.split('\n').filter((l) => l.startsWith('ATOM') && l.slice(12, 16).trim() === 'CA')
+      .map((l) => ({ chain: l[21], x: +l.slice(30, 38), y: +l.slice(38, 46), z: +l.slice(46, 54) }));
+    const d = [];
+    for (let i = 1; i < ca.length; i += 1) {
+      if (ca[i].chain !== ca[i - 1].chain) continue;
+      d.push(Math.hypot(ca[i].x - ca[i - 1].x, ca[i].y - ca[i - 1].y, ca[i].z - ca[i - 1].z));
+    }
+    d.sort((a, b) => a - b);
+    return { n: d.length, median: Number((d[d.length >> 1] ?? NaN).toFixed(2)), max: Number((d.at(-1) ?? NaN).toFixed(2)) };
+  };
+  const geometry = { design: caSpacing(view.pdb), refold: caSpacing(refold.pdb) };
   return {
-    ok: true, again, preset, overrides, model, offered, designMs, refoldMs, longestStallMs: Math.round(longestStallMs), stalls: stalls.slice(0, 12), backend: app.els.webgpuBadge?.textContent,
+    ok: true, geometry, again, preset, overrides, model, offered, designMs, refoldMs, longestStallMs: Math.round(longestStallMs), stalls: stalls.slice(0, 12), backend: app.els.webgpuBadge?.textContent,
     resultText: String(refold.text ?? '').slice(0, 300),
     viewerBackend: doc.getElementById('viewer')?.dataset.backend ?? null,
     renderedAtoms: Number(doc.getElementById('viewer')?.dataset.renderedAtoms ?? 0),
