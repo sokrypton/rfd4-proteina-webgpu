@@ -315,18 +315,57 @@ export class DesignPanel {
     fileInput.addEventListener('change', () => {
       const file = fileInput.files?.[0];
       fileInput.value = '';
-      if (!file) return;
-      const chains = id.value.trim().split(/[\s,;]+/).filter((t) => /^[A-Za-z0-9]{1,4}$/.test(t) && !/^[0-9][A-Za-z0-9]{3}$/.test(t));
-      void (async () => {
-        try {
-          const text = file.name.endsWith('.zst') ? new Uint8Array(await file.arrayBuffer()) : await file.text();
-          await this._addStructure(text, file.name.replace(/\.(cif|mmcif|pdb|ent|zst)+$/i, ''), chains, this.addStructure.replace);
-        } catch (err) {
-          status.textContent = `Could not add ${file.name}: ${err?.message ?? err}`;
-        }
-      })();
+      if (file) void this._addFile(file);
     });
     actions.after(form);
+  }
+
+  /** A structure file's chains added to the open job (the + pdb form's file, or one dropped on the page). */
+  async _addFile(file) {
+    const { id, status, replace } = this.addStructure;
+    const chains = id.value.trim().split(/[\s,;]+/).filter((t) => /^[A-Za-z0-9]{1,4}$/.test(t) && !/^[0-9][A-Za-z0-9]{3}$/.test(t));
+    try {
+      const text = file.name.endsWith('.zst') ? new Uint8Array(await file.arrayBuffer()) : await file.text();
+      await this._addStructure(text, file.name.replace(/\.(cif|mmcif|pdb|ent|zst)+$/i, ''), chains, replace);
+    } catch (err) {
+      status.textContent = `Could not add ${file.name}: ${err?.message ?? err}`;
+      this.app.setStatus?.(status.textContent, true);
+    }
+  }
+
+  /**
+   * A structure file dropped anywhere on the page does what the visible "Open a file…" would: on the start screen it
+   * opens as a new job (Studio's own file input), with a job open its chains are added (+ pdb). Taken in the capture
+   * phase, so Mol*'s own drop (which loads the file into the viewer only, outside any job) never sees it.
+   */
+  _bindDrop() {
+    const isFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files');
+    window.addEventListener('dragover', (e) => {
+      if (!isFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+    }, true);
+    window.addEventListener('drop', (e) => {
+      if (!isFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const file = [...(e.dataTransfer.files ?? [])][0];
+      if (!file) return;
+      const onStart = !document.getElementById('rfd4p-start')?.hidden;
+      if (!onStart && this.addStructure) { void this._addFile(file); return; }
+      // Studio opens mmCIF only; + pdb, once a job is open, also takes PDB files.
+      if (!/\.(cif|mmcif)$/i.test(file.name)) {
+        this.app.setStatus?.(`${file.name}: a new job opens from an mmCIF file (.cif); PDB files can be added to a job with + pdb`, true);
+        return;
+      }
+      const input = document.getElementById('file-input');
+      if (!input) return;
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }, true);
   }
 
   /** The start screen's + pdb: the same form, opening the structure as a new job. */
@@ -581,6 +620,7 @@ export class DesignPanel {
 
   _bind() {
     const { els } = this;
+    this._bindDrop();
     // The start screen's parts start a new job: a free chain, a structure (the form below), or a ligand.
     els.startSeq?.addEventListener('click', () => void this._startNew(async () => {
       const res = await fetch(new URL('./studio/examples/unconditional.cif', import.meta.url));
@@ -1298,8 +1338,8 @@ export class DesignPanel {
           const all = new Set();
           for (let i = 0; i < source.atoms.nAtoms; i += 1) if (String(source.atoms.chain_id[i]) === source.chain) all.add(Number(source.atoms.res_id[i]));
           const color = Number.parseInt(String(studio.chainColor?.(chain.id) ?? '#8899aa').replace('#', ''), 16);
-          await studio.setOverlay('rfd4p-ghost', null);
-          await studio.setOverlay('rfd4p-ghost', atomsCif(source.atoms, source.chain, all),
+          await studio.setOverlay('loadedChain', null);
+          await studio.setOverlay('loadedChain', atomsCif(source.atoms, source.chain, all),
             { representation: 'cartoon', alpha: 0.22, color, sizeFactor: 0.17, label: 'The chain as loaded' });
         }
       } finally {
@@ -1314,7 +1354,7 @@ export class DesignPanel {
     this.previewGen = (this.previewGen ?? 0) + 1;
     this.ghostKey = null;
     const studio = window.atomworksStudio;
-    if (this.ghostOn) { this.ghostOn = false; void studio?.setOverlay?.('rfd4p-ghost', null); }
+    if (this.ghostOn) { this.ghostOn = false; void studio?.setOverlay?.('loadedChain', null); }
     if (this.planPreview) { this.planPreview = false; void studio?.showDocument?.(); }
   }
 
