@@ -468,7 +468,7 @@ export class DesignPanel {
     this.render();
   }
 
-  /** + seq: a new chain to design, 60–100 residues; structures kept as loaded beside it become its targets. */
+  /** + new: a new chain to design, 60–100 residues; structures kept as loaded beside it become its targets. */
   async _addSeq() {
     const targets = this._asLoaded();
     if (!await this._mutate('/segments', {
@@ -1159,7 +1159,7 @@ export class DesignPanel {
     return { lo: src[lo].num, hi: src[hi].num, src };
   }
 
-  /** Where a chain's coordinates come from, as the page knows it; null for chains made here (+ seq, + lig). */
+  /** Where a chain's coordinates come from, as the page knows it; null for chains made here (+ new, + lig). */
   _sourceOf(c) {
     if (c.role === 'new') return null;
     const doc = this._inputDoc();

@@ -10,7 +10,7 @@
     <!-- This site serves the Studio bundle itself; its offline cache would pin stale assets on Pages. -->
     <meta name="atomworks-studio-service-worker" content="off" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="./web/styles.css?v=79e18ba994" />
+    <link rel="stylesheet" href="./web/styles.css?v=7d740c87d0" />
     <!-- Light or dark before anything draws, so the viewer never flashes the other colour (web/app.js _initTheme keeps it). -->
     <script>
       try {
@@ -46,14 +46,14 @@
           "./shared/rfd4p/safetensors.js": "./shared/rfd4p/safetensors.js?v=c238bc6559",
           "./shared/rfd4p/vendor/fzstd.js": "./shared/rfd4p/vendor/fzstd.js?v=e6cdba40d4",
           "./web/app.js": "./web/app.js?v=a6af452c4d",
-          "./web/design-panel.js": "./web/design-panel.js?v=7f5baeffcb",
-          "./web/design-spec.js": "./web/design-spec.js?v=78167979b7",
+          "./web/design-panel.js": "./web/design-panel.js?v=b8b43aa577",
+          "./web/design-spec.js": "./web/design-spec.js?v=0585def3b1",
           "./web/guide-dialog.js": "./web/guide-dialog.js?v=df4c3ca412",
           "./web/ligand-ccd.js": "./web/ligand-ccd.js?v=b937ddbebf",
           "./web/localfold.js": "./web/localfold.js?v=03869c4a68",
           "./web/refold-view.js": "./web/refold-view.js?v=2319c8a960",
           "./web/results-zip.js": "./web/results-zip.js?v=79deeee57d",
-          "./web/studio-api.js": "./web/studio-api.js?v=0d68adabee",
+          "./web/studio-api.js": "./web/studio-api.js?v=30fd764af6",
           "./web/vendor/py2dmol-ss.js": "./web/vendor/py2dmol-ss.js?v=f2ede21309",
           "./webgpu/index.js": "./webgpu/index.js?v=7416a4662c",
           "./webgpu/rfd4p/blocks.js": "./webgpu/rfd4p/blocks.js?v=b5e38ecfd2",
@@ -95,7 +95,7 @@
             <div id="rfd4p-start" class="rfd4p-start">
                 <!-- A new job from its parts, as the design view adds them; or an example below. -->
                 <div class="rfd4p-chain-actions rfd4p-start-actions" role="group" aria-label="Start with">
-                    <button id="rfd4p-start-seq" type="button" class="secondary compact" title="A new chain for the model to design (sequence and structure), 60–100 residues to start">+ seq</button>
+                    <button id="rfd4p-start-seq" type="button" class="secondary compact" title="A new chain for the model to design (sequence and structure), 60–100 residues to start">+ new</button>
                     <button id="rfd4p-start-pdb" type="button" class="secondary compact" title="Chains from a PDB entry or file, kept as they are (e.g. a target to bind)">+ pdb</button>
                     <button id="rfd4p-start-lig" type="button" class="secondary compact" title="A small molecule by its PDB code (HEM, ATP, ZN…)">+ lig</button>
                 </div>
@@ -109,7 +109,7 @@
                 <p id="rfd4p-task-detail" class="rfd4p-task-detail muted"></p>
                 <div id="rfd4p-chain-list" class="rfd4p-chain-list"></div>
                 <div class="rfd4p-chain-actions" role="group" aria-label="Add to the design">
-                    <button id="rfd4p-add-seq" type="button" class="secondary compact" title="A new chain for the model to design (sequence and structure), 60–100 residues to start">+ seq</button>
+                    <button id="rfd4p-add-seq" type="button" class="secondary compact" title="A new chain for the model to design (sequence and structure), 60–100 residues to start">+ new</button>
                     <button id="rfd4p-add-pdb" type="button" class="secondary compact" title="Chains from a PDB entry or file, kept as they are (e.g. a target to bind)">+ pdb</button>
                     <button id="rfd4p-add-lig" type="button" class="secondary compact" title="A small molecule by its PDB code (HEM, ATP, ZN…)">+ lig</button>
                 </div>
@@ -234,7 +234,7 @@
             </details>
             <!-- Shown by web/app.js only on desktop Chrome whose GPU lacks subgroup matrices: beside Generate, where the wait is. -->
             <div id="rfd4p-speed-hint" class="rfd4p-speed-hint" role="note" hidden>
-                <p><strong>Up to 2× faster designs:</strong> turn on Chrome's experimental WebGPU. Paste
+                <p><strong>Up to 1.5× faster designs:</strong> turn on Chrome's experimental WebGPU. Paste
                     <code>chrome://flags/#enable-unsafe-webgpu</code> into the address bar, set it to <em>Enabled</em> and
                     relaunch Chrome.</p>
                 <div class="rfd4p-speed-hint-actions">

@@ -275,7 +275,7 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 4
   else if (task.key === 'redesign_all') {
     warnings.push('Nothing in this structure is kept, so all of it will be redesigned. Use a piece\'s Edit menu to keep what should stay.');
   } else if (task.key === 'nothing') {
-    warnings.push('Everything is fixed. Click a row to design part of it, or add a chain with + seq.');
+    warnings.push('Everything is fixed. Click a row to design part of it, or add a chain with + new.');
   }
 
   return {

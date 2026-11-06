@@ -1705,11 +1705,11 @@ export class StudioDoc {
 
   /**
    * Chain `cid`'s source (the chain as it was loaded): its polymer residues in order ({ num, ins, name }), their index
-   * by "num:ins", and the source chain's own id. Null for a chain not loaded here (a bundled example, + seq).
+   * by "num:ins", and the source chain's own id. Null for a chain not loaded here (a bundled example, + new).
    */
   _chainSourceIndex(cid) {
     const src = this.chainSources?.get(String(cid));
-    // No source (a chain made here, + seq): an empty one, so a chain of new residues only still reads as a plan.
+    // No source (a chain made here, + new): an empty one, so a chain of new residues only still reads as a plan.
     if (!src) return { list: [], index: new Map(), chain: String(cid), atoms: null };
     const b = src.atoms;
     const list = [];
