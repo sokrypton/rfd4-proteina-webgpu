@@ -19,7 +19,7 @@ import {
   parseCifToAtomArray,
   pdbTextToCifText,
 } from '../shared/rfd4p/pipeline/cif.js';
-import { toPdbString } from '../shared/rfd4p/output.js';
+import { toMultiModelCifString, toPdbString } from '../shared/rfd4p/output.js';
 import { decodeTextOrZstd } from '../shared/rfd4p/pipeline/zstd.js';
 import { prepareRcsbStructure, removeResidues, removeUnresolvedResidues } from '../shared/rfd4p/pipeline/prepare.js';
 import { componentsNeedingCcd, fetchCcdComponents, mergeCcdIntoBlock } from '../shared/rfd4p/pipeline/ccd.js';
@@ -3683,22 +3683,25 @@ export function buildLiveFrameCifFromCa(caCoordsNm, tokens, finalResidueType = n
 }
 
 /**
- * Build a multi-model Cα/backbone trajectory mmCIF string from recorded flow-matching frames
- * (`trajectoryFrames[m].caCoordsNm`) so AtomWorks Studio's `TrajectoryController` (`#trajectory-bar`)
+ * Build a multi-model trajectory mmCIF string from recorded flow-matching frames (each frame's atoms as drawn
+ * live, `trajectoryFrames[m].atoms`, ending with `finalAtoms`; else `trajectoryFrames[m].caCoordsNm`) so AtomWorks Studio's `TrajectoryController` (`#trajectory-bar`)
  * can scrub and play back the predicted clean structures in Mol* WebGL or Patinae WebGPU.
  */
-export function buildTrajectoryCifFromFrames(trajectoryFrames, tokens, finalResidueType = null, vocabTokens = null) {
+export function buildTrajectoryCifFromFrames(trajectoryFrames, tokens, finalResidueType = null, vocabTokens = null, finalAtoms = null) {
   if (!Array.isArray(trajectoryFrames) || trajectoryFrames.length < 2 || !Array.isArray(tokens) || tokens.length === 0) {
     return null;
   }
   const maxFrames = 30;
-  const stride = Math.max(1, Math.floor(trajectoryFrames.length / maxFrames));
-  const sampled = [];
-  for (let i = 0; i < trajectoryFrames.length; i += stride) {
-    sampled.push(trajectoryFrames[i]);
-  }
-  if (sampled[sampled.length - 1] !== trajectoryFrames[trajectoryFrames.length - 1]) {
-    sampled.push(trajectoryFrames[trajectoryFrames.length - 1]);
+  // Evenly spaced, first and last included.
+  const last = trajectoryFrames.length - 1;
+  const count = Math.min(maxFrames, trajectoryFrames.length);
+  const sampled = [...new Set(Array.from({ length: count }, (_, i) => Math.round((i * last) / (count - 1))))]
+    .map((i) => trajectoryFrames[i]);
+  // Frames drawn live (decoded every step on the GPU) are saved as they were drawn, every atom, the last as the
+  // design itself: a cartoon Mol* can read secondary structure from. Without them (the CPU path), Cα frames.
+  const allAtom = sampled.slice(0, -1).map((f) => f.atoms);
+  if (finalAtoms && allAtom.every(Boolean)) {
+    return toMultiModelCifString([...allAtom, finalAtoms], { dataBlockName: 'trajectory' });
   }
 
   const chains = [...new Set(tokens.map((t) => String(t.chainId || 'A')))];

@@ -1233,8 +1233,20 @@ function formatCifCoord(val) {
  */
 export function toCifString(atomsOrResult, options = {}) {
   const atoms = Array.isArray(atomsOrResult) ? atomsOrResult : (atomsOrResult?.atoms ?? []);
-  const dataBlockName = options.dataBlockName || 'rfd4p_design';
+  return toMultiModelCifString([atoms], options);
+}
 
+/**
+ * Several structures as the models of one mmCIF (`pdbx_PDB_model_num` 1, 2, ...), as a trajectory is read: models may
+ * differ in their atoms (a design's sequence changes from step to step).
+ *
+ * @param {Array<Array<object>>} models atom records per model
+ * @param {object} [options]
+ * @param {string} [options.dataBlockName='rfd4p_design']
+ * @returns {string}
+ */
+export function toMultiModelCifString(models, options = {}) {
+  const dataBlockName = options.dataBlockName || 'rfd4p_design';
   const lines = [
     `data_${dataBlockName}`,
     '#',
@@ -1264,31 +1276,36 @@ export function toCifString(atomsOrResult, options = {}) {
     '_atom_site.pdbx_PDB_model_num',
   ];
 
-  for (let i = 0; i < atoms.length; i += 1) {
-    const a = atoms[i];
-    const groupPdb = a.groupPdb || (a.isHetero ? 'HETATM' : 'ATOM');
-    const id = a.serial ?? i + 1;
-    const elem = a.element || inferElementSymbol(a.atomName);
-    const atomId = formatCifAtomName(a.atomName);
-    const compId = a.resName || 'UNK';
-    const asymId = a.chainId || 'A';
-    const entityId = a.entityId ?? 0;
-    const seqId = a.resId ?? 1;
-    const insCode = a.insCode || '.';
-    const authSeqId = a.authSeqId ?? seqId;
-    const bIso = Number.isFinite(a.bFactor) ? String(a.bFactor) : 'nan';
-    const occ = Number.isFinite(a.occupancy) ? a.occupancy.toFixed(1) : '1.0';
-    const chargeStr =
-      a.charge && a.charge !== 0 ? (a.charge > 0 ? `+${a.charge}` : `${a.charge}`) : '?';
-    const unidxStr = a.isUnindexedInsertion ? 'True' : 'False';
-    const crdSrcStr = a.crdSrcComponent || '.';
-    const xStr = formatCifCoord(a.x);
-    const yStr = formatCifCoord(a.y);
-    const zStr = formatCifCoord(a.z);
+  let serial = 0;
+  for (let m = 0; m < models.length; m += 1) {
+    const atoms = models[m];
+    for (let i = 0; i < atoms.length; i += 1) {
+      const a = atoms[i];
+      serial += 1;
+      const groupPdb = a.groupPdb || (a.isHetero ? 'HETATM' : 'ATOM');
+      const id = models.length > 1 ? serial : (a.serial ?? i + 1);
+      const elem = a.element || inferElementSymbol(a.atomName);
+      const atomId = formatCifAtomName(a.atomName);
+      const compId = a.resName || 'UNK';
+      const asymId = a.chainId || 'A';
+      const entityId = a.entityId ?? 0;
+      const seqId = a.resId ?? 1;
+      const insCode = a.insCode || '.';
+      const authSeqId = a.authSeqId ?? seqId;
+      const bIso = Number.isFinite(a.bFactor) ? String(a.bFactor) : 'nan';
+      const occ = Number.isFinite(a.occupancy) ? a.occupancy.toFixed(1) : '1.0';
+      const chargeStr =
+        a.charge && a.charge !== 0 ? (a.charge > 0 ? `+${a.charge}` : `${a.charge}`) : '?';
+      const unidxStr = a.isUnindexedInsertion ? 'True' : 'False';
+      const crdSrcStr = a.crdSrcComponent || '.';
+      const xStr = formatCifCoord(a.x);
+      const yStr = formatCifCoord(a.y);
+      const zStr = formatCifCoord(a.z);
 
-    lines.push(
-      `${groupPdb} ${id} ${elem} ${atomId} . ${compId} ${asymId} ${entityId} ${seqId} ${insCode} ${authSeqId} ${compId} ${asymId} ${atomId} ${bIso} ${occ} ${chargeStr} ${unidxStr} ${crdSrcStr} ${xStr} ${yStr} ${zStr} 1`
-    );
+      lines.push(
+        `${groupPdb} ${id} ${elem} ${atomId} . ${compId} ${asymId} ${entityId} ${seqId} ${insCode} ${authSeqId} ${compId} ${asymId} ${atomId} ${bIso} ${occ} ${chargeStr} ${unidxStr} ${crdSrcStr} ${xStr} ${yStr} ${zStr} ${m + 1}`
+      );
+    }
   }
   lines.push('#');
   return lines.join('\n') + '\n';

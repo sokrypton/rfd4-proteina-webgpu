@@ -1718,7 +1718,7 @@ class Rfd4pStudioApp {
         let liveOverlays = null;
         const hasUnindexedMotif = Boolean(atoms.condition_index_1_residue?.some((v, i) =>
           !v && !atoms.hetero?.[i] && atoms.condition_coordinate_1_atom?.[i]?.some?.(Number.isFinite)));
-        const liveAllAtomCif = (info) => {
+        const liveAllAtomCif = (info, frame = null) => {
           if (!info.decoded) return null;
           try {
             const structure = processSampleToAtoms({
@@ -1737,6 +1737,8 @@ class Rfd4pStudioApp {
               alignStructureAtomsToCa(structure.atoms, referenceCaNm, n);
             }
             liveSequence.update(structure.atoms);
+            // Kept for the saved trajectory: each frame as drawn live.
+            if (frame) frame.atoms = structure.atoms;
             liveOverlays = designOverlays(structure.atoms, motifOverlay, unmodelled);
             return toCifString(structure) + caSecondaryStructureCif(structure.atoms);
           } catch (err) {
@@ -1774,7 +1776,7 @@ class Rfd4pStudioApp {
             if (typeof window.atomworksStudio?.renderFrame === 'function') {
               if (liveRenderPromise) await liveRenderPromise;
               liveOverlays = { motif: overlayCifOf(motifOverlay, 'motif'), sideChains: null };
-              const liveCif = liveAllAtomCif(info) ?? buildLiveFrameCifFromCa(alignedCaNm, tokens, null, UNIFIED_ATOM37_TOKENS);
+              const liveCif = liveAllAtomCif(info, trajectoryFrames.at(-1)) ?? buildLiveFrameCifFromCa(alignedCaNm, tokens, null, UNIFIED_ATOM37_TOKENS);
               const frameOverlays = liveOverlays;
               if (liveCif) {
                 // Early x1 estimates are a collapsed blob that later expands several-fold, so a camera
@@ -1850,6 +1852,7 @@ class Rfd4pStudioApp {
           tokens,
           result.residueType,
           UNIFIED_ATOM37_TOKENS,
+          result.structure?.atoms ?? null,
         );
         const designIndex = (this.designCounter = (this.designCounter ?? 0) + 1);
         const designName = `seed-${sampleSeed}.cif`;
