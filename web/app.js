@@ -711,11 +711,11 @@ class Rfd4pStudioApp {
     }
     // Without WebGPU (Safari before 26, older browsers) designs run on WebGL2 (`webgl/rfd4p`), several times slower but
     // on the GPU. Without that too, the CPU path would take hours with the page frozen: say so instead; `?cpu=1`
-    // keeps the CPU path for development. Refolding (LocalFold) needs WebGPU either way.
+    // keeps the CPU path for development. Refolding (LocalFold) runs on either: its WebGL2 fold without WebGPU.
     const cpuOnly = params.get('cpu') === '1';
     this.glFallback = !this.gpuDevice && !cpuOnly && webgl2Available();
     this.noWebGpu = !this.gpuDevice && !this.glFallback && !cpuOnly;
-    this.noRefold = !this.gpuDevice;
+    this.noRefold = !this.gpuDevice && !this.glFallback;
     const backendLabel = this.gpuDevice ? 'WebGPU FP16' : this.glFallback ? 'WebGL2' : this.noWebGpu ? 'No WebGPU' : 'CPU Float32';
     if (this.els.webgpuBadge) {
       this.els.webgpuBadge.textContent = backendLabel;
@@ -1459,8 +1459,9 @@ class Rfd4pStudioApp {
     let failed = 0;
     this._renderDesigns();
     try {
-      if (!this.gpuDevice) await this._initWebGpu();
-      if (!this.gpuDevice) throw new Error('WebGPU is not available');
+      // On the WebGL2 path (no WebGPU, or `?gl=1`) the refold is LocalFold's WebGL2 fold.
+      if (!this.gpuDevice && !this.glFallback) await this._initWebGpu();
+      if (!this.gpuDevice && !this.glFallback) throw new Error('WebGPU is not available');
       // ~6 MB of LocalFold code (tools/sync-localfold.mjs), loaded on the first refold only.
       const lf = await import('./localfold.js');
       // 🔴 ASK FOR THE PARAMETERS HERE, NOT INSIDE THE REFOLD, SO THE WAIT IS VISIBLE. `refoldDesign` calls
@@ -1515,6 +1516,7 @@ class Rfd4pStudioApp {
     try {
       const result = await lf.refoldDesign({
         pdb: view.pdb, chain: view.designedChains, model, device: this.gpuDevice, seed, recycles, steps, signal: abort.signal,
+        ...(this.gpuDevice ? {} : { backend: 'webgl2' }),
         partial: view.partialTemplates ?? [],
         status: (text) => status(text.replace(/^refolding with \S+( · )?/, '') || `refolding with ${name}`),
       });
