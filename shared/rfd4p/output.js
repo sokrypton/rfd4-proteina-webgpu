@@ -1192,6 +1192,7 @@ export function processSampleToAtoms({
     predictedInsertionMapping,
     cwiCoords,
     componentBonds: componentBondsOf(inputAtoms),
+    links: residueLinksOf(inputAtoms),
   };
 }
 
@@ -1219,6 +1220,35 @@ export function componentBondsOf(inputAtoms) {
     out.get(comp).push([n1, n2, bt]);
   }
   return out;
+}
+
+/**
+ * The input's bonds between residues other than the polymer's own backbone links (a heme's to its cysteines, a
+ * disulfide, a glycan, a metal's coordination), for `_struct_conn`. Named as a design names residues (chain, res_id,
+ * insertion code, which design records copy from the same atoms), so they apply to its frames too.
+ *
+ * @returns {Array<{ type: 'covale'|'disulf'|'metalc', order: number, ends: Array<{ chain: string, resId: number, insCode: string, resName: string, atomName: string }> }>}
+ */
+export function residueLinksOf(inputAtoms) {
+  const a = inputAtoms;
+  if (!a?.bonds || !a.res_name || !a.atom_name) return [];
+  const end = (i) => ({
+    chain: String(a.chain_id[i]), resId: Number(a.res_id[i]), insCode: String(a.ins_code?.[i] || ''),
+    resName: String(a.res_name[i]), atomName: String(a.atom_name[i]),
+  });
+  const backbone = (u, v) => {
+    const names = [String(a.atom_name[u]), String(a.atom_name[v])].sort().join('-');
+    return a.is_polymer?.[u] && a.is_polymer?.[v] && a.chain_id[u] === a.chain_id[v] && (names === 'C-N' || names === "O3'-P");
+  };
+  const links = [];
+  for (const [u, v, bt] of a.bonds) {
+    if (a.chain_id[u] === a.chain_id[v] && a.res_id[u] === a.res_id[v] && a.ins_code?.[u] === a.ins_code?.[v]) continue;
+    if (backbone(u, v)) continue;
+    const type = bt === BOND_TYPE.COORDINATION ? 'metalc'
+      : a.atom_name[u] === 'SG' && a.atom_name[v] === 'SG' ? 'disulf' : 'covale';
+    links.push({ type, order: bt, ends: [end(u), end(v)] });
+  }
+  return links;
 }
 
 // BOND_TYPE -> `_chem_comp_bond` value_order and pdbx_aromatic_flag.
@@ -1269,7 +1299,8 @@ function formatCifCoord(val) {
 export function toCifString(atomsOrResult, options = {}) {
   const atoms = Array.isArray(atomsOrResult) ? atomsOrResult : (atomsOrResult?.atoms ?? []);
   const componentBonds = options.componentBonds ?? atomsOrResult?.componentBonds;
-  return toMultiModelCifString([atoms], { ...options, componentBonds });
+  const links = options.links ?? atomsOrResult?.links;
+  return toMultiModelCifString([atoms], { ...options, componentBonds, links });
 }
 
 /**
@@ -1281,6 +1312,8 @@ export function toCifString(atomsOrResult, options = {}) {
  * @param {string} [options.dataBlockName='rfd4p_design']
  * @param {Map<string, Array<[string, string, number]>>} [options.componentBonds] other components' bonds
  *   (`componentBondsOf`), written to `_chem_comp_bond` with the standard residues' for every component present
+ * @param {Array<object>} [options.links] bonds between residues (`residueLinksOf`), written to `_struct_conn` when
+ *   both atoms are in the last model (a designed residue may have become one without them)
  * @returns {string}
  */
 export function toMultiModelCifString(models, options = {}) {
@@ -1358,6 +1391,23 @@ export function toMultiModelCifString(models, options = {}) {
   if (bondRows.length) {
     lines.push('loop_', '_chem_comp_bond.comp_id', '_chem_comp_bond.atom_id_1', '_chem_comp_bond.atom_id_2',
       '_chem_comp_bond.value_order', '_chem_comp_bond.pdbx_aromatic_flag', ...bondRows, '#');
+  }
+
+  const present = new Set((models.at(-1) ?? []).map((a) => `${a.chainId}|${a.resId ?? 1}|${a.insCode || ''}|${a.resName}|${a.atomName}`));
+  const has = (e) => present.has(`${e.chain}|${e.resId}|${e.insCode}|${e.resName}|${e.atomName}`);
+  const connRows = [];
+  for (const { type, order, ends } of options.links ?? []) {
+    if (!ends.every(has)) continue;
+    const value = type === 'metalc' ? '?' : (CHEM_COMP_BOND_ORDER[order]?.[0] ?? 'SING').toLowerCase();
+    const cols = ends.map((e) => [e.chain, e.resName, e.resId, formatCifAtomName(e.atomName), e.insCode || '?']);
+    connRows.push([`${type}${connRows.length + 1}`, type, value,
+      ...cols.flatMap((c) => c.slice(0, 4)), ...cols.flatMap((c) => c.slice(0, 3)), cols[0][4], cols[1][4]].join(' '));
+  }
+  if (connRows.length) {
+    lines.push('loop_', '_struct_conn.id', '_struct_conn.conn_type_id', '_struct_conn.pdbx_value_order',
+      ...[1, 2].flatMap((k) => ['asym_id', 'comp_id', 'seq_id', 'atom_id'].map((c) => `_struct_conn.ptnr${k}_label_${c}`)),
+      ...[1, 2].flatMap((k) => ['asym_id', 'comp_id', 'seq_id'].map((c) => `_struct_conn.ptnr${k}_auth_${c}`)),
+      '_struct_conn.pdbx_ptnr1_PDB_ins_code', '_struct_conn.pdbx_ptnr2_PDB_ins_code', ...connRows, '#');
   }
   return lines.join('\n') + '\n';
 }

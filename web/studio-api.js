@@ -3687,7 +3687,7 @@ export function buildLiveFrameCifFromCa(caCoordsNm, tokens, finalResidueType = n
  * live, `trajectoryFrames[m].atoms`, ending with `finalAtoms`; else `trajectoryFrames[m].caCoordsNm`) so AtomWorks Studio's `TrajectoryController` (`#trajectory-bar`)
  * can scrub and play back the predicted clean structures in Mol* WebGL or Patinae WebGPU.
  */
-export function buildTrajectoryCifFromFrames(trajectoryFrames, tokens, finalResidueType = null, vocabTokens = null, finalAtoms = null, componentBonds = null) {
+export function buildTrajectoryCifFromFrames(trajectoryFrames, tokens, finalResidueType = null, vocabTokens = null, finalAtoms = null, { componentBonds = null, links = null } = {}) {
   if (!Array.isArray(trajectoryFrames) || trajectoryFrames.length < 2 || !Array.isArray(tokens) || tokens.length === 0) {
     return null;
   }
@@ -3701,7 +3701,7 @@ export function buildTrajectoryCifFromFrames(trajectoryFrames, tokens, finalResi
   // design itself: a cartoon Mol* can read secondary structure from. Without them (the CPU path), Cα frames.
   const allAtom = sampled.slice(0, -1).map((f) => f.atoms);
   if (finalAtoms && allAtom.every(Boolean)) {
-    return toMultiModelCifString([...allAtom, finalAtoms], { dataBlockName: 'trajectory', componentBonds });
+    return toMultiModelCifString([...allAtom, finalAtoms], { dataBlockName: 'trajectory', componentBonds, links });
   }
 
   const chains = [...new Set(tokens.map((t) => String(t.chainId || 'A')))];

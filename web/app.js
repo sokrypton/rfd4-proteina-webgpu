@@ -1859,7 +1859,7 @@ class Rfd4pStudioApp {
           result.residueType,
           UNIFIED_ATOM37_TOKENS,
           result.structure?.atoms ?? null,
-          result.structure?.componentBonds ?? null,
+          result.structure ?? {},
         );
         const designIndex = (this.designCounter = (this.designCounter ?? 0) + 1);
         const designName = `seed-${sampleSeed}.cif`;
