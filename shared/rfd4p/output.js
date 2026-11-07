@@ -17,6 +17,7 @@ import {
   UNIFIED_RESTYPE_ATOM37_MASK,
   inferElementSymbol,
 } from './encoding.js';
+import { BOND_TYPE, STD_RESIDUE_BONDS } from './pipeline/cif.js';
 
 function det3x3(m) {
   return (
@@ -1190,8 +1191,42 @@ export function processSampleToAtoms({
     inputFrame: inInputFrame,
     predictedInsertionMapping,
     cwiCoords,
+    componentBonds: componentBondsOf(inputAtoms),
   };
 }
+
+/**
+ * The bonds within each component of `inputAtoms` that is not a standard residue (a ligand's, by atom name), for
+ * `_chem_comp_bond`: without them a viewer guesses a ligand's bonds from distances, and in a trajectory's early frames,
+ * where its atoms sit close together, joins them all (PyMOL then keeps those bonds for every frame).
+ *
+ * @returns {Map<string, Array<[string, string, number]>>} component -> [atom 1, atom 2, BOND_TYPE]
+ */
+export function componentBondsOf(inputAtoms) {
+  const out = new Map();
+  const a = inputAtoms;
+  if (!a?.bonds || !a.res_name || !a.atom_name) return out;
+  const seen = new Set();
+  for (const [u, v, bt] of a.bonds) {
+    const comp = String(a.res_name[u]);
+    if (STD_RESIDUE_BONDS[comp] || bt === BOND_TYPE.COORDINATION) continue;
+    if (a.chain_id[u] !== a.chain_id[v] || a.res_id[u] !== a.res_id[v] || a.ins_code?.[u] !== a.ins_code?.[v]) continue;
+    const [n1, n2] = [String(a.atom_name[u]), String(a.atom_name[v])].sort();
+    const key = `${comp}|${n1}|${n2}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!out.has(comp)) out.set(comp, []);
+    out.get(comp).push([n1, n2, bt]);
+  }
+  return out;
+}
+
+// BOND_TYPE -> `_chem_comp_bond` value_order and pdbx_aromatic_flag.
+const CHEM_COMP_BOND_ORDER = {
+  [BOND_TYPE.DOUBLE]: ['DOUB', 'N'], [BOND_TYPE.TRIPLE]: ['TRIP', 'N'], [BOND_TYPE.QUADRUPLE]: ['QUAD', 'N'],
+  [BOND_TYPE.AROMATIC_SINGLE]: ['SING', 'Y'], [BOND_TYPE.AROMATIC_DOUBLE]: ['DOUB', 'Y'],
+  [BOND_TYPE.AROMATIC_TRIPLE]: ['TRIP', 'Y'], [BOND_TYPE.AROMATIC]: ['SING', 'Y'],
+};
 
 /**
  * Format an atom name for mmCIF `_atom_site.label_atom_id` / `auth_atom_id`
@@ -1233,7 +1268,8 @@ function formatCifCoord(val) {
  */
 export function toCifString(atomsOrResult, options = {}) {
   const atoms = Array.isArray(atomsOrResult) ? atomsOrResult : (atomsOrResult?.atoms ?? []);
-  return toMultiModelCifString([atoms], options);
+  const componentBonds = options.componentBonds ?? atomsOrResult?.componentBonds;
+  return toMultiModelCifString([atoms], { ...options, componentBonds });
 }
 
 /**
@@ -1243,6 +1279,8 @@ export function toCifString(atomsOrResult, options = {}) {
  * @param {Array<Array<object>>} models atom records per model
  * @param {object} [options]
  * @param {string} [options.dataBlockName='rfd4p_design']
+ * @param {Map<string, Array<[string, string, number]>>} [options.componentBonds] other components' bonds
+ *   (`componentBondsOf`), written to `_chem_comp_bond` with the standard residues' for every component present
  * @returns {string}
  */
 export function toMultiModelCifString(models, options = {}) {
@@ -1308,6 +1346,19 @@ export function toMultiModelCifString(models, options = {}) {
     }
   }
   lines.push('#');
+
+  const bondRows = [];
+  const comps = new Set(models.flatMap((atoms) => atoms.map((a) => a.resName || 'UNK')));
+  for (const comp of comps) {
+    for (const [n1, n2, bt] of STD_RESIDUE_BONDS[comp] ?? options.componentBonds?.get(comp) ?? []) {
+      const [order, aromatic] = CHEM_COMP_BOND_ORDER[bt] ?? ['SING', 'N'];
+      bondRows.push(`${comp} ${formatCifAtomName(n1)} ${formatCifAtomName(n2)} ${order} ${aromatic}`);
+    }
+  }
+  if (bondRows.length) {
+    lines.push('loop_', '_chem_comp_bond.comp_id', '_chem_comp_bond.atom_id_1', '_chem_comp_bond.atom_id_2',
+      '_chem_comp_bond.value_order', '_chem_comp_bond.pdbx_aromatic_flag', ...bondRows, '#');
+  }
   return lines.join('\n') + '\n';
 }
 
