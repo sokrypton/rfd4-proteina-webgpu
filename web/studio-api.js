@@ -1994,6 +1994,7 @@ export class StudioDoc {
         const d = this.atoms;
         const t = d.annotations[TAG];
         const plan = this.chainPlan(cid);
+        const info = this._chainSourceIndex(cid);
         const out = new Set();
         for (let i = 0; i < d.nAtoms; i += 1) if (String(d.chain_id[i]) === cid && t[i]) out.add(i);
         const parts = [];
@@ -2002,7 +2003,7 @@ export class StudioDoc {
           if (q.kind === 'own') { const left = q.atoms.filter((i) => !out.has(i)); if (left.length) parts.push({ kind: 'own', atoms: left }); continue; }
           // The source indices of this run still wanted, as consecutive runs.
           const keep = [];
-          for (const i of q.atoms) if (!out.has(i)) { const k = this._sourceIndexOf(i, this._chainSourceIndex(cid)); if (k !== null && keep.at(-1) !== k) keep.push(k); }
+          for (const i of q.atoms) if (!out.has(i)) { const k = this._sourceIndexOf(i, info); if (k !== null && keep.at(-1) !== k) keep.push(k); }
           for (const k of keep) { const last = parts.at(-1); if (last?.kind === 'kept' && last.to === k - 1 && last.run === q) last.to = k; else parts.push({ kind: 'kept', from: k, to: k, run: q }); }
         }
         this.rebuildChain(cid, parts.map(({ run, ...p }) => p));

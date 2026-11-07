@@ -1787,7 +1787,7 @@ class Rfd4pStudioApp {
                 const first = liveFramesRendered === 0;
                 liveFramesRendered += 1;
                 // The first frame's hotspots: none while it replaces the input, then in the job's numbering.
-                liveRenderPromise = (first ? Promise.resolve(window.atomworksStudio.setHighlight?.('hotspots', null)) : Promise.resolve())
+                liveRenderPromise = (first ? Promise.resolve(this.designPanel?.clearHighlight('hotspots')) : Promise.resolve())
                   .then(() => window.atomworksStudio?.renderFrame(liveCif, `step_${info.step + 1}.cif`, keepCam))
                   .then(() => {
                     if (!first || this.activeAbortController !== abortController) return;

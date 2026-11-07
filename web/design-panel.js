@@ -1316,7 +1316,8 @@ export class DesignPanel {
    */
   _previewParts(c, parts) {
     const studio = window.atomworksStudio;
-    if (typeof studio?.renderFrame !== 'function') return;
+    // Not while an example is built: nothing of it is on screen.
+    if (typeof studio?.renderFrame !== 'function' || this.building) return;
     // Drawn as soon as asked; while a draw is under way only the latest request is kept, drawn when it is done, so a
     // drag never queues up frames behind it.
     this.previewNext = { c, parts, gen: this.previewGen ?? 0 };
@@ -2159,7 +2160,8 @@ export class DesignPanel {
    * highlight across loads and live frames.
    */
   showHotspots() {
-    if (typeof window.atomworksStudio?.setHighlight !== 'function') return;
+    // An example being built is not on screen; it is highlighted once it opens.
+    if (typeof window.atomworksStudio?.setHighlight !== 'function' || this.building) return;
     const shown = this.app.studioSessionId ? getSharedStudioStore().getSession(this.app.studioSessionId) : null;
     const atoms = (shown ?? this._inputDoc())?.atoms;
     const hot = atoms?.annotations?.condition_hotspot_1_atom;
@@ -2194,11 +2196,24 @@ export class DesignPanel {
         free.set(k, viewerResidue(atoms, i));
       }
     }
-    // Sent on every render rather than once: Studio ignores it until its viewer has started.
-    this.hotspotQueue = (this.hotspotQueue ?? Promise.resolve())
-      .then(() => window.atomworksStudio.setHighlight('hotspots', residues.size ? [...residues.values()] : null, { color: HOTSPOT_COLOR }))
-      .then(() => window.atomworksStudio.setHighlight('free', free.size ? [...free.values()] : null, { transparency: FREE_TRANSPARENCY }))
-      .catch((err) => console.warn('Hotspot highlight failed:', err));
+    // Sent only when it changes: each one repaints every highlight, and Studio keeps them across loads and live
+    // frames, and until its viewer has started.
+    const send = (key, list, options) => {
+      const sig = [...list.keys()].join(' ');
+      if (this.highlightSent?.[key] === sig) return;
+      (this.highlightSent ??= {})[key] = sig;
+      this.hotspotQueue = (this.hotspotQueue ?? Promise.resolve())
+        .then(() => window.atomworksStudio.setHighlight(key, list.size ? [...list.values()] : null, options))
+        .catch((err) => console.warn('Hotspot highlight failed:', err));
+    };
+    send('hotspots', residues, { color: HOTSPOT_COLOR });
+    send('free', free, { transparency: FREE_TRANSPARENCY });
+  }
+
+  /** Take a highlight off (as a run's first frame replaces the input), so `showHotspots` sends it again after. */
+  clearHighlight(key) {
+    if (this.highlightSent) delete this.highlightSent[key];
+    return window.atomworksStudio?.setHighlight?.(key, null);
   }
 
   // ---- selection popup ----------------------------------------------------------------------------------------
