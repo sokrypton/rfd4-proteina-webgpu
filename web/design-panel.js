@@ -167,6 +167,18 @@ const POSITION_OPTIONS = [['fixed', 'fixed'], ['anywhere', 'free']];
 const SHAPE_OPTIONS = [['1', 'H helix'], ['2', 'E strand'], ['3', 'C loop'], ['0', 'free']];
 const SHAPE_LETTER = { 1: 'H', 2: 'E', 3: 'C' };
 
+/** Atom `i`'s insertion code as the document's CIF writes it, "" for none ("." and "?" are none). */
+const insCodeOf = (atoms, i) => { const c = String(atoms.ins_code?.[i] ?? ''); return c === '.' || c === '?' ? '' : c; };
+
+/**
+ * Atom `i`'s residue as the viewer names it: chain, the document's auth_seq_id (a fetched entry keeps its authors'
+ * numbering there, not res_id: 5O45's A40 is author residue 56) and insertion code, without which an antibody's H82
+ * would also be H82A, H82B and H82C.
+ */
+const viewerResidue = (atoms, i) => ({
+  chain: String(atoms.chain_id[i]), residue: Number(atoms.auth_seq_id?.[i] ?? atoms.res_id[i]), insCode: insCodeOf(atoms, i),
+});
+
 /** A minimal mmCIF of chain `chain`'s residues numbered `nums` in `atoms` (an overlay: the viewer draws it as given). */
 function atomsCif(atoms, chain, nums) {
   const rows = ['data_overlay', 'loop_', ...['group_PDB', 'id', 'type_symbol', 'label_atom_id', 'label_comp_id', 'label_asym_id',
@@ -2144,10 +2156,9 @@ export class DesignPanel {
       }
     } else if (hot) {
       for (let i = 0; i < atoms.nAtoms; i += 1) {
-        // The viewer numbers residues as the document's CIF writes auth_seq_id (a fetched entry keeps its authors'
-        // numbering there), not by res_id: 5O45's A40 is author residue 56.
-        const residue = Number(atoms.auth_seq_id?.[i] ?? atoms.res_id[i]);
-        if (hot[i]) residues.set(`${atoms.chain_id[i]}|${residue}`, { chain: String(atoms.chain_id[i]), residue });
+        if (!hot[i]) continue;
+        const r = viewerResidue(atoms, i);
+        residues.set(`${r.chain}|${r.residue}|${r.insCode}`, r);
       }
     }
     // Residues the model rebuilds (no atom of theirs held) are faded in the input: what stays is what is solid.
@@ -2156,14 +2167,14 @@ export class DesignPanel {
     // Not with partial diffusion: then the free residues' coordinates are where the model starts.
     if (atoms && !live && (!shown || shown === this._inputDoc()) && !this.app.els.partialDiffusion?.checked) {
       const held = new Set();
-      const key = (i) => `${atoms.chain_id[i]}|${Number(atoms.auth_seq_id?.[i] ?? atoms.res_id[i])}`;
+      const key = (i) => `${atoms.chain_id[i]}|${Number(atoms.auth_seq_id?.[i] ?? atoms.res_id[i])}|${insCodeOf(atoms, i)}`;
       // Held in place, or rigid (a body of its own: kept as it is, moved as one).
       const grp = atoms.annotations?.condition_CoordinateGroup_1_atom;
       for (let i = 0; i < atoms.nAtoms; i += 1) if (Number.isFinite(crd?.[i]?.[0]) || Number(grp?.[i]) > 0) held.add(key(i));
       for (let i = 0; i < atoms.nAtoms; i += 1) {
         const k = key(i);
         if (held.has(k) || free.has(k) || /^\d+-\d+$/.test(String(atoms.res_name[i]))) continue;
-        free.set(k, { chain: String(atoms.chain_id[i]), residue: Number(atoms.auth_seq_id?.[i] ?? atoms.res_id[i]) });
+        free.set(k, viewerResidue(atoms, i));
       }
     }
     // Sent on every render rather than once: Studio ignores it until its viewer has started.
