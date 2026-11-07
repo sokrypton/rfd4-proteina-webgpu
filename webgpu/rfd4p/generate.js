@@ -82,6 +82,19 @@ export class Rfd4pGeneratorGpu {
       : null;
   }
 
+  /**
+   * As the constructor, but the weights go up a layer at a time with the page let respond between layers: built in one
+   * go, the model held the page for ~1.3 s (M2), which a background preload should never do.
+   */
+  static async create(device, weights, cfg, opts = {}) {
+    const gen = new Rfd4pGeneratorGpu(device, weights, cfg, { ...opts, deferUpload: true });
+    gen.opts = opts;
+    for (const part of [gen.trunk, gen.decoder]) {
+      for (const _ of part.uploadSteps(gen.weights)) await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    return gen;
+  }
+
   /** Lazily instantiate and return the WebGPU Autoencoder Encoder. */
   getEncoder() {
     if (!this.encoder) {

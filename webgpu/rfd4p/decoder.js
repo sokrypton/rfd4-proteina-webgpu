@@ -45,10 +45,18 @@ export class Rfd4pDecoderGpu {
     this.outDim = this.nTypes + 111 + 37;
     this.na = 0;
     this.fdim = 0;
-    this.w = this.uploadWeights(weights);
+    // `deferUpload`: the caller uploads the weights itself, a piece at a time (`uploadSteps`).
+    if (!opts.deferUpload) this.uploadWeights(weights);
   }
 
+  /** Upload the weights in one go; `this.w` holds them. */
   uploadWeights(src) {
+    for (const _ of this.uploadSteps(src));
+    return this.w;
+  }
+
+  /** The upload as steps, one per layer, so a caller can let the page respond between them (`this.w` at the end). */
+  *uploadSteps(src) {
     const e = this.engine;
     const get = (k) => {
       const t = src[k];
@@ -114,9 +122,10 @@ export class Rfd4pDecoderGpu {
       ),
     };
     for (let i = 0; i < this.nlayers; i += 1) {
+      yield;
       w.layers.push(uploadTokenLayer(e, get, opt, `${PREFIX}.transformer_layers.${i}`, this.half, C));
     }
-    return w;
+    this.w = w;
   }
 
   /** Allocate activations for `na` attended tokens and record the decoder program. */

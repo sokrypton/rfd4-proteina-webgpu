@@ -867,8 +867,10 @@ class Rfd4pStudioApp {
       this.activeConfig = cfg.config ?? cfg;
       this.activeWeights = sharded.tensors;
       if (this.gpuDevice && !this.gpuModel) {
-        this.gpuModel = new Rfd4pGeneratorGpu(this.gpuDevice, this.activeWeights, this.activeConfig, { half: true });
-        this.gpuModelHalf = true;
+        // A layer at a time, so the page keeps responding while it is built (a job just opened is being edited).
+        const model = await Rfd4pGeneratorGpu.create(this.gpuDevice, this.activeWeights, this.activeConfig, { half: true });
+        if (this.gpuModel) model.destroy();
+        else { this.gpuModel = model; this.gpuModelHalf = true; }
       }
     })().catch((err) => console.warn('Model preload skipped:', err)).finally(() => { this.preloadPromise = null; });
   }

@@ -145,10 +145,18 @@ export class Rfd4pTrunkGpu {
     this.chunkBytes = opts.chunkBytes ?? DEFAULT_CHUNK_BYTES;
     this.nlayers = cfg.nlayers;
     this.n = 0;
-    this.w = this.uploadWeights(weights);
+    // `deferUpload`: the caller uploads the weights itself, a piece at a time (`uploadSteps`).
+    if (!opts.deferUpload) this.uploadWeights(weights);
   }
 
+  /** Upload the weights in one go; `this.w` holds them. */
   uploadWeights(src) {
+    for (const _ of this.uploadSteps(src));
+    return this.w;
+  }
+
+  /** The upload as steps, one per layer, so a caller can let the page respond between them (`this.w` at the end). */
+  *uploadSteps(src) {
     const e = this.engine;
     const get = (k) => {
       const t = src[k];
@@ -237,6 +245,7 @@ export class Rfd4pTrunkGpu {
     };
     const opt = (k) => (src[k] ? src[k].data ?? src[k] : null);
     for (let i = 0; i < this.nlayers; i += 1) {
+      yield;
       w.layers.push(uploadTokenLayer(e, get, opt, `nn.transformer_layers.${i}`, this.half, C));
       if (i < this.nlayers - 1 && i % 2 === 0) {
         const q = `nn.pair_update_layers.${i}`;
@@ -327,7 +336,7 @@ export class Rfd4pTrunkGpu {
         this.half,
       );
     }
-    return w;
+    this.w = w;
   }
 
   /** Allocate activations for `n` tokens and record every program. */
