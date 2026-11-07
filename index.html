@@ -10,7 +10,7 @@
     <!-- This site serves the Studio bundle itself; its offline cache would pin stale assets on Pages. -->
     <meta name="atomworks-studio-service-worker" content="off" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <link rel="stylesheet" href="./web/styles.css?v=7d740c87d0" />
+    <link rel="stylesheet" href="./web/styles.css?v=9476ce7984" />
     <!-- Light or dark before anything draws, so the viewer never flashes the other colour (web/app.js _initTheme keeps it). -->
     <script>
       try {
@@ -46,7 +46,7 @@
           "./shared/rfd4p/safetensors.js": "./shared/rfd4p/safetensors.js?v=c238bc6559",
           "./shared/rfd4p/vendor/fzstd.js": "./shared/rfd4p/vendor/fzstd.js?v=e6cdba40d4",
           "./web/app.js": "./web/app.js?v=adb85130d2",
-          "./web/design-panel.js": "./web/design-panel.js?v=33228c24d0",
+          "./web/design-panel.js": "./web/design-panel.js?v=d410fa2bf8",
           "./web/design-spec.js": "./web/design-spec.js?v=e87df0a07e",
           "./web/guide-dialog.js": "./web/guide-dialog.js?v=df4c3ca412",
           "./web/ligand-ccd.js": "./web/ligand-ccd.js?v=b937ddbebf",
@@ -252,8 +252,8 @@
             </div>
 
 
-            <label class="checkbox rfd4p-advanced-toggle" title="Show AtomWorks Studio's full editor: conditions, bonds, analysis, measurements, query bar">
-                <input type="checkbox" id="rfd4p-advanced" /> Advanced editor
+            <label class="checkbox rfd4p-advanced-toggle" title="Edit with AtomWorks Studio's own editor in place of the card's: every condition, bonds, analysis, measurements, query bar">
+                <input type="checkbox" id="rfd4p-advanced" /> Studio editor
             </label>
         </section>
     </div>

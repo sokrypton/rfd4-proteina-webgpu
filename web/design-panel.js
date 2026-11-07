@@ -1780,7 +1780,7 @@ export class DesignPanel {
     const off = parts.filter(({ p }) => p.kind === 'kept' && p.keep === 'shape').flatMap(({ atoms }) => atoms);
     if (off.length && !await this._mutate('/internal-coords', { atom_indices: off, enabled: false })) return false;
     // "Rigid" is one rigid body for the whole job (an antibody's two framework chains, a framework split by
-    // CDRs): join the rigid group already there. Separate bodies are the Advanced editor's.
+    // CDRs): join the rigid group already there. Separate bodies are the Studio editor's.
     // One rigid body per chain (an antibody's light and heavy frameworks move apart; a framework split by CDRs moves
     // as one), as the bundled examples set them. Only the held atoms join it.
     const rigid = parts.filter(({ want }) => want.structure === 'rigid');

@@ -440,9 +440,9 @@ body:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]),
 }
 
 /* ---- Simple mode (default): only the RFD4-Proteina card, the viewer, the sequence and Open/Style/picking.
-   "Advanced editor" (body.rfd4p-advanced, web/design-panel.js) brings back every AtomWorks Studio tool. ---- */
+   "Studio editor" (body.rfd4p-advanced, web/design-panel.js) brings back every AtomWorks Studio tool. ---- */
 /* Studio's status bar: its loader's notes ("Mol* loaded 1823 atoms…") and a second Guide. The card has its own status
-   and Guide, and Studio's errors have their banner, so it shows only with the advanced editor. */
+   and Guide, and Studio's errors have their banner, so it shows only with the Studio editor. */
 body:not(.rfd4p-advanced) .status-bar { display: none; }
 body:not(.rfd4p-advanced) .header-actions .load-options,
 body:not(.rfd4p-advanced) .header-actions label.file-button,
@@ -453,6 +453,19 @@ body:not(.rfd4p-advanced) #viewer-backend,
 body:not(.rfd4p-advanced) #picking-help,
 body:not(.rfd4p-advanced) #viewer-command-form,
 body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
+  display: none !important;
+}
+
+/* With the Studio editor the card's own editor goes: its chain list and + new / + pdb / + lig edit the same conditions as
+   Studio's Structure card and panels below it, so showing both was two editors for one document. The card keeps the
+   input's warnings, the start screen, Generate and the designs. */
+body.rfd4p-advanced #rfd4p-task-detail,
+body.rfd4p-advanced #rfd4p-chain-list,
+body.rfd4p-advanced #rfd4p-design .rfd4p-chain-actions {
+  display: none !important;
+}
+/* A design is a result, not an input: on Outputs Studio's editor goes too, as the card's does. */
+body.rfd4p-advanced:has(#rfd4p-job[data-tab="outputs"]) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   display: none !important;
 }
 
@@ -810,7 +823,7 @@ body:not(.rfd4p-advanced) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
 
 /* The sequence bar in the simple view speaks the panel's language: kept residues plain (the panel already says the
    chain is kept, and a box on every residue hid everything else), residues the model designs in the accent colour,
-   hotspots filled amber, as in the viewer. The advanced editor keeps Studio's own per-condition marks. */
+   hotspots filled amber, as in the viewer. The Studio editor keeps Studio's own per-condition marks. */
 :root { --rfd4p-hotspot: #f59e0b; }
 
 body:not(.rfd4p-advanced) .sequence-token.condition-coordinate:not(.selected):not(:hover) { border-color: transparent; }
