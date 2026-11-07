@@ -21,7 +21,7 @@ import {
 } from '../shared/rfd4p/pipeline/cif.js';
 import { toMultiModelCifString, toPdbString } from '../shared/rfd4p/output.js';
 import { decodeTextOrZstd } from '../shared/rfd4p/pipeline/zstd.js';
-import { prepareRcsbStructure, removeResidues, removeUnresolvedResidues } from '../shared/rfd4p/pipeline/prepare.js';
+import { RCSB_REMOVE_CCDS, WATER_CCDS, prepareRcsbStructure, removeResidues, removeUnresolvedResidues } from '../shared/rfd4p/pipeline/prepare.js';
 import { componentsNeedingCcd, fetchCcdComponents, mergeCcdIntoBlock } from '../shared/rfd4p/pipeline/ccd.js';
 import { evalPathSelection, evalSelection } from '../shared/rfd4p/pipeline/spec.js';
 
@@ -355,15 +355,44 @@ function fmtCifVal(v) {
  * as AtomWorks does from its bundled CCD. Offline, the document is returned as before.
  */
 export async function createStudioDocWithCcd(text, name, opts = {}, fetchFn = globalThis.fetch?.bind(globalThis)) {
-  const doc = new StudioDoc(text, name, opts);
+  if (!fetchFn) return new StudioDoc(text, name, opts);
+  // The components to look up, read from the file's own atoms before it is prepared, so the document is built once.
+  // Preparation only takes residues away (waters, additives, other chains), so this asks for a few too many at most;
+  // a component it would still miss is looked up and the document built again.
+  const cif = normalizedCifOf(text);
+  const block = parseCifBlock(cif);
+  const removed = opts.preset === 'rcsb' ? new Set([...WATER_CCDS, ...RCSB_REMOVE_CCDS, ...BUFFER_IONS, 'MSE']) : new Set();
+  const asked = new Set(componentsNeedingCcd(multiAtomComponents(block.atom_site), block).filter((c) => !removed.has(c)));
+  const build = async () => {
+    const { blocks } = asked.size ? await fetchCcdComponents([...asked], { fetchFn }) : { blocks: new Map() };
+    return new StudioDoc(text, name, blocks.size ? { ...opts, ccdBlocks: blocks } : opts);
+  };
+  const doc = await build();
   const a = doc.atoms;
   const multiAtom = new Set();
   const starts = getResidueSegments(a);
   for (let r = 0; r < starts.length - 1; r += 1) if (starts[r + 1] - starts[r] > 1) multiAtom.add(a.res_name[starts[r]]);
-  const needed = componentsNeedingCcd(multiAtom, doc.cifBlock);
-  if (!needed.length || !fetchFn) return doc;
-  const { blocks } = await fetchCcdComponents(needed, { fetchFn });
-  return blocks.size ? new StudioDoc(text, name, { ...opts, ccdBlocks: blocks }) : doc;
+  const missed = componentsNeedingCcd(multiAtom, block).filter((c) => !asked.has(c));
+  if (!missed.length) return doc;
+  for (const c of missed) asked.add(c);
+  return build();
+}
+
+/** A structure file's text as mmCIF (zstd-compressed and PDB files too). */
+function normalizedCifOf(text) {
+  const decoded = decodeTextOrZstd(text);
+  const isPdb = !decoded.includes('_atom_site.') && /(?:^|\n)\s*(?:ATOM  |HETATM)/.test(decoded);
+  return isPdb ? pdbTextToCifText(decoded) : decoded;
+}
+
+/** The components of an `_atom_site` table with more than one atom in some residue. */
+function multiAtomComponents(site) {
+  const out = new Set();
+  const comp = site?.label_comp_id ?? site?.auth_comp_id;
+  if (!comp) return out;
+  const key = (i) => `${site.label_asym_id?.[i]}|${site.label_seq_id?.[i]}|${site.auth_seq_id?.[i]}|${site.pdbx_PDB_ins_code?.[i]}|${comp[i]}`;
+  for (let i = 1; i < comp.length; i += 1) if (key(i) === key(i - 1)) out.add(String(comp[i]));
+  return out;
 }
 
 /** Each residue's place in its chain's source ("38:"), this page's bookkeeping (not written to files). */

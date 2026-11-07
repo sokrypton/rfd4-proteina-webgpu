@@ -708,6 +708,17 @@ export function buildBondsForAtomArray(atoms, cifBlock = null, customBondDict = 
   }
 
   // 3. Add inter-residue polymer bonds (add_polymer_bonds)
+  // Each atom's partners by the bonds so far (not coordination), so "already linked" is a look at two atoms' bonds,
+  // not a scan of every bond per residue pair. The bonds this step adds join r and r + 1 only, so they never change
+  // the answer for a later pair.
+  const partners = new Map();
+  for (const [u, v, bt] of bondMap.values()) {
+    if (bt === BOND_TYPE.COORDINATION) continue;
+    if (!partners.has(u)) partners.set(u, []);
+    if (!partners.has(v)) partners.set(v, []);
+    partners.get(u).push(v);
+    partners.get(v).push(u);
+  }
   for (let r = 0; r < resStarts.length - 2; r++) {
     const s1 = resStarts[r];
     const e1 = resStarts[r + 1];
@@ -732,18 +743,8 @@ export function buildBondsForAtomArray(atoms, cifBlock = null, customBondDict = 
     if (idxOut < 0 || idxIn < 0) continue;
 
     // Check if an existing non-coordination bond already links idxOut or idxIn to the adjacent residue
-    let alreadyLinked = false;
-    for (const [u, v, bt] of bondMap.values()) {
-      if (bt === BOND_TYPE.COORDINATION) continue;
-      if ((u === idxOut && atomToRes[v] === r + 1) || (v === idxOut && atomToRes[u] === r + 1)) {
-        alreadyLinked = true;
-        break;
-      }
-      if ((u === idxIn && atomToRes[v] === r) || (v === idxIn && atomToRes[u] === r)) {
-        alreadyLinked = true;
-        break;
-      }
-    }
+    const alreadyLinked = (partners.get(idxOut) ?? []).some((w) => atomToRes[w] === r + 1)
+      || (partners.get(idxIn) ?? []).some((w) => atomToRes[w] === r);
     if (!alreadyLinked) {
       addBond(idxOut, idxIn, BOND_TYPE.SINGLE);
     }
