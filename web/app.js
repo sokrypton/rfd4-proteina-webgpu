@@ -1688,10 +1688,10 @@ class Rfd4pStudioApp {
       for (let sampleIdx = 0; sampleIdx < numSamples; sampleIdx += 1) {
         const sampleSeed = baseSeed + sampleIdx;
         const { batch, n, atoms } = sampleIdx === 0 ? firstBatchRes : this._buildCurrentBatch(sampleSeed);
+        // Live frames number residues as the job does (res_id, past any new residues), not as the input is shown: the
+        // highlight takes that numbering with this design's first frame (`liveHotspotKeys`), not before, or it marked
+        // other residues of the input still on screen until then.
         liveSequence.hotspots = hotspotResidueKeys(atoms);
-        // Live frames number residues as the job does (res_id, past any new residues), not as the input is shown.
-        this.liveHotspotKeys = liveSequence.hotspots;
-        this.designPanel?.showHotspots();
         const tokens = extractTokenMetadata(batch);
         const fixedAnchors = extractFixedTokenAnchorsNm(batch, n);
         const allTokenIndices = Int32Array.from({ length: n }, (_, idx) => idx);
@@ -1784,10 +1784,16 @@ class Rfd4pStudioApp {
                 const radius = caExtentRadiusNm(alignedCaNm);
                 const keepCam = liveFramesRendered > 0 && radius < liveCamRadius * 1.3 && radius > liveCamRadius * 0.6;
                 if (!keepCam) liveCamRadius = radius;
+                const first = liveFramesRendered === 0;
                 liveFramesRendered += 1;
-                liveRenderPromise = Promise.resolve(
-                  window.atomworksStudio?.renderFrame(liveCif, `step_${info.step + 1}.cif`, keepCam),
-                )
+                // The first frame's hotspots: none while it replaces the input, then in the job's numbering.
+                liveRenderPromise = (first ? Promise.resolve(window.atomworksStudio.setHighlight?.('hotspots', null)) : Promise.resolve())
+                  .then(() => window.atomworksStudio?.renderFrame(liveCif, `step_${info.step + 1}.cif`, keepCam))
+                  .then(() => {
+                    if (!first || this.activeAbortController !== abortController) return;
+                    this.liveHotspotKeys = liveSequence.hotspots;
+                    this.designPanel?.showHotspots();
+                  })
                   .then(() => showDesignOverlays(frameOverlays))
                   .catch(() => {});
               }
