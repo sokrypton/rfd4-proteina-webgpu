@@ -234,7 +234,8 @@ export function designSpec(atoms, { partialDiffusion = false, partialPercent = 4
       ligands: ligands.map((r) => ({
         name: r.resName,
         fixed: r.crdAtoms > 0,
-        pose: r.crdAtoms === 0 ? 'predicted' : r.crdAtoms < r.atoms ? 'partly fixed' : 'fixed',
+        // Rigid: held by its shape only, its pose the model's (internal coordinates, a coordinate group of its own).
+        pose: r.relative ? 'rigid' : r.crdAtoms === 0 ? 'predicted' : r.crdAtoms < r.atoms ? 'partly fixed' : 'fixed',
         atoms: r.atoms,
         fixedAtoms: r.crdAtoms,
         // The held atoms' names when only some are ("N1, C2, N3, C4").

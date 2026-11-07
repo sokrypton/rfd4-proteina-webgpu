@@ -1042,7 +1042,7 @@ export class DesignPanel {
   _ligandCard(c, l, readonly, remove) {
     // Some atoms held: named, as a residue's are ("N1, C2, N3, C4 fixed"), or counted when the names would not fit.
     const part = l.heldNames && l.heldNames.length <= 24 ? `${l.heldNames} fixed` : `${l.fixedAtoms} of ${l.atoms} atoms fixed`;
-    const status = l.pose === 'fixed' ? 'fixed' : l.pose === 'predicted' ? 'free' : part;
+    const status = l.pose === 'fixed' || l.pose === 'rigid' ? l.pose : l.pose === 'predicted' ? 'free' : part;
     return this._card(l.name, status, 'rfd4p-sub-ligand', readonly, (anchor) => {
       this._selectFromCard(l.atomIndices);
       this._openPop(anchor, () => this._ligandPop(c, l));
@@ -2012,9 +2012,9 @@ export class DesignPanel {
   /** A ligand: where it goes, or another molecule in its place. */
   _ligandPop(c, l) {
     const atoms = l.atomIndices;
-    const pose = el('select', { 'aria-label': 'Structure', title: 'Fixed: kept where it is. Free: the model places it.' },
-      el('option', { value: 'fixed', text: 'fixed', selected: l.pose !== 'predicted' }),
-      el('option', { value: 'free', text: 'free', selected: l.pose === 'predicted' }));
+    const now = l.pose === 'predicted' ? 'free' : l.pose === 'rigid' ? 'rigid' : 'fixed';
+    const pose = el('select', { 'aria-label': 'Structure', title: 'Fixed: kept where it is. Rigid: its shape kept, the model places it. Free: the model builds and places it.' },
+      ...['fixed', 'rigid', 'free'].map((v) => el('option', { value: v, text: v, selected: v === now })));
     // Which atoms a fixed pose holds: all, or some named (the rest placed by the model).
     const held = el('select', { 'aria-label': 'Atoms', title: 'Hold all of the ligand, or only the atoms named here' },
       el('option', { value: 'all', text: 'all', selected: !l.heldNames }),
@@ -2026,7 +2026,7 @@ export class DesignPanel {
     const note = el('p', { class: 'rfd4p-pop-note', 'aria-live': 'polite' });
     const atomsRow = el('div', { class: 'rfd4p-pop-row' }, el('span', { class: 'rfd4p-pop-label', text: 'Atoms' }), held, names);
     const sync = () => {
-      atomsRow.hidden = pose.value !== 'fixed';
+      atomsRow.hidden = pose.value === 'free';
       names.hidden = held.value !== 'named';
     };
     pose.addEventListener('change', sync);
@@ -2045,20 +2045,16 @@ export class DesignPanel {
         return;
       }
       const a = this._inputDoc().atoms;
-      const wanted = pose.value !== 'fixed' ? [] : held.value === 'named'
+      const wanted = pose.value === 'free' ? [] : held.value === 'named'
         ? (() => { const set = new Set(this._atomNames(names.value)); return atoms.filter((i) => set.has(String(a.atom_name[i]).toUpperCase())); })()
         : atoms;
-      if (pose.value === 'fixed' && !wanted.length) {
+      if (pose.value !== 'free' && !wanted.length) {
         note.textContent = `No atoms named ${names.value.trim() || 'here'} in ${l.name}`;
         return;
       }
       this._closePop();
-      const nowHeld = pose.value === 'fixed' && (held.value === 'named' ? names.value.trim() !== (l.heldNames ?? '') : Boolean(l.heldNames));
-      if (nowHeld || (pose.value === 'fixed') !== (l.pose !== 'predicted')) {
-        const edits = [{ condition: 'coordinate', atom_indices: atoms, enabled: false }];
-        if (wanted.length) edits.push({ condition: 'coordinate', atom_indices: wanted, enabled: true });
-        void this._batch(edits);
-      }
+      const namesChanged = pose.value !== 'free' && (held.value === 'named' ? names.value.trim() !== (l.heldNames ?? '') : Boolean(l.heldNames));
+      if (namesChanged || pose.value !== now) void this._setLigandPose(c.id, atoms, pose.value, wanted);
     };
     return [
       this._popHead(`Ligand ${l.name}`),
@@ -2068,6 +2064,27 @@ export class DesignPanel {
       note,
       this._popActions(apply),
     ].filter(Boolean);
+  }
+
+  /**
+   * Ligand atoms `atoms` fixed, rigid or free, `held` (all of them, or some named) holding it. Rigid is the body of the
+   * ligand's structure (`_rigidGroup`: a cofactor filed under a rigid target moves with it), as residues are made rigid.
+   */
+  async _setLigandPose(chainId, atoms, mode, held = atoms) {
+    const a = this._inputDoc()?.atoms;
+    const grp = a?.annotations?.condition_CoordinateGroup_1_atom;
+    // Rigid atoms leave their body first; making atoms rigid clears their fixed coordinates.
+    const rigidNow = atoms.filter((i) => Number(grp?.[i]) > 0);
+    if (rigidNow.length && !await this._mutate('/internal-coords', { atom_indices: rigidNow, enabled: false })) return false;
+    if (mode === 'rigid') {
+      if (!await this._batch([{ condition: 'coordinate', atom_indices: atoms, enabled: false }])) return false;
+      if (!await this._mutate('/internal-coords', { atom_indices: held, enabled: true, group_id: this._rigidGroup(chainId) })) return false;
+      // As a rigid residue's: its shape read from its coordinates when the job is built, centred and turned at random.
+      return this._mutate('/internal-coords/clear-targets', { atom_indices: held });
+    }
+    const edits = [{ condition: 'coordinate', atom_indices: atoms, enabled: false }];
+    if (mode === 'fixed') edits.push({ condition: 'coordinate', atom_indices: held, enabled: true });
+    return this._batch(edits);
   }
 
   /** A chain: its name and its place in the job (the order the model reads the chains in). */
@@ -2328,17 +2345,23 @@ export class DesignPanel {
     }
     if (ligandAtoms.length) {
       const nFixed = ligandAtoms.filter(hasCrd).length;
-      const pose = select('Structure', [['fixed', 'fixed'], ['free', 'free']],
-        nFixed === ligandAtoms.length ? 'fixed' : nFixed === 0 ? 'free' : 'mixed');
+      const grp = this._inputDoc()?.atoms?.annotations?.condition_CoordinateGroup_1_atom;
+      const nRigid = ligandAtoms.filter((i) => Number(grp?.[i]) > 0).length;
+      const nowPose = nRigid === ligandAtoms.length ? 'rigid' : nFixed === ligandAtoms.length ? 'fixed'
+        : nFixed === 0 && nRigid === 0 ? 'free' : 'mixed';
+      const pose = select('Structure', [['fixed', 'fixed'], ['rigid', 'rigid'], ['free', 'free']], nowPose);
       // Beside residues, the row names the ligand; alone, it is the ligand's Structure like any other.
       rows.push(row(!hits.length ? 'Structure' : ligNames.length === 1 ? ligNames[0] : 'Ligands', pose));
       const polymerApply = apply;
       apply = async () => {
         done();
-        if (pose.value !== 'mixed') {
-          const fix = pose.value === 'fixed';
-          const want = fix ? nFixed !== ligandAtoms.length : nFixed !== 0;
-          if (want && !await this._batch([{ condition: 'coordinate', atom_indices: ligandAtoms, enabled: fix }])) return;
+        if (pose.value !== 'mixed' && pose.value !== nowPose) {
+          // Each ligand its own: a rigid one joins its own structure's body.
+          const a = this._inputDoc().atoms;
+          for (const chain of new Set(ligandAtoms.map((i) => String(a.chain_id[i])))) {
+            const mine = ligandAtoms.filter((i) => String(a.chain_id[i]) === chain);
+            if (!await this._setLigandPose(chain, mine, pose.value)) return;
+          }
         }
         await polymerApply();
       };
