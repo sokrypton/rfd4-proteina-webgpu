@@ -1075,6 +1075,10 @@ class Rfd4pStudioApp {
       // Refold all, or Stop while refolds run.
       this.els.refoldBtn.onclick = () => { void this._refoldDesigns(null); };
     }
+    for (const field of [this.els.refoldModel, this.els.refoldSeed, this.els.refoldRecycles, this.els.refoldSteps]) {
+      field?.addEventListener('change', () => { void this._refoldSettingsChanged(); });
+      field?.addEventListener('input', () => this._syncRefoldUi());
+    }
 
     if (this.els.downloadAllBtn) {
       this.els.downloadAllBtn.onclick = async () => {
@@ -1204,8 +1208,9 @@ class Rfd4pStudioApp {
       const stop = (fn) => (ev) => { ev.preventDefault(); ev.stopPropagation(); fn(); };
       tr.append(h('td', { class: 'rfd4p-dt-act' },
         isInputRow || this.noRefold ? null : h('button', {
-          type: 'button', class: 'rfd4p-design-act rfd4p-design-refold', text: '↻', disabled: busy,
-          title: 'Refold this design with the settings below (shown again if it was already refolded with them)', 'aria-label': `Refold seed ${this._designName(v)}`,
+          type: 'button', class: 'rfd4p-design-act rfd4p-design-refold', text: '↻', disabled: busy || Boolean(this._refoldWith(v)),
+          title: this._refoldWith(v) ? 'Refolded with the settings below' : 'Refold this design with the settings below',
+          'aria-label': `Refold seed ${this._designName(v)}`,
           onclick: stop(() => { void this._refoldDesigns([sid]); }),
         }),
         h('button', {
@@ -1314,8 +1319,12 @@ class Rfd4pStudioApp {
         fraction = pre.loadedBytes / pre.totalBytes;
       }
       btn.textContent = label;
+      // Only when there is something to fold: every design refolded with these settings leaves it off.
+      const nothing = !this.refoldAbort && !this._refoldPending().length;
+      btn.disabled = nothing;
       btn.title = fetching && !this.refoldAbort
-        ? `Downloading ${pre.name} parameters: first time only, kept for next time` : 'Refold every design not yet refolded with these settings';
+        ? `Downloading ${pre.name} parameters: first time only, kept for next time`
+        : nothing ? 'Every design is refolded with these settings' : 'Refold every design not yet refolded with these settings';
       btn.classList.toggle('rfd4p-running', fraction !== null);
       btn.style.setProperty('--rfd4p-progress', `${(Math.max(0, Math.min(1, fraction ?? 0)) * 100).toFixed(1)}%`);
     }
@@ -1426,13 +1435,10 @@ class Rfd4pStudioApp {
     const model = await this._agreeRefoldTerms(this.els.refoldModel?.value ?? 'af3');
     if (!model) return;
     const name = REFOLD_MODELS[model] ?? model;
-    const seed = Math.max(0, Number.parseInt(this.els.refoldSeed?.value ?? '0', 10) || 0);
-    const recycles = Math.max(0, Number.parseInt(this.els.refoldRecycles?.value ?? '3', 10) || 0);
-    const steps = Math.max(1, Number.parseInt(this.els.refoldSteps?.value ?? '25', 10) || 25);
+    const { seed, recycles, steps } = this._refoldSettings();
     const settings = { seed, recycles, steps };
     const all = (this.runs ?? []).flatMap((r) => r.designs);
     // Refold all skips designs already refolded with these settings: another seed, recycles or steps folds them again.
-    const same = (r) => r.model === model && (r.seed ?? 0) === seed && (r.recycles ?? 0) === recycles && (r.steps ?? 25) === steps;
     // A design refolded before with these settings is not folded again: that refold is shown (its numbers back in the
     // table), and every other refold of it is kept for the zip.
     const asked = (sids ?? all).filter((sid) => this.generatedViews.get(sid)?.pdb);
@@ -1440,7 +1446,7 @@ class Rfd4pStudioApp {
     let shown = null;
     for (const sid of asked) {
       const view = this.generatedViews.get(sid);
-      const kept = view.refolds?.findLast(same);
+      const kept = this._refoldWith(view, { model, seed, recycles, steps });
       if (!kept) todo.push(sid);
       else if (view.refoldShown !== kept) { this._showRefold(view, kept); shown = sid; }
     }
@@ -1539,6 +1545,48 @@ class Rfd4pStudioApp {
       console.error(`Refold of seed ${this._designName(view)} failed:`, err);
       return false;
     }
+  }
+
+  /** The Refold box's settings: model, seed, recycles, diffusion steps. */
+  _refoldSettings() {
+    return {
+      model: this.els.refoldModel?.value ?? 'af3',
+      seed: Math.max(0, Number.parseInt(this.els.refoldSeed?.value ?? '0', 10) || 0),
+      recycles: Math.max(0, Number.parseInt(this.els.refoldRecycles?.value ?? '3', 10) || 0),
+      steps: Math.max(1, Number.parseInt(this.els.refoldSteps?.value ?? '25', 10) || 25),
+    };
+  }
+
+  /** A design's refold made with exactly `settings` (the latest such), if there is one. */
+  _refoldWith(view, { model, seed, recycles, steps } = this._refoldSettings()) {
+    return view?.refolds?.findLast((r) => r.model === model && (r.seed ?? 0) === seed && (r.recycles ?? 0) === recycles
+      && (r.steps ?? 25) === steps);
+  }
+
+  /** The designs (session ids) Refold all would fold: those with no refold made with the settings now in the box. */
+  _refoldPending() {
+    const settings = this._refoldSettings();
+    return (this.runs ?? []).flatMap((r) => r.designs).filter((sid) => {
+      const view = this.generatedViews.get(sid);
+      return view?.pdb && !this._refoldWith(view, settings);
+    });
+  }
+
+  /**
+   * The settings changed: every design refolded with the new ones shows that refold (its numbers, its trace), so going
+   * back to earlier settings brings their results back without a click; the buttons then offer only what is new.
+   */
+  async _refoldSettingsChanged() {
+    let current = false;
+    for (const sid of (this.runs ?? []).flatMap((r) => r.designs)) {
+      const view = this.generatedViews.get(sid);
+      const kept = this._refoldWith(view);
+      if (!kept || view.refoldShown === kept) continue;
+      this._showRefold(view, kept);
+      if (sid === this.studioSessionId) current = true;
+    }
+    this._renderDesigns();
+    if (current) await showDesignOverlays(this.generatedViews.get(this.studioSessionId)?.overlays);
   }
 
   /** Show one of a design's refolds: its numbers in the table, its trace over the design (once the design is shown). */
