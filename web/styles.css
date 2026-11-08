@@ -464,6 +464,12 @@ body.rfd4p-advanced #rfd4p-chain-list,
 body.rfd4p-advanced #rfd4p-design .rfd4p-chain-actions {
   display: none !important;
 }
+/* The card's Undo, Clear and Examples already do what these do. (The card's Undo clicks Studio's #undo, hidden or not.) */
+body.rfd4p-advanced #examples-panel,
+body.rfd4p-advanced #undo,
+body.rfd4p-advanced #close-structure {
+  display: none !important;
+}
 /* A design is a result, not an input: on Outputs Studio's editor goes too, as the card's does. */
 body.rfd4p-advanced:has(#rfd4p-job[data-tab="outputs"]) #atomworks-studio-popover > :not(#rfd4p-studio-card) {
   display: none !important;
