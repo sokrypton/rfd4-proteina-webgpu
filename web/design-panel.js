@@ -11,7 +11,6 @@ import { StudioDoc, createStudioDocWithCcd, getSharedStudioStore, handleStudioAp
 import { isCcdCode, ligandCifFromCcd } from './ligand-ccd.js';
 import { fetchCcdComponents } from '../shared/rfd4p/pipeline/ccd.js';
 
-const ADVANCED_KEY = 'rfd4p-advanced-editor';
 
 /**
  * Start-screen tasks. Each with a `recipe` is built from its PDB entry with the card's own controls, out of sight
@@ -287,7 +286,9 @@ export class DesignPanel {
     this._buildStartStructure();
     this._buildTaskGrid();
     this._bind();
-    this._applyAdvanced(this._readAdvanced());
+    // The Studio editor is off on every load: the card's editor is the page's.
+    this._applyAdvanced(false);
+    try { localStorage.removeItem('rfd4p-advanced-editor'); } catch { /* private mode */ }
     this.render();
   }
 
@@ -714,7 +715,7 @@ export class DesignPanel {
       if (this.showStart && this.closedSession) back();
       else document.getElementById('undo')?.click();
     });
-    els.advanced?.addEventListener('change', () => this._applyAdvanced(els.advanced.checked, true));
+    els.advanced?.addEventListener('change', () => this._applyAdvanced(els.advanced.checked));
     window.addEventListener('atomworks-studio', (ev) => {
       if (ev.detail?.type === 'selection') return;
       queueMicrotask(() => this.render());
@@ -759,16 +760,9 @@ export class DesignPanel {
     }
   }
 
-  _readAdvanced() {
-    try { return localStorage.getItem(ADVANCED_KEY) === '1'; } catch { return false; }
-  }
-
-  _applyAdvanced(on, persist = false) {
+  _applyAdvanced(on) {
     document.body.classList.toggle('rfd4p-advanced', on);
     if (this.els.advanced) this.els.advanced.checked = on;
-    if (persist) {
-      try { localStorage.setItem(ADVANCED_KEY, on ? '1' : '0'); } catch { /* private mode */ }
-    }
   }
 
   _buildTaskGrid() {
