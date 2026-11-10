@@ -5,7 +5,7 @@
  * Studio used to be vendored under studio-src/ and built here, which meant re-applying local patches on every
  * import and keeping a fork of Studio's index.html. The fork was the worse half: Studio looks its elements up by id
  * and throws on a missing one, so a page that had drifted would stop Studio booting outright. Nothing is vendored
- * now — the bundle is a release download, and the page is composed from Studio's own index.html plus the two
+ * now — the bundle comes out of the released PyPI wheel, and the page is composed from Studio's own index.html plus the two
  * fragments this repo owns (web/page/head.html, web/page/card.html).
  *
  *   npm run build:studio                      # the pinned release in studio.json
@@ -34,21 +34,27 @@ function run(cmd, cmdArgs, cwd = ROOT) {
   if (result.status !== 0) throw new Error(`${cmd} ${cmdArgs.join(' ')} failed (${result.status})`);
 }
 
-/** The release tarball, verified against the checksum in studio.json so a build cannot silently change bundle. */
+/**
+ * The released wheel from PyPI, verified against the checksum in studio.json so a build cannot silently change bundle.
+ * Studio ships its browser bundle inside the wheel (annotation_studio/web/), the same files as the GitHub release's
+ * atomworks-studio-web.tar.gz, so the page depends on the package the Spaces install rather than on a second artifact.
+ */
 function downloadBundle() {
-  const url = PIN.bundleUrl.replaceAll('${version}', PIN.version);
+  const meta = JSON.parse(spawnSync('curl', ['-fsSL', `https://pypi.org/pypi/${PIN.package}/${PIN.version}/json`], { encoding: 'utf8' }).stdout || 'null');
+  const file = meta?.urls?.find((entry) => entry.packagetype === 'bdist_wheel');
+  if (!file) throw new Error(`${PIN.package} ${PIN.version} has no wheel on PyPI`);
   const work = mkdtempSync(join(tmpdir(), 'studio-bundle-'));
-  const archive = join(work, 'bundle.tar.gz');
-  run('curl', ['-fsSL', url, '-o', archive], work);
+  const archive = join(work, file.filename);
+  run('curl', ['-fsSL', file.url, '-o', archive], work);
   const digest = createHash('sha256').update(readFileSync(archive)).digest('hex');
   if (PIN.sha256 && PIN.sha256 !== digest) {
-    throw new Error(`${url}\n  expected sha256 ${PIN.sha256}\n  got      sha256 ${digest}`);
+    throw new Error(`${file.url}\n  expected sha256 ${PIN.sha256}\n  got      sha256 ${digest}`);
   }
-  if (!PIN.sha256) console.warn(`studio: no sha256 pinned; downloaded bundle is ${digest}`);
-  const out = join(work, 'bundle');
+  if (!PIN.sha256) console.warn(`studio: no sha256 pinned; downloaded wheel is ${digest}`);
+  const out = join(work, 'wheel');
   mkdirSync(out);
-  run('tar', ['-xzf', archive, '-C', out], work);
-  return out;
+  run('unzip', ['-q', archive, 'annotation_studio/web/*', '-d', out], work);
+  return join(out, 'annotation_studio', 'web');
 }
 
 // An override means the committed site is an unreleased Studio build; rebuilding from the release would quietly drop
