@@ -22,6 +22,15 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const page = readFileSync(join(ROOT, 'index.html'), 'utf8');
 const problems = [];
 
+/**
+ * Tracked files matching these patterns that are actually on disk. `git ls-files` also lists a file that was deleted
+ * from the working tree and not yet staged, which is exactly the state `npm run build:studio` leaves behind when it
+ * swaps one content-hashed bundle for another; reading such a file crashed this check with an unhelpful ENOENT in the
+ * middle of the change it exists to check.
+ */
+const tracked = (...patterns) => execFileSync('git', ['ls-files', ...patterns], { cwd: ROOT, encoding: 'utf8' })
+  .split('\n').filter((file) => file && existsSync(join(ROOT, file)));
+
 // 1 + 2. Everything index.html points at locally must be on disk.
 const refs = new Set();
 for (const m of page.matchAll(/(?:src|href)="(\.\/[^"]+)"/g)) refs.add(m[1]);
@@ -40,8 +49,7 @@ for (const ref of [...refs].sort()) {
 // 2b. Assets a module fetches at runtime through `new URL('...', import.meta.url)`. These never appear in
 // index.html, so nothing above sees them: `web/guide-dialog.js` loads `help/index.html` that way, and a missing
 // guide would fail only when a visitor pressed the button.
-const moduleFiles = execFileSync('git', ['ls-files', 'web/*.js'], { cwd: ROOT, encoding: 'utf8' })
-  .split('\n').filter(Boolean);
+const moduleFiles = tracked('web/*.js');
 for (const f of moduleFiles) {
   const src = readFileSync(join(ROOT, f), 'utf8');
   for (const m of src.matchAll(/new URL\(\s*['"`]([^'"`]+)['"`]\s*,\s*import\.meta\.url\s*\)/g)) {
@@ -57,10 +65,8 @@ for (const f of moduleFiles) {
 }
 
 // 3. The Studio bridge.
-const bundles = execFileSync('git', ['ls-files', 'assets/*.js'], { cwd: ROOT, encoding: 'utf8' })
-  .split('\n').filter(Boolean).map((f) => readFileSync(join(ROOT, f), 'utf8')).join('\n');
-const ourFiles = execFileSync('git', ['ls-files', 'web/*.js', 'tools/*.mjs', 'tools/gpu/*.js'], { cwd: ROOT, encoding: 'utf8' })
-  .split('\n').filter(Boolean);
+const bundles = tracked('assets/*.js').map((f) => readFileSync(join(ROOT, f), 'utf8')).join('\n');
+const ourFiles = tracked('web/*.js', 'tools/*.mjs', 'tools/gpu/*.js');
 
 // Comments are prose, not calls: a note naming a retired global must not read as a use of it.
 const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
