@@ -3,9 +3,11 @@
 
     python tools/oracle/af3_refold_input.py design.cif refold-input.cif [--template-query "sa_mask('C_CRD') & ~is_nucleic_acid"]
 
-Needs RFD4-Proteina and its AtomWorks (rfd4-proteina on PYTHONPATH, atomworks==3.0.4: the version its pin resolves to
+Needs RFD4-Proteina (`pip install rfd4-proteina`) and its AtomWorks (atomworks==3.0.4: the version its pin resolves to
 and the one that has `to_cif_string`). Nothing is re-derived here. The design is parsed the way `evaluate.py` parses
-one and handed to `AF3Oracle._build_manifest`, which is what builds the input AF3 folds in the oracle: the design's CIF
+one and handed to RFD4's own construction of the input AF3 folds: `rfproteina.af3.af3_input.build_af3_input` where the
+installed RFD4-Proteina has it (RosettaCommons/RFD4-Proteina#96 made it public), else `AF3Oracle._build_manifest`,
+which it was before. Either way it is the oracle's code, and builds: the design's CIF
 with its chains disambiguated and its covalent modifiers renamed, a *user CCD* defining every non-standard residue and
 ligand from the design's own atoms and bonds, and templates where the oracle's `template_query` selects atoms. This
 file is those parts in one text, so a refold needs nothing else:
@@ -54,17 +56,25 @@ def main() -> None:
     args = ap.parse_args()
 
     from atomworks.io.parser import parse
-    from rfproteina.metrics.oracles.af3_oracle import AF3Oracle
-    from rfproteina.metrics.oracles.oracle_metric import OracleJobInput
     from rfproteina.utils.parse_presets import STANDARD_ANNOTATIONS_ONLY
 
     atom_array = parse(args.design, config=STANDARD_ANNOTATIONS_ONLY)["assemblies"]["1"][0]
-    oracle = AF3Oracle(template_query=args.template_query)
     name = args.name or args.design.stem
-    with tempfile.TemporaryDirectory() as tmp:
-        job = OracleJobInput(atom_array=atom_array, example_id=name, out_dir=Path(tmp))
-        entries, _ = oracle._build_manifest([job], Path(tmp))
-    args.out.write_text(refold_input_text(entries[0]))
+    try:
+        from rfproteina.af3.af3_input import build_af3_input
+    except ImportError:  # an RFD4-Proteina from before the construction was public: the oracle's private method
+        from rfproteina.metrics.oracles.af3_oracle import AF3Oracle
+        from rfproteina.metrics.oracles.oracle_metric import OracleJobInput
+
+        oracle = AF3Oracle(template_query=args.template_query)
+        with tempfile.TemporaryDirectory() as tmp:
+            job = OracleJobInput(atom_array=atom_array, example_id=name, out_dir=Path(tmp))
+            entries, _ = oracle._build_manifest([job], Path(tmp))
+        entry = entries[0]
+    else:
+        af3_input = build_af3_input(atom_array, name, template_query=args.template_query)
+        entry = {"cif": af3_input.cif, "user_ccd": af3_input.user_ccd, "template": af3_input.template}
+    args.out.write_text(refold_input_text(entry))
     print(f"{args.out}: {args.out.stat().st_size} bytes, {len(blocks_of(args.out.read_text()))} blocks")
 
 
