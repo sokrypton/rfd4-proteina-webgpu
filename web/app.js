@@ -37,6 +37,7 @@ import {
   installStudioApiInterceptor,
 } from './studio-api.js';
 import { DesignPanel } from './design-panel.js';
+import { refoldDesign } from './refold-design.js';
 import { webgl2Available } from '../webgl/rfd4p/gl.js';
 import { Rfd4pModelGL } from '../webgl/rfd4p/model.js';
 import { openGuide } from './guide-dialog.js';
@@ -1522,8 +1523,8 @@ class Rfd4pStudioApp {
     const view = this.generatedViews.get(sid);
     const name = REFOLD_MODELS[model] ?? model;
     try {
-      const result = await lf.refoldDesign({
-        pdb: view.pdb, chain: view.designedChains, model, device: this.gpuDevice, seed, recycles, steps, signal: abort.signal,
+      const result = await refoldDesign(lf, {
+        pdb: view.pdb, cif: view.cif, chain: view.designedChains, model, device: this.gpuDevice, seed, recycles, steps, signal: abort.signal,
         ...(this.gpuDevice ? {} : { backend: 'webgl2' }),
         partial: view.partialTemplates ?? [],
         status: (text) => status(text.replace(/^refolding with \S+( · )?/, '') || `refolding with ${name}`),
