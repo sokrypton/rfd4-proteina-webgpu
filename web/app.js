@@ -38,6 +38,7 @@ import {
 } from './studio-api.js';
 import { DesignPanel } from './design-panel.js';
 import { refoldDesign } from './refold-design.js';
+import { motifAtomsOf, motifRmsds } from './motif-metrics.js';
 import { webgl2Available } from '../webgl/rfd4p/gl.js';
 import { Rfd4pModelGL } from '../webgl/rfd4p/model.js';
 import { openGuide } from './guide-dialog.js';
@@ -1529,10 +1530,12 @@ class Rfd4pStudioApp {
         partial: view.partialTemplates ?? [],
         status: (text) => status(text.replace(/^refolding with \S+( · )?/, '') || `refolding with ${name}`),
       });
-      const metrics = refoldMetrics(result, view.designedChains, view.pdb);
+      const motif = motifRmsds(view.pdb, result.refold, view.motifAtoms, view.designedChains);
+      const metrics = { ...refoldMetrics(result, view.designedChains, view.pdb), motifRmsd: motif?.motifRmsd ?? NaN,
+        motifBackboneRmsd: motif?.motifBackboneRmsd ?? NaN };
       const record = {
         model, seed, recycles, steps, pdb: result.refold, cif: pdbToCif(result.refold), rmsd: result.rmsd, confidence: result.confidence,
-        templated: result.templated, partial: result.partial, text: describeRefold(model, result, view.designedChains, view.partialTemplates ?? []),
+        templated: result.templated, partial: result.partial, text: describeRefold(model, result, view.designedChains, view.partialTemplates ?? [], motif),
         metrics, pass: passes(metrics, view.kind),
       };
       (view.refolds ??= []).push(record);
@@ -1932,6 +1935,8 @@ class Rfd4pStudioApp {
           partialTemplates: partialTemplates(result.structure?.atoms ?? [], designed),
           // Where the motif residues are, so a refold's view can show its side chains there too.
           motifSlots: motifSlots(result.structure?.atoms ?? [], motifSideChainAtoms(result.structure?.atoms ?? [], unmodelled)),
+          // ...and which of their atoms the run held, for the motif RMSDs a refold reports.
+          motifAtoms: motifAtomsOf(result.structure?.atoms ?? [], motifSlots(result.structure?.atoms ?? [], motifSideChainAtoms(result.structure?.atoms ?? [], unmodelled))),
           refoldText: null,
           // For "Save results": which design, how it ran, and every refold made of it.
           designIndex,

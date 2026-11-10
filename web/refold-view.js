@@ -208,7 +208,7 @@ export function partialTemplates(designAtoms, chains, minFraction = 0.5) {
 }
 
 /** One line for a refold result: RMSD to the design, then the model's own confidence. */
-export function describeRefold(model, result, chains, partial = []) {
+export function describeRefold(model, result, chains, partial = [], motif = null) {
   const name = REFOLD_MODELS[model] ?? model;
   const c = result.confidence ?? {};
   const parts = [];
@@ -227,6 +227,11 @@ export function describeRefold(model, result, chains, partial = []) {
   if (Number.isFinite(c.meanPlddt)) parts.push(`pLDDT ${c.meanPlddt.toFixed(0)}`);
   if (Number.isFinite(c.ptm)) parts.push(`pTM ${c.ptm.toFixed(2)}`);
   if (Number.isFinite(c.iptm)) parts.push(`ipTM ${c.iptm.toFixed(2)}`);
+  // The motif put back: fitted on itself, then fitted on the designed backbone (see motif-metrics.js)
+  if (motif && Number.isFinite(motif.motifRmsd)) {
+    parts.push(`motif ${motif.motifRmsd.toFixed(2)} Å`
+      + (Number.isFinite(motif.motifBackboneRmsd) ? ` (${motif.motifBackboneRmsd.toFixed(2)} Å on the backbone)` : ''));
+  }
   for (const p of partial) parts.push(`chain ${p.chain} templated on ${p.residues.length}/${p.of} kept residues`);
   return `${name} refold: ${parts.join(' · ') || 'done'}`;
 }
@@ -301,7 +306,8 @@ export function refoldMetrics(result, designed, designPdb) {
 
 /**
  * Upstream's pass criteria for the jobs whose every number a refold here measures. Motif, enzyme and small-molecule
- * criteria also need motif and ligand RMSDs this page does not compute, so those jobs show numbers but no verdict.
+ * criteria also need ligand RMSDs and thresholds this page does not apply, so those jobs show numbers (the motif RMSDs
+ * among them: motif-metrics.js) but no verdict.
  */
 export const PASS_CRITERIA = {
   // unconditional: refolded backbone RMSD ≤ 1.5 Å

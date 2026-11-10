@@ -155,3 +155,9 @@ test('a refold is scored as upstream\'s pass criteria read it', async () => {
   assert.ok(Number.isNaN(mono.minIpae));
   assert.equal(passes(mono, 'monomer'), true);
 });
+
+test('describeRefold says how the motif was put back, fitted on itself and fitted on the backbone', () => {
+  const line = describeRefold('openbind0', { rmsd: 1.1, confidence: { meanPlddt: 92 } }, ['A'], [], { motifRmsd: 0.62, motifBackboneRmsd: 1.9 });
+  assert.match(line, /motif 0\.62 Å \(1\.90 Å on the backbone\)/);
+  assert.ok(!/motif/.test(describeRefold('openbind0', { rmsd: 1.1, confidence: {} }, ['A'])), 'no motif, no words about one');
+});
