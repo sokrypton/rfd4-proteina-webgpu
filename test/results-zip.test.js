@@ -49,3 +49,24 @@ test('without AlphaFold 3 refolds the README carries no AlphaFold 3 terms', () =
   assert.ok(!/AlphaFold 3/.test(files.find((f) => f.name === 'README.txt').text));
   assert.ok(!files.some((f) => f.name === 'input.cif'));
 });
+
+test('a refold kept by Studio\'s Refold panel is saved as the page always saved one', async () => {
+  const { refoldRecordForZip } = await import('../web/refold-provider.js');
+  // What the panel hands back for a design (`panel.records(id)`): its settings and result, the page's extras in `data`.
+  const record = {
+    model: 'openbind0', modelLabel: 'OpenBind-0', seed: 3, recycles: 3, steps: 25, cif: 'data_overlay', pass: true,
+    metrics: { rmsd: 1.1, placedRmsd: NaN, plddt: 91, minIpae: 1.4 }, text: 'OpenBind-0 refold: 1.10 Å',
+    data: { pdb: 'ATOM', cif: 'data_refold', rmsd: 1.1, confidence: { meanPlddt: 91, ptm: 0.9 }, templated: ['A'], partial: [] },
+  };
+  const files = resultsFiles({
+    input: null,
+    designs: [{ index: 1, label: 'seed 3', seed: 3, cif: 'data_d', pdb: null, designedChains: ['B'], refolds: [refoldRecordForZip(record)] }],
+    generatedAt: '2026-11-11T00:00:00Z',
+  });
+  assert.ok(files.some((f) => f.name === 'design-1-refold-openbind0.cif' && f.text === 'data_refold'), 'the refold itself, not the overlay');
+  const summary = JSON.parse(files.find((f) => f.name === 'summary.json').text);
+  const [refold] = summary.designs[0].refolds;
+  assert.deepEqual([refold.model_name, refold.seed, refold.recycles, refold.steps], ['OpenBind-0', 3, 3, 25]);
+  assert.deepEqual([refold.rmsd_designed_chain, refold.plddt, refold.ptm, refold.min_ipae, refold.passes], [1.1, 91, 0.9, 1.4, true]);
+  assert.deepEqual(refold.templated_chains, ['A']);
+});

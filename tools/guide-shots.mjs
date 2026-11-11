@@ -151,9 +151,10 @@ const SCENES = {
       for (let i = 0; i < 400 && !app.activeAbortController; i++) await sleep(50);
       for (let i = 0; i < 12000 && app.activeAbortController; i++) await sleep(100);
       await sleep(1500);
-      d.getElementById('rfd4p-refold-model').value = 'openbind0';
-      d.getElementById('rfd4p-refold-btn').click(); await sleep(500);
-      for (let i = 0; i < 12000 && app.refoldAbort; i++) await sleep(100);
+      d.getElementById('refold-model').value = 'openbind0';
+      d.getElementById('refold-model').dispatchEvent(new w.Event('change', { bubbles: true }));
+      d.getElementById('refold-btn').click(); await sleep(500);
+      for (let i = 0; i < 12000 && app.refoldPanel.session.isRunning; i++) await sleep(100);
       await sleep(3000);
     }`);
     await shot('designs', await around(['#rfd4p-job']));

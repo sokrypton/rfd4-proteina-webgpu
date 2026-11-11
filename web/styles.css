@@ -31,6 +31,9 @@ body.studio-fullscreen-body {
   --rfd4p-box-border: #3a3c42;
   --rfd4p-sunk: #1a1b1e;
   --rfd4p-hover: rgba(255, 255, 255, 0.05);
+  /* Studio's Refold panel (its table and Refold box) sits on the same surfaces as the rest of the card. */
+  --refold-sunk: var(--rfd4p-sunk);
+  --refold-hover: var(--rfd4p-hover);
 }
 body:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]),
 :root:is([data-host-theme="light"], [data-host-theme="high-contrast-light"]) {
@@ -731,68 +734,16 @@ body.rfd4p-advanced:has(#rfd4p-job[data-tab="outputs"]) #atomworks-studio-popove
 /* Studio's own example cards: this site drives the task choice from the RFD4-Proteina card instead. */
 #example-cards { display: none; }
 
-/* Refold a finished design (web/refold-view.js). */
-.rfd4p-refold {
-  display: grid;
-  gap: 4px;
-}
 
-.rfd4p-refold-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
 
-.rfd4p-refold-label {
-  font-size: 11.5px;
-  color: var(--text-muted, #b1b3b9);
-  white-space: nowrap;
-}
 
-.rfd4p-refold-model {
-  flex: 1 1 auto;
-  min-width: 0;
-}
 
-.rfd4p-refold-result {
-  margin: 0;
-  font-size: 11.5px;
-  line-height: 1.35;
-}
 
-.rfd4p-refold-result.error {
-  color: var(--danger, #d55e5e);
-}
 
-.rfd4p-refold-terms {
-  max-width: min(440px, calc(100vw - 32px));
-  border: 1px solid var(--border, #383a3f);
-  border-radius: 8px;
-  background: var(--surface-panel, #222326);
-  color: inherit;
-  padding: 16px;
-}
 
-.rfd4p-refold-terms::backdrop {
-  background: rgb(0 0 0 / 0.5);
-}
 
-.rfd4p-refold-terms h2 {
-  margin: 0 0 8px;
-  font-size: 15px;
-}
 
-.rfd4p-refold-terms p {
-  margin: 0 0 8px;
-  font-size: 12.5px;
-  line-height: 1.45;
-}
 
-.rfd4p-refold-terms .button-row {
-  flex-wrap: wrap;
-  margin-top: 12px;
-}
 
 /* One renderer (Mol*) is offered, so Studio's "Backend" menu (renderer choice) has nothing to choose. */
 .viewer-menu[data-menu="overflow"],
@@ -1083,33 +1034,6 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 }
 #rfd4p-studio-card.rfd4p-starting .rfd4p-dtab:not(:first-child) { opacity: 0.45; pointer-events: none; border-color: transparent; color: var(--text-muted, #b1b3b9); }
 
-/* The Designs table (web/app.js _renderDesigns): one row a design, its refold's numbers, sortable by column. */
-/* "Designs", its tables, then the Refold box: everything refolding takes, in one bordered square. */
-/* Inside Designs, the Refold box is tinted rather than bordered: part of that section, not a section of its own. */
-.rfd4p-refold-box { display: grid; gap: 6px; padding: 8px; border-radius: 6px; background: var(--rfd4p-sunk); }
-.rfd4p-refold-box > strong { font-size: 12px; }
-.rfd4p-refold-grid { display: grid; grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr)); gap: 6px; }
-.rfd4p-refold-grid label { display: grid; gap: 2px; margin: 0; font-size: 10.5px; color: var(--text-muted, #b1b3b9); }
-.rfd4p-refold-grid select, .rfd4p-refold-grid input { width: 100%; min-width: 0; height: 26px; padding: 2px 4px; font-size: 11.5px; }
-.rfd4p-refold-box #rfd4p-refold-btn { justify-self: stretch; }
-.rfd4p-designs { display: grid; gap: 4px; font-size: 11.5px; }
-/* One table per run: header labels over right-aligned numbers, the name taking the rest of the width. */
-.rfd4p-dtable { width: 100%; border-collapse: separate; border-spacing: 0; }
-.rfd4p-dtable th { padding: 2px 4px; font-size: 10.5px; font-weight: 500; color: var(--text-muted, #b1b3b9); text-align: right; white-space: nowrap; }
-.rfd4p-dtable td { padding: 3px 4px; white-space: nowrap; border-top: 1px solid transparent; border-bottom: 1px solid transparent; }
-.rfd4p-dtable td:first-child { border-left: 1px solid transparent; border-radius: 4px 0 0 4px; }
-.rfd4p-dtable td:last-child { border-right: 1px solid transparent; border-radius: 0 4px 4px 0; }
-.rfd4p-dtable .rfd4p-dt-name { width: 100%; text-align: left; }
-.rfd4p-dtable .rfd4p-dt-name label { display: block; margin: 0; cursor: pointer; }
-.rfd4p-dtable .rfd4p-dt-name input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.rfd4p-dtable .rfd4p-dt-num { text-align: right; font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; }
-.rfd4p-dtable th.rfd4p-dt-num { font-family: inherit; font-size: 10.5px; }
-.rfd4p-dtable .rfd4p-dt-state { text-align: right; color: var(--text-muted, #b1b3b9); font-style: italic; }
-.rfd4p-dtable .rfd4p-dt-act { text-align: right; }
-.rfd4p-dtable tbody tr { cursor: pointer; }
-.rfd4p-dtable tbody tr:hover td { background: var(--rfd4p-hover); }
-/* Selected: the outline every view uses for a selection. */
-.rfd4p-dtable tbody tr:has(input:checked) td { border-color: var(--text, #ededef); }
 /* The job box: Input (the design) and Outputs (the designs) under tabs, one shown at a time; empty, not drawn. */
 .rfd4p-job > .rfd4p-design { display: grid; gap: 8px; }
 .rfd4p-job > .rfd4p-design[hidden], .rfd4p-job > #design-results[hidden] { display: none; }
@@ -1133,30 +1057,8 @@ body.rfd4p-building .rfd4p-piece-pop { visibility: hidden; }
 #rfd4p-studio-card .rfd4p-dtab.is-on {
   color: var(--text, #ededef); border-color: var(--border, #383a3f); border-bottom-color: var(--rfd4p-box);
 }
-/* A list: framed, a line under the header and between rows (shadows, so the selection's border stays its own). */
-.rfd4p-dtable { border: 1px solid var(--border, #383a3f); border-radius: 5px; background: var(--rfd4p-sunk); }
-.rfd4p-dtable th { padding: 4px; box-shadow: inset 0 -1px 0 var(--border, #383a3f); }
-.rfd4p-dtable td { padding: 4px; }
-.rfd4p-dtable tbody tr + tr td { box-shadow: inset 0 1px 0 var(--border, #383a3f); }
-.rfd4p-dtable td:first-child, .rfd4p-dtable td:last-child { border-radius: 0; }
-.rfd4p-dtable tbody tr:has(input:checked) td, .rfd4p-dtable tbody tr:has(input:checked) + tr td { box-shadow: none; }
-#rfd4p-studio-card .rfd4p-design-sort {
-  min-height: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; white-space: nowrap;
-}
-#rfd4p-studio-card .rfd4p-design-sort.is-sorted { color: var(--text, #ededef); }
-#rfd4p-studio-card .rfd4p-design-act {
-  min-height: 0; padding: 0 3px; border: 0; background: none; color: var(--text-muted, #b1b3b9); font-size: 15px; line-height: 1; cursor: pointer;
-}
-#rfd4p-studio-card .rfd4p-design-act:hover:not(:disabled) { color: var(--text, #ededef); }
-#rfd4p-studio-card .rfd4p-design-refold { font-size: 17px; }
 .rfd4p-run > summary { margin: 4px 0 2px; font-size: 11px; color: var(--text-muted, #b1b3b9); cursor: pointer; }
-.rfd4p-designs-busy .rfd4p-dtable tbody tr,
-.rfd4p-designs-busy .rfd4p-design-sort { pointer-events: none; opacity: 0.6; }
 
-/* A run's progress fills its button (Stop, while it runs). */
-/* Refold all is also the refolds' progress (and the parameters' download): one line, cut with an ellipsis. */
-#rfd4p-studio-card #rfd4p-refold-btn { display: block; width: 100%; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-#rfd4p-studio-card #rfd4p-refold-btn.rfd4p-running,
 #rfd4p-studio-card .rfd4p-generate-btn.rfd4p-running {
   background: linear-gradient(90deg, var(--accent-soft, #26354c) var(--rfd4p-progress, 0%),
     var(--surface-recessed, #191a1c) var(--rfd4p-progress, 0%));

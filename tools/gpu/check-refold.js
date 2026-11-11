@@ -2,8 +2,11 @@
  * Refolding a finished design, end to end: run a design, refold it, and check the result the page shows.
  *
  * Uses OpenBind-0 (Apache-2.0) rather than AlphaFold 3 on purpose. AF3's parameters carry Google DeepMind's terms,
- * which `_agreeRefoldTerms` puts behind a dialog a person has to accept; a gate must not click through that.
- * `_agreeRefoldTerms` returns any non-`af3` model untouched, so this path is the same one minus the agreement.
+ * which Studio's Refold panel puts behind a dialog a person has to accept; a gate must not click through that.
+ * The panel settles terms only for a model that has them, so this path is the same one minus the agreement.
+ *
+ * The Refold panel is Studio's (window.atomworksStudio.mountRefoldPanel, mounted by web/app.js); the fold is this page's
+ * (web/refold-provider.js). This drives the panel the way a person does, by its controls, and reads what it kept.
  *
  * The weight bundle is ~265 MiB from HuggingFace on a cold Cache API, so give this a long timeout:
  *   LOCALFOLD_STOCK_FLAGS=1 LOCALFOLD_GPU_TIMEOUT_MS=2400000 node tools/gpu-chrome.mjs tools/gpu/check-refold.js
@@ -61,30 +64,36 @@ export async function main(device, args = []) {
   const designMs = Math.round(performance.now() - tD);
   if (!app.lastResult?.cif) throw new Error(`design failed: ${app.els.statusMessage.textContent.slice(0, 200)}`);
 
-  if (opt['refold-recycles']) doc.getElementById('rfd4p-refold-recycles').value = opt['refold-recycles'];
-  if (opt['refold-steps']) {
-    const steps = doc.getElementById('rfd4p-refold-steps');
-    if (![...steps.options].some((o) => o.value === opt['refold-steps'])) steps.append(new win.Option(opt['refold-steps'], opt['refold-steps']));
-    steps.value = opt['refold-steps'];
-  }
-  const panel = doc.getElementById('rfd4p-refold');
-  const select = doc.getElementById('rfd4p-refold-model');
-  const result = doc.getElementById('rfd4p-refold-result');
+  // The panel reads its fields when they change, as a person's edit does, so set each one the way a person would.
+  const choose = (id, value) => {
+    const field = doc.getElementById(id);
+    if (field.tagName === 'SELECT' && ![...field.options].some((o) => o.value === String(value))) {
+      throw new Error(`${id} does not offer ${value} (have ${[...field.options].map((o) => o.value)})`);
+    }
+    field.value = String(value);
+    field.dispatchEvent(new win.Event('input', { bubbles: true }));
+    field.dispatchEvent(new win.Event('change', { bubbles: true }));
+  };
+  if (opt['refold-recycles']) choose('refold-recycles', opt['refold-recycles']);
+  if (opt['refold-steps']) choose('refold-steps', opt['refold-steps']);
+  const panel = doc.getElementById('refold-box');
+  const select = doc.getElementById('refold-model');
+  const result = doc.getElementById('refold-result');
   if (!panel || !select || !result) throw new Error('refold controls are missing from the page');
   if (panel.hidden) throw new Error('refold panel stayed hidden after a design finished');
   const offered = [...select.options].map((o) => o.value);
   if (!offered.includes(model)) throw new Error(`refold model ${model} is not offered (have ${offered})`);
-  select.value = model;
+  choose('refold-model', model);
 
   // The terms dialog must not appear for a non-AF3 model; if it does, this run would be agreeing to something.
-  const terms = doc.getElementById('rfd4p-refold-terms');
+  const terms = doc.getElementById('refold-terms');
   const tR = performance.now();
   // The longest the page's thread was held during the refold: a 20 ms timer's worst late tick.
   let lastTick = performance.now();
   let longestStallMs = 0;
   // ...and where the long ones fell: the refold's status line either side of each.
   const stalls = [];
-  const statusNow = () => (doc.getElementById('rfd4p-refold-btn')?.textContent ?? '').trim().slice(0, 60);
+  const statusNow = () => (doc.getElementById('refold-btn')?.textContent ?? '').trim().slice(0, 60);
   let lastStatus = statusNow();
   const ticker = win.setInterval(() => {
     const now = performance.now();
@@ -95,7 +104,7 @@ export async function main(device, args = []) {
     lastStatus = status;
     lastTick = now;
   }, 20);
-  const refolding = app._refoldDesigns(null);
+  const refolding = app.refoldPanel.refold();
   await sleep(500);
   if (terms?.open) { terms.close(); throw new Error(`the AF3 terms dialog opened for model ${model}`); }
   await refolding;
@@ -105,24 +114,27 @@ export async function main(device, args = []) {
   const text = (result.textContent ?? '').trim();
   // The status line can read well while nothing was recorded, so check the view the page actually keeps.
   const view = app.generatedViews?.get(app.studioSessionId) ?? null;
-  const refolds = view?.refolds ?? [];
-  if (app.refoldAbort !== null) throw new Error('refold left an abort controller behind');
+  const toRecord = (r) => ({ ...r, ...r.data });   // the page's own extras (pdb, confidence, ...) ride in `data`
+  const refolds = (app.refoldPanel.records(app.studioSessionId) ?? []).map(toRecord);
+  if (app.refoldPanel.session.isRunning) throw new Error('refold left a run behind');
   if (refolds.length !== 1) {
     throw new Error(`expected one recorded refold, got ${refolds.length}: ${text || '(no failure line)'}; errors: ${errors.slice(0, 4).join(' | ')}`);
   }
   const [refold] = refolds;
+  if (!refold.cif) throw new Error('recorded refold carries no overlay');
   if (refold.model !== model) throw new Error(`recorded refold is ${refold.model}, not ${model}`);
   if (!refold.pdb || !refold.cif) throw new Error('recorded refold carries no structure');
   if (!Number.isFinite(refold.rmsd)) throw new Error(`recorded refold has no RMSD: ${refold.rmsd}`);
-  if (!view?.overlays?.refold?.cif) throw new Error('the refold overlay was not handed to the viewer');
-  // The line under the Refold box is for failures only (`_syncRefoldUi`); the refold's own summary is its record's.
+  // The refold is drawn over the design on show: Studio's viewer counts the atoms of each overlay it draws.
+  const overlayAtoms = Number(doc.getElementById('viewer')?.dataset.overlay_refold ?? 0);
+  if (!(overlayAtoms > 0)) throw new Error('the refold overlay was not drawn in the viewer');
+  // The line under the Refold box is for failures only; the refold's own summary is its record's.
   if (!result.hidden && text) throw new Error(`refold failed: ${text}`);
 
   // `--again=1`: a second refold (another seed) with the weights resident and the programs built.
   let again;
   if (opt.again === '1') {
-    doc.getElementById('rfd4p-refold-seed').value = '1';
-    doc.getElementById('rfd4p-refold-seed').dispatchEvent(new win.Event('change', { bubbles: true }));
+    choose('refold-seed', 1);
     longestStallMs = 0;
     lastTick = performance.now();
     const t2 = performance.now();
@@ -137,9 +149,9 @@ export async function main(device, args = []) {
       lastStatus2 = status;
       lastTick = now;
     }, 20);
-    await app._refoldDesigns(null);
+    await app.refoldPanel.refold();
     win.clearInterval(tick2);
-    again = { refoldMs: Math.round(performance.now() - t2), longestStallMs: Math.round(longestStallMs), stalls: stalls2.slice(0, 12), refolds: view.refolds.length };
+    again = { refoldMs: Math.round(performance.now() - t2), longestStallMs: Math.round(longestStallMs), stalls: stalls2.slice(0, 12), refolds: app.refoldPanel.records(app.studioSessionId).length };
   }
   // Is either structure a chain at all? Consecutive Cα spacing (3.8 Å in a protein), design and refold.
   const caSpacing = (pdb) => {
@@ -165,6 +177,6 @@ export async function main(device, args = []) {
     confidence: Object.fromEntries(Object.entries(refold.confidence ?? {})
       .filter(([, v]) => typeof v === 'number')),
     templated: refold.templated ?? null,
-    overlayChars: view.overlays.refold.cif.length,
+    overlayAtoms,
   };
 }

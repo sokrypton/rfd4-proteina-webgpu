@@ -37,16 +37,13 @@ import {
   installStudioApiInterceptor,
 } from './studio-api.js';
 import { DesignPanel } from './design-panel.js';
-import { refoldDesign } from './refold-design.js';
-import { motifAtomsOf, motifRmsds } from './motif-metrics.js';
+import { createLocalFoldProvider, refoldRecordForZip, refoldTermsStorage } from './refold-provider.js';
+import { motifAtomsOf } from './motif-metrics.js';
 import { webgl2Available } from '../webgl/rfd4p/gl.js';
 import { Rfd4pModelGL } from '../webgl/rfd4p/model.js';
 import { openGuide } from './guide-dialog.js';
 import { resultsFiles } from './results-zip.js';
-import {
-  REFOLD_MODELS, criteriaKind, describeRefold, designedChains, motifSlots, partialTemplates, passes, pdbToCif,
-  polymerChains, refoldLigandCif, refoldMetrics, refoldOverlayCif,
-} from './refold-view.js';
+import { criteriaKind, designedChains, motifSlots, partialTemplates, polymerChains } from './refold-view.js';
 
 /** An element: attributes (`text`, `class`, `style`, `on…` handlers; null or false left out), then its children. */
 const h = (tag, attrs = {}, ...children) => {
@@ -327,16 +324,7 @@ async function showDesignOverlays(overlays) {
     label: 'Motif (reference)', alpha: 0.35, color: 0xe2e8f0, sizeAspectRatio: 0.6,
   });
   await window.atomworksStudio?.setOverlay('sideChains', overlays?.sideChains ?? null, { label: 'Motif side chains' });
-  // A refold's designed chains as a magenta cartoon over the design (web/refold-view.js); magenta is in no chain
-  // colour, so it reads against any binder. `representation` needs Studio with RosettaCommons/atomworks-studio#29
-  // (studio.json `override`); a Studio without it draws ball-and-stick instead.
-  await window.atomworksStudio?.setOverlay('refold', overlays?.refold?.cif ?? null, {
-    label: overlays?.refold?.label ?? 'Refold', color: 0xe040fb, alpha: 0.75, representation: 'cartoon',
-  });
-  // Its ligands, where the refold put them, in the same magenta: a cartoon draws polymers only.
-  await window.atomworksStudio?.setOverlay('refoldLigands', overlays?.refold?.ligandCif ?? null, {
-    label: `${overlays?.refold?.label ?? 'Refold'} ligands`, color: 0xe040fb, sizeAspectRatio: 0.6,
-  });
+  // A refold's own overlays (a magenta cartoon, its ligands) are Studio's Refold panel's, drawn when a design is shown.
 }
 
 /** `_entity` loop for `atoms`: the given entity ids are `non-polymer` (drawn as sticks), the rest as before. */
@@ -568,17 +556,9 @@ class Rfd4pStudioApp {
       designResultsRow: document.getElementById('design-results'),
       jobBox: document.getElementById('rfd4p-job'),
       jobTabs: document.getElementById('rfd4p-tabs'),
-      designViewRadios: document.getElementById('design-view-radios'),
+      refoldMount: document.getElementById('rfd4p-refold-mount'),
       downloadsBox: document.getElementById('downloads'),
       downloadAllBtn: document.getElementById('download-all-btn'),
-      refoldBox: document.getElementById('rfd4p-refold'),
-      refoldModel: document.getElementById('rfd4p-refold-model'),
-      refoldSeed: document.getElementById('rfd4p-refold-seed'),
-      refoldRecycles: document.getElementById('rfd4p-refold-recycles'),
-      refoldSteps: document.getElementById('rfd4p-refold-steps'),
-      refoldBtn: document.getElementById('rfd4p-refold-btn'),
-      refoldResult: document.getElementById('rfd4p-refold-result'),
-      refoldTerms: document.getElementById('rfd4p-refold-terms'),
       webgpuBadge: document.getElementById('webgpu-badge'),
     };
   }
@@ -746,7 +726,8 @@ class Rfd4pStudioApp {
         const sid = event.data.session_id;
         if (sid) {
           this.studioSessionId = sid;
-          this._syncRefoldUi();
+          // Studio showed another document: the refold drawn over the last design goes, or the new design's comes.
+          void this.refoldPanel?.setSelected(sid);
           const isExplicitChange = event.data.type === 'changed' || event.data.type === 'example';
           if (isExplicitChange || !this.generatedViews.has(sid) || this.generatedViews.get(sid)?.isInput) {
             const previousInput = this.inputSessionId;
@@ -786,6 +767,8 @@ class Rfd4pStudioApp {
       await window.atomworksStudio?.openSession(sessionId, trajUrl ? { trajectoryUrl: trajUrl } : undefined);
       // Display-only reference motif and motif side chains beside a finished design (not part of the saved document).
       await showDesignOverlays(this.generatedViews.get(sessionId)?.overlays);
+      // ...and, if it has one, the design's refold over it (Studio's Refold panel draws it).
+      await this.refoldPanel?.setSelected(sessionId);
       this.designPanel?.showHotspots();
     } catch (err) {
       console.warn('Motif overlay failed:', err);
@@ -1075,34 +1058,9 @@ class Rfd4pStudioApp {
       };
     }
 
-    if (this.els.refoldBtn) {
-      // Refold all, or Stop while refolds run.
-      this.els.refoldBtn.onclick = () => { void this._refoldDesigns(null); };
-    }
-    for (const field of [this.els.refoldModel, this.els.refoldSeed, this.els.refoldRecycles, this.els.refoldSteps]) {
-      field?.addEventListener('change', () => { void this._refoldSettingsChanged(); });
-      field?.addEventListener('input', () => this._syncRefoldUi());
-    }
-
     if (this.els.downloadAllBtn) {
       this.els.downloadAllBtn.onclick = async () => {
         await this._saveResults();
-      };
-    }
-
-    if (this.els.designViewRadios) {
-      this.els.designViewRadios.onchange = (e) => {
-        const input = e.target;
-        if (input && input.name === 'design-view-radio' && input.checked) {
-          const sid = input.value;
-          this.studioSessionId = sid;
-          if (sid !== this.inputSessionId) this.lastDesignSid = sid;
-          this._syncRefoldUi();
-          const viewInfo = this.generatedViews.get(sid);
-          this._navigateStudioToSession(sid, {
-            withTrajectory: Boolean(viewInfo?.hasTrajectory),
-          });
-        }
       };
     }
   }
@@ -1119,7 +1077,8 @@ class Rfd4pStudioApp {
       .map(([sid, v]) => ({
         index: v.designIndex ?? 1, label: v.label, seed: v.seed, stepsRun: v.stepsRun, nsteps: v.nsteps,
         cif: v.cif, pdb: v.pdb, trajectoryCif: store.getSession(sid)?.trajectoryCif ?? null,
-        designedChains: v.designedChains, refolds: v.refolds ?? [],
+        designedChains: v.designedChains,
+        refolds: (this.refoldPanel?.records(sid) ?? []).map(refoldRecordForZip),
       }))
       .sort((a, b) => a.index - b.index);
     if (!designs.length) return;
@@ -1147,85 +1106,17 @@ class Rfd4pStudioApp {
   }
 
   /**
-   * The Designs table: Input, then every design of the runs on this input (earlier runs folded away), each row its
-   * refold's numbers, ✓ where upstream's pass criteria hold and greyed where they fail. A column head sorts by it;
-   * by default rows rank by the job's first criterion, passing designs first, once there are numbers.
+   * The job box's tabs, and the designs of the runs on this input handed to Studio's Refold panel, which draws the
+   * Designs table (a row each, its refold's numbers, ✓ where upstream's pass criteria hold) and the Refold box.
+   * Earlier runs are folded away.
    */
   _renderDesigns() {
-    const box = this.els.designViewRadios;
-    if (!this.els.designResultsRow || !box) return;
+    if (!this.els.designResultsRow) return;
+    this._mountRefoldPanel();
     const views = this.generatedViews;
     // Runs belong to the input they were made from; another input opened shows none until it has its own.
     const runs = this.runsInput === this.inputSessionId ? (this.runs ?? []).filter((r) => r.designs.length) : [];
     const designs = runs.flatMap((r) => r.designs).map((sid) => views.get(sid)).filter(Boolean);
-    const kind = designs.find((v) => v.kind != null)?.kind ?? null;
-    const placed = kind === 'binder' || kind === 'antibody';
-    const iface = placed || designs.some((v) => Number.isFinite(v.metrics?.iptm));
-    const cols = [
-      { key: placed ? 'placedRmsd' : 'rmsd', label: 'RMSD', dir: 1, fmt: (x) => x.toFixed(1),
-        title: placed ? 'Å: the designed chain against its refold, fitted on the rest, so where it sits counts'
-          : 'Å: the designed chains against their refold' },
-      { key: 'plddt', label: 'pLDDT', dir: -1, fmt: (x) => x.toFixed(0), title: "The refold model's confidence, 0–100" },
-      ...(iface ? [
-        { key: 'iptm', label: 'ipTM', dir: -1, fmt: (x) => x.toFixed(2), title: "The refold model's confidence in the interface, 0–1" },
-        { key: 'minIpae', label: 'iPAE', dir: 1, fmt: (x) => x.toFixed(1),
-          title: 'Å: the lowest predicted error between a designed residue and the rest (min iPAE)' },
-      ] : []),
-    ];
-    const value = (v, key) => (Number.isFinite(v.metrics?.[key]) ? v.metrics[key] : null);
-    // In the order made until a column head is clicked.
-    const sort = this.designSort ?? null;
-    const order = (sids) => {
-      const list = sids.map((sid) => [sid, views.get(sid)]).filter(([, v]) => v);
-      if (!sort) return list;
-      return list.sort(([, a], [, b]) => {
-        const x = value(a, sort.key);
-        const y = value(b, sort.key);
-        if (x === null || y === null) return (x === null) - (y === null) || a.designIndex - b.designIndex;
-        return (x - y) * sort.dir || a.designIndex - b.designIndex;
-      });
-    };
-    // One table per run: its own header row over its own rows, so each number sits under its label.
-    const busy = Boolean(this.refoldAbort);
-    const thead = () => h('thead', {}, h('tr', {},
-      h('th', { class: 'rfd4p-dt-name', title: 'Each design is named by its seed: the same seed and settings make it again', text: 'Seed' }),
-      ...cols.map((c) => h('th', { class: 'rfd4p-dt-num', title: c.title }, h('button', {
-        type: 'button', class: `rfd4p-design-sort${sort?.key === c.key ? ' is-sorted' : ''}`,
-        text: `${c.label}${sort?.key === c.key ? (sort.dir === c.dir ? '▾' : '▴') : ''}`,
-        onclick: () => {
-          this.designSort = sort?.key === c.key ? { key: c.key, dir: -sort.dir } : { key: c.key, dir: c.dir };
-          this._renderDesigns();
-        },
-      }))),
-      h('th', { class: 'rfd4p-dt-act' })));
-    const row = (sid, v, inputTitle = null) => {
-      const isInputRow = v.isInput;
-      const tr = h('tr', { class: isInputRow ? 'rfd4p-design-input' : null, title: isInputRow ? inputTitle : null });
-      const radio = h('input', { type: 'radio', name: 'design-view-radio', value: sid });
-      radio.checked = sid === this.studioSessionId;
-      tr.append(
-        h('td', { class: 'rfd4p-dt-name' }, h('label', {}, radio, h('span', { text: isInputRow ? 'Input' : this._designName(v) }))));
-      const state = isInputRow ? '' : this.refoldSid === sid ? 'refolding…' : this.refoldQueue?.includes(sid) ? 'queued'
-        : v.refoldError ? 'refold failed' : null;
-      if (state !== null) tr.append(h('td', { class: 'rfd4p-dt-state', colspan: cols.length, text: state }));
-      else for (const c of cols) { const x = value(v, c.key); tr.append(h('td', { class: 'rfd4p-dt-num', text: x === null ? '' : c.fmt(x) })); }
-      const stop = (fn) => (ev) => { ev.preventDefault(); ev.stopPropagation(); fn(); };
-      tr.append(h('td', { class: 'rfd4p-dt-act' },
-        isInputRow || this.noRefold ? null : h('button', {
-          type: 'button', class: 'rfd4p-design-act rfd4p-design-refold', text: '↻', disabled: busy || Boolean(this._refoldWith(v)),
-          title: this._refoldWith(v) ? 'Refolded with the settings below' : 'Refold this design with the settings below',
-          'aria-label': `Refold seed ${this._designName(v)}`,
-          onclick: stop(() => { void this._refoldDesigns([sid]); }),
-        }),
-        h('button', {
-          type: 'button', class: 'rfd4p-design-act', text: '⤓', title: 'Download this structure (CIF)',
-          'aria-label': `Download ${isInputRow ? 'the input' : `seed ${this._designName(v)}`}`,
-          onclick: stop(() => this._downloadText(v.cif, `${v.filenameStem || 'design'}.cif`, 'chemical/x-mmcif')),
-        })));
-      // Anywhere on the row shows it.
-      tr.addEventListener('click', (ev) => { if (!ev.target.closest('button, label, input')) radio.click(); });
-      return tr;
-    };
     // One box, two tabs from the start: Input (the start screen, then the design being edited) and Outputs (this
     // table; greyed out until there are designs). The structure
     // shown says which is open, and opening a tab shows its structure (Outputs: the design last looked at).
@@ -1242,12 +1133,30 @@ class Rfd4pStudioApp {
         tab(designSids.length ? `Outputs (${designSids.length})` : 'Outputs', !onInput, lastSeen));
     }
     if (this.els.jobBox) this.els.jobBox.dataset.tab = onInput ? 'input' : 'outputs';
-    const table = h('table', { class: 'rfd4p-dtable' }, thead(), h('tbody', {}, ...order(designSids).map(([sid, v]) => row(sid, v))));
-    box.replaceChildren(...(designs.length ? [table] : []));
-    box.classList.toggle('rfd4p-designs-busy', Boolean(this.activeAbortController));
+    this.refoldPanel?.setDesigns(designSids.map((sid) => ({ sid, v: views.get(sid) })).filter(({ v }) => v).map(({ sid, v }) => ({
+      id: sid, name: this._designName(v), cif: v.cif, filenameStem: v.filenameStem, kind: v.kind, data: v,
+    })));
+    this.refoldPanel?.setBusy(Boolean(this.activeAbortController));
     if (this.els.downloadsBox) this.els.downloadsBox.hidden = designs.length < 1;
     this.els.designResultsRow.hidden = designs.length < 1;
-    this._syncRefoldUi();
+  }
+
+  /**
+   * Studio's Refold panel, mounted once Studio is up (`window.atomworksStudio.mountRefoldPanel`): the page's part is
+   * the fold (web/refold-provider.js, LocalFold) and which design is showing.
+   */
+  _mountRefoldPanel() {
+    if (this.refoldPanel || !this.els.refoldMount || typeof window.atomworksStudio?.mountRefoldPanel !== 'function') return;
+    this.refoldPanel = window.atomworksStudio.mountRefoldPanel(this.els.refoldMount, createLocalFoldProvider(this), {
+      // Each design is named by its seed: the same seed and settings make it again.
+      nameHeader: { label: 'Seed', title: 'Each design is named by its seed: the same seed and settings make it again' },
+      describe: (design) => `seed ${design.name}`,
+      // A row was chosen, or a refold finished on a design that is not showing: show it.
+      onSelect: (sid) => this._selectDesign(sid),
+      onDownload: (design) => this._downloadText(design.cif, `${design.filenameStem || 'design'}.cif`, 'chemical/x-mmcif'),
+      // AlphaFold 3's terms were agreed to under this page's own key before they moved into Studio.
+      storage: refoldTermsStorage,
+    });
   }
 
   /**
@@ -1300,312 +1209,6 @@ class Rfd4pStudioApp {
     return k > 0 ? `${v.seed} (${k + 1})` : String(v.seed);
   }
 
-  /**
-   * The refold controls. Refold all is also the refolds' progress, as Generate is a run's: "Stop · seed 163509 (2 of 3)
-   * · 40%", filling up, cut short with an ellipsis when narrow (the whole of it in its tooltip). The parameters coming
-   * down fill it too, even before a click, since that wait is minutes on a slow link. Only a failure gets a line.
-   */
-  _syncRefoldUi() {
-    const any = (this.runs ?? []).some((r) => r.designs.length);
-    if (this.els.refoldBox) this.els.refoldBox.hidden = !any || this.noRefold;
-    const btn = this.els.refoldBtn;
-    if (btn) {
-      const pre = this.weightPrefetch;
-      const fetching = pre && !pre.done && pre.totalBytes ? pre : null;
-      const mb = (bytes) => (bytes / 1e6).toFixed(0);
-      let label = this.refoldAbort ? 'Stop' : (this.refoldNote ?? 'Refold all');
-      let fraction = null;
-      if (this.refoldAbort && this.refoldLabel) {
-        label = `Stop · ${this.refoldLabel}`;
-        fraction = this.refoldFraction ?? 0;
-      } else if (fetching) {
-        label = `${label} · ${pre.name} ${mb(pre.loadedBytes)} / ${mb(pre.totalBytes)} MB`;
-        fraction = pre.loadedBytes / pre.totalBytes;
-      }
-      btn.textContent = label;
-      // Only when there is something to fold: every design refolded with these settings leaves it off.
-      const nothing = !this.refoldAbort && !this._refoldPending().length;
-      btn.disabled = nothing;
-      btn.title = fetching && !this.refoldAbort
-        ? `Downloading ${pre.name} parameters: first time only, kept for next time`
-        : nothing ? 'Every design is refolded with these settings' : 'Refold every design not yet refolded with these settings';
-      btn.classList.toggle('rfd4p-running', fraction !== null);
-      btn.style.setProperty('--rfd4p-progress', `${(Math.max(0, Math.min(1, fraction ?? 0)) * 100).toFixed(1)}%`);
-    }
-    if (this.els.refoldResult) {
-      const text = this.refoldStatusError ? this.refoldStatus : null;
-      this.els.refoldResult.textContent = text ?? '';
-      this.els.refoldResult.classList.toggle('error', Boolean(text));
-      this.els.refoldResult.hidden = !text;
-    }
-  }
-
-  /** What the refolds are doing, for the button (`label`, `fraction` of the whole) or, on a failure, its line. */
-  _setRefoldStatus(text, isError = false, { label = null, fraction = null } = {}) {
-    this.refoldStatus = text;
-    this.refoldStatusError = isError;
-    this.refoldLabel = label;
-    this.refoldFraction = fraction;
-    this._syncRefoldUi();
-  }
-
-  /** A word on the idle button for a moment ("All refolded"), back to Refold all after. */
-  _flashRefoldNote(text) {
-    this.refoldNote = text;
-    this._syncRefoldUi();
-    clearTimeout(this.refoldNoteTimer);
-    this.refoldNoteTimer = setTimeout(() => { this.refoldNote = null; this._syncRefoldUi(); }, 2500);
-  }
-
-  /** Whether AlphaFold 3's weights terms have already been agreed to in this browser. */
-  _af3TermsAccepted() {
-    try { return localStorage.getItem('rfd4p.refoldTerms.af3') === 'accepted'; } catch { return false; }
-  }
-
-  /**
-   * Pull the selected folding model's parameters ahead of the click, and say so.
-   *
-   * Two problems, one fix. The parameters are a few hundred MB and `refoldDesign` only starts fetching them when
-   * Refold is pressed, so the whole transfer lands on someone sitting still — and it passes a no-op progress
-   * callback to `loadAf3Weights`, so nothing is reported while it happens. `loadAf3Weights` memoises per family
-   * and honours the progress callback of whoever calls it FIRST, so calling it here both starts the download
-   * early and makes it the thing that reports. The later `refoldDesign` awaits the same promise.
-   *
-   * 🔴 ALPHAFOLD 3 IS NOT PREFETCHED UNTIL ITS TERMS ARE ACCEPTED. Its parameters carry Google DeepMind's
-   * terms of use and prohibited-use policy, and `_agreeRefoldTerms` is where someone agrees to them. Fetching
-   * them in the background first would take that decision away. OpenBind-0 is Apache 2.0 and has no such gate.
-   */
-  _prefetchFoldWeights() {
-    const model = this.els.refoldModel?.value ?? 'openbind0';
-    if (this.noRefold || !model || this.refoldAbort) return;
-    if (model === 'af3' && !this._af3TermsAccepted()) return;
-    if (this.weightPrefetch?.model === model) return;
-    const name = REFOLD_MODELS[model] ?? model;
-    const state = { model, name, loadedBytes: 0, totalBytes: 0, done: false };
-    this.weightPrefetch = state;
-    void (async () => {
-      try {
-        const { loadAf3Weights, FOLDERS } = await import('./localfold.js');
-        await loadAf3Weights((progress) => {
-          state.loadedBytes = progress.loadedBytes ?? 0;
-          state.totalBytes = progress.totalBytes ?? 0;
-          this._syncRefoldUi();
-        }, FOLDERS[model] ?? model);
-      } catch {
-        // A failed prefetch costs nothing: the refold itself will try again and report properly.
-      } finally {
-        state.done = true;
-        this._syncRefoldUi();
-      }
-    })();
-  }
-
-  /** What the Refold row says while parameters are still coming down, or nothing once they are here. */
-  /**
-   * AlphaFold 3's parameters are Google DeepMind's, for non-commercial use under a prohibited-use policy: ask once per
-   * browser, and offer OpenBind-0 (same architecture, Apache 2.0) as the way past rather than only through.
-   * @returns {Promise<string|null>} the model to refold with, or null to cancel
-   */
-  async _agreeRefoldTerms(model) {
-    const KEY = 'rfd4p.refoldTerms.af3';
-    if (model !== 'af3') return model;
-    try { if (localStorage.getItem(KEY) === 'accepted') return model; } catch { /* storage blocked: ask */ }
-    const dialog = this.els.refoldTerms;
-    if (!dialog?.showModal) return null;
-    dialog.returnValue = '';
-    dialog.showModal();
-    await new Promise((resolve) => dialog.addEventListener('close', resolve, { once: true }));
-    if (dialog.returnValue === 'accept') {
-      try { localStorage.setItem(KEY, 'accepted'); } catch { /* asked again next time */ }
-      return 'af3';
-    }
-    if (dialog.returnValue === 'switch') {
-      if (this.els.refoldModel) this.els.refoldModel.value = 'openbind0';
-      return 'openbind0';
-    }
-    return null;
-  }
-
-  /**
-   * Refold designs one after another with the chosen model, scoring each (`refoldMetrics`, `passes`) and filling its
-   * row as it finishes: `sids`, or every design not yet refolded with that model. Pressed again while refolds run,
-   * it stops them.
-   */
-  async _refoldDesigns(sids) {
-    if (this.refoldAbort) {
-      this.refoldAbort.abort();
-      return;
-    }
-    const model = await this._agreeRefoldTerms(this.els.refoldModel?.value ?? 'af3');
-    if (!model) return;
-    const name = REFOLD_MODELS[model] ?? model;
-    const { seed, recycles, steps } = this._refoldSettings();
-    const settings = { seed, recycles, steps };
-    const all = (this.runs ?? []).flatMap((r) => r.designs);
-    // Refold all skips designs already refolded with these settings: another seed, recycles or steps folds them again.
-    // A design refolded before with these settings is not folded again: that refold is shown (its numbers back in the
-    // table), and every other refold of it is kept for the zip.
-    const asked = (sids ?? all).filter((sid) => this.generatedViews.get(sid)?.pdb);
-    const todo = [];
-    let shown = null;
-    for (const sid of asked) {
-      const view = this.generatedViews.get(sid);
-      const kept = this._refoldWith(view, { model, seed, recycles, steps });
-      if (!kept) todo.push(sid);
-      else if (view.refoldShown !== kept) { this._showRefold(view, kept); shown = sid; }
-    }
-    if (!todo.length) {
-      this._setRefoldStatus(null);
-      this._renderDesigns();
-      if (shown) await this._selectDesign(sids ? sids[0] : shown);
-      else if (sids && this.studioSessionId !== sids[0]) await this._selectDesign(sids[0]);
-      this._flashRefoldNote(sids ? 'Already refolded with these settings' : 'All refolded with these settings');
-      return;
-    }
-    const abort = new AbortController();
-    this.refoldAbort = abort;
-    this.refoldQueue = [...todo];
-    let done = 0;
-    let failed = 0;
-    this._renderDesigns();
-    try {
-      // On the WebGL2 path (no WebGPU, or `?gl=1`) the refold is LocalFold's WebGL2 fold.
-      if (!this.gpuDevice && !this.glFallback) await this._initWebGpu();
-      if (!this.gpuDevice && !this.glFallback) throw new Error('WebGPU is not available');
-      // ~6 MB of LocalFold code (tools/sync-localfold.mjs), loaded on the first refold only.
-      const lf = await import('./localfold.js');
-      // 🔴 ASK FOR THE PARAMETERS HERE, NOT INSIDE THE REFOLD, SO THE WAIT IS VISIBLE. `refoldDesign` calls
-      // `loadAf3Weights` with a no-op progress callback, so a few hundred MB used to come down behind a status
-      // line that never moved. The loader memoises per family and honours the FIRST caller's callback, so asking
-      // here is what makes the transfer report; the call inside `refoldDesign` then awaits this same promise.
-      await lf.loadAf3Weights((progress) => {
-        const loaded = progress.loadedBytes ?? 0;
-        const total = progress.totalBytes ?? 0;
-        if (!total) return;
-        this._setRefoldStatus(null, false,
-          { label: `${name} ${(loaded / 1e6).toFixed(0)} / ${(total / 1e6).toFixed(0)} MB`, fraction: loaded / total });
-      }, lf.FOLDERS[model] ?? model);
-      for (let k = 0; k < todo.length && !abort.signal.aborted; k += 1) {
-        const sid = todo[k];
-        const view = this.generatedViews.get(sid);
-        this.refoldQueue = todo.slice(k + 1);
-        this.refoldSid = sid;
-        this._renderDesigns();
-        const tag = todo.length > 1 ? ` (${k + 1} of ${todo.length})` : '';
-        const what = `seed ${this._designName(view)}${tag}`;
-        this._setRefoldStatus(null, false, { label: what, fraction: k / todo.length });
-        // LocalFold reports "phase · 40%": the button fills by it within this design's share.
-        const ok = await this._refoldOne(sid, model, settings, abort, lf, (text) => {
-          const pct = /(\d+)%/.exec(text);
-          const inner = pct ? Math.min(1, Number(pct[1]) / 100) : 0;
-          this._setRefoldStatus(null, false, { label: `${what}${pct ? ` · ${pct[1]}%` : ''}`, fraction: (k + inner) / todo.length });
-        });
-        if (ok) done += 1;
-        else if (!abort.signal.aborted) failed += 1;
-      }
-      const stopped = abort.signal.aborted ? ' Stopped.' : '';
-      this._setRefoldStatus(failed ? `Refolded ${done} design${done === 1 ? '' : 's'} with ${name}; ${failed} failed.${stopped}` : null,
-        failed > 0);
-    } catch (err) {
-      if (!abort.signal.aborted) console.error('Refold failed:', err);
-      this._setRefoldStatus(abort.signal.aborted ? null : `Refold failed: ${err?.message ?? err}`, !abort.signal.aborted);
-    } finally {
-      if (this.refoldAbort === abort) {
-        this.refoldAbort = null;
-        this.refoldSid = null;
-        this.refoldQueue = [];
-      }
-      this._renderDesigns();
-    }
-  }
-
-  /** One design's refold: scored, kept for "Save all", and drawn over the design. False if it failed. */
-  async _refoldOne(sid, model, { seed, recycles, steps }, abort, lf, status) {
-    const view = this.generatedViews.get(sid);
-    const name = REFOLD_MODELS[model] ?? model;
-    try {
-      const result = await refoldDesign(lf, {
-        pdb: view.pdb, cif: view.cif, chain: view.designedChains, model, device: this.gpuDevice, seed, recycles, steps, signal: abort.signal,
-        ...(this.gpuDevice ? {} : { backend: 'webgl2' }),
-        partial: view.partialTemplates ?? [],
-        status: (text) => status(text.replace(/^refolding with \S+( · )?/, '') || `refolding with ${name}`),
-      });
-      const motif = motifRmsds(view.pdb, result.refold, view.motifAtoms, view.designedChains);
-      const metrics = { ...refoldMetrics(result, view.designedChains, view.pdb), motifRmsd: motif?.motifRmsd ?? NaN,
-        motifBackboneRmsd: motif?.motifBackboneRmsd ?? NaN };
-      const record = {
-        model, seed, recycles, steps, pdb: result.refold, cif: pdbToCif(result.refold), rmsd: result.rmsd, confidence: result.confidence,
-        templated: result.templated, partial: result.partial, text: describeRefold(model, result, view.designedChains, view.partialTemplates ?? [], motif),
-        metrics, pass: passes(metrics, view.kind),
-      };
-      (view.refolds ??= []).push(record);
-      view.refoldError = false;
-      this._showRefold(view, record);
-      // The design just refolded is shown, its refold over it.
-      if (this.studioSessionId === sid) await showDesignOverlays(view.overlays);
-      else if (!abort.signal.aborted) await this._selectDesign(sid);
-      return true;
-    } catch (err) {
-      if (abort.signal.aborted) return false;
-      view.refoldError = true;
-      console.error(`Refold of seed ${this._designName(view)} failed:`, err);
-      return false;
-    }
-  }
-
-  /** The Refold box's settings: model, seed, recycles, diffusion steps. */
-  _refoldSettings() {
-    return {
-      model: this.els.refoldModel?.value ?? 'af3',
-      seed: Math.max(0, Number.parseInt(this.els.refoldSeed?.value ?? '0', 10) || 0),
-      recycles: Math.max(0, Number.parseInt(this.els.refoldRecycles?.value ?? '3', 10) || 0),
-      steps: Math.max(1, Number.parseInt(this.els.refoldSteps?.value ?? '25', 10) || 25),
-    };
-  }
-
-  /** A design's refold made with exactly `settings` (the latest such), if there is one. */
-  _refoldWith(view, { model, seed, recycles, steps } = this._refoldSettings()) {
-    return view?.refolds?.findLast((r) => r.model === model && (r.seed ?? 0) === seed && (r.recycles ?? 0) === recycles
-      && (r.steps ?? 25) === steps);
-  }
-
-  /** The designs (session ids) Refold all would fold: those with no refold made with the settings now in the box. */
-  _refoldPending() {
-    const settings = this._refoldSettings();
-    return (this.runs ?? []).flatMap((r) => r.designs).filter((sid) => {
-      const view = this.generatedViews.get(sid);
-      return view?.pdb && !this._refoldWith(view, settings);
-    });
-  }
-
-  /**
-   * The settings changed: every design refolded with the new ones shows that refold (its numbers, its trace), so going
-   * back to earlier settings brings their results back without a click; the buttons then offer only what is new.
-   */
-  async _refoldSettingsChanged() {
-    let current = false;
-    for (const sid of (this.runs ?? []).flatMap((r) => r.designs)) {
-      const view = this.generatedViews.get(sid);
-      const kept = this._refoldWith(view);
-      if (!kept || view.refoldShown === kept) continue;
-      this._showRefold(view, kept);
-      if (sid === this.studioSessionId) current = true;
-    }
-    this._renderDesigns();
-    if (current) await showDesignOverlays(this.generatedViews.get(this.studioSessionId)?.overlays);
-  }
-
-  /** Show one of a design's refolds: its numbers in the table, its trace over the design (once the design is shown). */
-  _showRefold(view, record) {
-    view.refoldShown = record;
-    view.metrics = record.metrics;
-    view.pass = record.pass;
-    view.refoldText = record.text;
-    const cif = refoldOverlayCif(record.pdb);
-    const ligandCif = refoldLigandCif(record.pdb);
-    view.overlays = { ...view.overlays, refold: cif ? { cif, ligandCif, label: `${REFOLD_MODELS[record.model] ?? record.model} refold` } : null };
-  }
-
   _downloadText(text, filename, mime) {
     const blob = new Blob([text], { type: mime });
     const url = URL.createObjectURL(blob);
@@ -1622,7 +1225,7 @@ class Rfd4pStudioApp {
       return;
     }
     // A refold shares the GPU and shows designs this run is about to replace.
-    this.refoldAbort?.abort();
+    this.refoldPanel?.stop();
     if (this.activeAbortController) {
       this.activeAbortController.abort();
     }
@@ -1849,6 +1452,8 @@ class Rfd4pStudioApp {
                     this.designPanel?.showHotspots();
                   })
                   .then(() => showDesignOverlays(frameOverlays))
+                  // The frames replace the design on show, and its refold with it.
+                  .then(() => (first ? this.refoldPanel?.setSelected(null) : undefined))
                   .catch(() => {});
               }
             }
@@ -1937,7 +1542,6 @@ class Rfd4pStudioApp {
           motifSlots: motifSlots(result.structure?.atoms ?? [], motifSideChainAtoms(result.structure?.atoms ?? [], unmodelled)),
           // ...and which of their atoms the run held, for the motif RMSDs a refold reports.
           motifAtoms: motifAtomsOf(result.structure?.atoms ?? [], motifSlots(result.structure?.atoms ?? [], motifSideChainAtoms(result.structure?.atoms ?? [], unmodelled))),
-          refoldText: null,
           // For "Save results": which design, how it ran, and every refold made of it.
           designIndex,
           // Which of upstream's pass criteria apply: the task, and whether everything the refold folds was designed.
@@ -1948,7 +1552,6 @@ class Rfd4pStudioApp {
           seed: sampleSeed,
           stepsRun: result.stepsRun ?? null,
           nsteps: result.nsteps ?? nsteps,
-          refolds: [],
         });
         run.designs.push(designSessionId);
         this._renderDesigns();
@@ -1964,7 +1567,7 @@ class Rfd4pStudioApp {
       this.setProgress(1, 'idle');
       // There is now something to refold, and the Refold button has just appeared. Start pulling the folding
       // model's parameters while the user reads their design, rather than when they click.
-      this._prefetchFoldWeights();
+      this.refoldPanel?.prefetch();
       const stopNote = earlyStops.length ? ` Converged early at step ${earlyStops.join(', ')}.` : '';
       const seeds = numSamples > 1 ? `seeds ${baseSeed}–${baseSeed + numSamples - 1}` : `seed ${baseSeed}`;
       const faster = this.speedHintOn ? ' Up to 1.5× faster with Chrome\'s experimental WebGPU (see above).' : '';
@@ -1975,6 +1578,7 @@ class Rfd4pStudioApp {
       try {
         await window.atomworksStudio?.showDocument?.();
         await showDesignOverlays(null);
+        await this.refoldPanel?.setSelected(null);
       } catch {
         // Ignore
       }
