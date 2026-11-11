@@ -519,6 +519,8 @@ const NO_WEBGPU_MESSAGE = 'This browser has no WebGPU, which designs need. Use C
 class Rfd4pStudioApp {
   constructor() {
     this.gpuDevice = null;
+    // A WebGPU device only refolds use (see `_initWebGpu`).
+    this.refoldDevice = null;
     this.gpuAdapterInfo = null;
     this.activeConfig = null;
     this.activeWeights = null;
@@ -828,11 +830,18 @@ class Rfd4pStudioApp {
       const res = await requestWebGpuDevice();
       // The kernels are written with subgroup reductions and float16 (`enable subgroups;`, `enable f16;`), so a device
       // without either compiles none of them: the first Generate failed inside the trunk's recording (an iPad). Such a
-      // device takes the WebGL2 path, as a browser without WebGPU does.
+      // device takes the WebGL2 path, as a browser without WebGPU does. Refolds keep it (`refoldDevice`): LocalFold
+      // checks for subgroups itself, and on that iPad (Safari 27, f16 but no subgroups) its WebGPU fold ran an
+      // OpenBind-0 refold in 37 s where its WebGL2 fold lost the tab as the trunk started.
       const missing = ['subgroups', 'shader-f16'].filter((f) => !res?.device?.features?.has?.(f));
       if (res?.device && missing.length) {
         console.warn(`WebGPU device lacks ${missing.join(', ')}; designs run on WebGL2`);
-        res.device.destroy?.();
+        if (missing.includes('shader-f16')) res.device.destroy?.();
+        else {
+          const device = res.device;
+          this.refoldDevice = device;
+          device.lost.then(() => { if (this.refoldDevice === device) this.refoldDevice = null; });
+        }
       } else if (res && res.device) {
         this.gpuDevice = res.device;
         this.gpuAdapterInfo = res.adapter?.info ?? null;
@@ -1474,7 +1483,8 @@ class Rfd4pStudioApp {
     let failed = 0;
     this._renderDesigns();
     try {
-      // On the WebGL2 path (no WebGPU, or `?gl=1`) the refold is LocalFold's WebGL2 fold.
+      // On the WebGL2 path (no WebGPU, or `?gl=1`) the refold is LocalFold's WebGL2 fold; with a device the design
+      // model cannot use (no subgroups), its WebGPU fold.
       if (!this.gpuDevice && !this.glFallback) await this._initWebGpu();
       if (!this.gpuDevice && !this.glFallback) throw new Error('WebGPU is not available');
       // ~6 MB of LocalFold code (tools/sync-localfold.mjs), loaded on the first refold only.
@@ -1530,8 +1540,9 @@ class Rfd4pStudioApp {
     const name = REFOLD_MODELS[model] ?? model;
     try {
       const result = await lf.refoldDesign({
-        pdb: view.pdb, chain: view.designedChains, model, device: this.gpuDevice, seed, recycles, steps, signal: abort.signal,
-        ...(this.gpuDevice ? {} : { backend: 'webgl2' }),
+        pdb: view.pdb, chain: view.designedChains, model, device: this.gpuDevice ?? this.refoldDevice, seed, recycles, steps,
+        signal: abort.signal,
+        ...(this.gpuDevice ?? this.refoldDevice ? {} : { backend: 'webgl2' }),
         partial: view.partialTemplates ?? [],
         status: (text) => status(text.replace(/^refolding with \S+( · )?/, '') || `refolding with ${name}`),
       });
