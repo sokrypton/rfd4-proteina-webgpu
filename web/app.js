@@ -826,7 +826,14 @@ class Rfd4pStudioApp {
   async _initWebGpu() {
     try {
       const res = await requestWebGpuDevice();
-      if (res && res.device) {
+      // The kernels are written with subgroup reductions and float16 (`enable subgroups;`, `enable f16;`), so a device
+      // without either compiles none of them: the first Generate failed inside the trunk's recording (an iPad). Such a
+      // device takes the WebGL2 path, as a browser without WebGPU does.
+      const missing = ['subgroups', 'shader-f16'].filter((f) => !res?.device?.features?.has?.(f));
+      if (res?.device && missing.length) {
+        console.warn(`WebGPU device lacks ${missing.join(', ')}; designs run on WebGL2`);
+        res.device.destroy?.();
+      } else if (res && res.device) {
         this.gpuDevice = res.device;
         this.gpuAdapterInfo = res.adapter?.info ?? null;
         this._watchDevice(res.device);
