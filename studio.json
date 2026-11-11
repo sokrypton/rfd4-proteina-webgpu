@@ -1,14 +1,7 @@
 {
   "_comment": "The AtomWorks Studio release this site is built from: the atomworks-studio wheel on PyPI, whose annotation_studio/web/ directory is the browser bundle. tools/build-studio.mjs downloads that wheel, checks it against sha256 (the wheel's, as PyPI lists it) and composes index.html from it. Nothing from Studio is vendored in this repository.",
-  "_override": "While `override` is set, assets/ and index.html are built from that unreleased Studio commit, not the release below: `npm run build:studio` refuses to run, and the site is rebuilt with `npm run build:studio -- --from <bundle built from override.commit>` (packages/web: pnpm install && pnpm build, then --from packages/web/dist). NOT SHIPPABLE: the commit is on a local branch of the Studio dev checkout and no Studio release contains it. Cut a Studio release, re-pin version and sha256 below, and remove `override`.",
-  "override": {
-    "repository": "baker-laboratory/atomworks-studio-dev",
-    "branch": "feature/refold-panel",
-    "commit": "4b3894d81798f456478e4b3baa9786a1150c7b69",
-    "why": "Studio's Refold panel (window.atomworksStudio.mountRefoldPanel): the refold GUI lives in Studio, this page supplies only the LocalFold-backed fold (web/refold-provider.js)"
-  },
-  "version": "0.0.7",
+  "version": "0.0.8",
   "package": "atomworks-studio",
-  "sha256": "8db833ff7127072ee274e1fb5725d7fd6768d333b34cd6adba2b0b25bb58c2a1",
+  "sha256": "df59fdd717310c31ccf83ecd2f6c94fb9ea4266d6061e710814ce976b6add45d",
   "title": "AtomWorks Studio · RFD4-Proteina (WebGPU)"
 }
