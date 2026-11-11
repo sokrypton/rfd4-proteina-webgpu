@@ -120,7 +120,7 @@ import { DEFAULT_CHUNK_BYTES, Rfd4pTrunkGpu, chunkPlan } from './rfd4p/trunk.js'
 /**
  * Request a WebGPU device with generous storage buffer limits and optional `timestamp-query` + `shader-f16`.
  */
-export async function requestWebGpuDevice() {
+export async function requestWebGpuDevice({ exclude = [] } = {}) {
   if (typeof navigator === 'undefined' || !navigator.gpu) {
     return null;
   }
@@ -146,7 +146,7 @@ export async function requestWebGpuDevice() {
     'subgroups',
     'subgroup-size-control',
     'chromium-experimental-subgroup-matrix',
-  ].filter((f) => adapter.features?.has(f));
+  ].filter((f) => adapter.features?.has(f) && !exclude.includes(f));
   const device = await adapter.requestDevice({ requiredLimits, requiredFeatures });
   if (!device.adapterInfo && adapter.info) device.adapterInfo = adapter.info;
   return { adapter, device };

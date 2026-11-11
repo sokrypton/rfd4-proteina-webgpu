@@ -2613,6 +2613,9 @@ export function packHalf(values) {
 export function subgroupMode(device) {
   // Checkers can force a mode (`--subgroup-mode=xor|shared`) to exercise it on any GPU.
   if (device.subgroupModeOverride) return { mode: device.subgroupModeOverride, size: 32 };
+  // No subgroups at all (Safari on an iPad): the rows are reduced in workgroup memory, and `none` takes the
+  // `enable subgroups;` out of every kernel (`applySubgroupMode`).
+  if (device.features && !device.features.has('subgroups')) return { mode: 'shared', size: 32, none: true };
   const info = device.adapterInfo ?? {};
   const lo = info.subgroupMinSize;
   const hi = info.subgroupMaxSize;
@@ -2668,6 +2671,7 @@ function subgroupLib(sg, used, wgSize) {
 function applySubgroupMode(source, sg) {
   const uses = source.includes('enable subgroups;');
   if (!uses) return source;
+  if (sg.none) source = source.replace('enable subgroups;', '');
   const used = new Set(R32_TYPES.map(([name]) => name).filter((name) => new RegExp(`\\b${name}\\(`).test(source)));
   let src = source;
   if (sg.mode === 'pin32') {
@@ -2708,6 +2712,9 @@ export class Rfd4pEngine {
     // f16 multiply-add in the GEMM inner loop (943 ms), 32x64 tiles (1319 ms), and no workgroup-memory staging
     // (triProjG 445 -> 1304 ms).
     if (device.adapterInfo?.vendor === 'arm') this.gemmVariant = { baseline: true };
+    // Without subgroups: the plain GEMM (no shuffles); the GEMVs keep their kernels, their sums in workgroup memory.
+    this.noSubgroups = this.subgroups.none === true;
+    if (this.noSubgroups) this.gemmVariant = { ...this.gemmVariant, baseline: true };
     if (device.gemmVariantOverride) this.gemmVariant = device.gemmVariantOverride;
     const smConfigs = [...(device.adapterInfo?.subgroupMatrixConfigs ?? device.subgroupMatrixConfigs ?? [])];
     this.subgroupMatrixConfigs = smConfigs.map((c) => ({
