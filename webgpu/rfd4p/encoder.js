@@ -74,8 +74,20 @@ export class Rfd4pEncoderGpu {
     return w;
   }
 
-  /** Allocate activations for `na` attended tokens and record the encoder program. */
+  /**
+   * Allocate activations for `na` attended tokens and record the encoder program. A recording cut short (an error) is
+   * not kept, or the next call, seeing the same size, would run programs that were never made.
+   */
   async record(na, fdim) {
+    try {
+      return await this._record(na, fdim);
+    } catch (err) {
+      this.na = 0;
+      throw err;
+    }
+  }
+
+  async _record(na, fdim) {
     if (this.na === na && this.fdim === fdim) return;
     const e = this.engine;
     e.releaseActivations();

@@ -120,6 +120,9 @@ const LINUX_HEADLESS = process.env.LOCALFOLD_HEADLESS === "1";
 // ask what a visitor actually gets rather than what this box can be made to do.
 // tools/cdp.py carries the same two flags, so the PAGE numbers are no different.
 const STOCK_FLAGS = process.env.LOCALFOLD_STOCK_FLAGS === "1";
+// RFD4P_NO_SUBGROUPS=1 requests the device without `subgroups` (and `subgroup-size-control`), as Safari on an iPad
+// gives it: `enable subgroups;` then fails to compile here as it does there.
+const NO_SUBGROUPS = process.env.RFD4P_NO_SUBGROUPS === "1";
 // LOCALFOLD_SWIFTSHADER=1 asks for WebGPU on the CPU on purpose - a machine
 // with no GPU driver, such as a Colab TPU VM. Chrome gives WebGPU SwiftShader
 // only when told to; pair it with --allow-software.
@@ -181,7 +184,7 @@ try {
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
   if (adapter === null) throw new Error("no WebGPU adapter");
   const { requestWebGpuDevice } = await import("/webgpu/index.js");
-  const { device } = await requestWebGpuDevice();
+  const { device } = await requestWebGpuDevice(${NO_SUBGROUPS ? '{ exclude: ["subgroups", "subgroup-size-control"] }' : ""});
   device.addEventListener("uncapturederror", (event) => {
     post({ ok: false, error: "uncaptured: " + event.error.message, logs });
   });

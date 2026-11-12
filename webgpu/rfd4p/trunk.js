@@ -339,8 +339,20 @@ export class Rfd4pTrunkGpu {
     this.w = w;
   }
 
-  /** Allocate activations for `n` tokens and record every program. */
+  /**
+   * Allocate activations for `n` tokens and record every program. A recording cut short (an error) is not kept, or
+   * the next call, seeing the same size, would run programs that were never made.
+   */
   async record(n, dims, condUniform = true) {
+    try {
+      return await this._record(n, dims, condUniform);
+    } catch (err) {
+      this.n = 0;
+      throw err;
+    }
+  }
+
+  async _record(n, dims, condUniform) {
     const e = this.engine;
     if (this.n === n && this.condUniform === condUniform) return;
     e.releaseActivations();

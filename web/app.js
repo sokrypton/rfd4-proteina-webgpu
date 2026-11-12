@@ -811,7 +811,13 @@ class Rfd4pStudioApp {
   async _initWebGpu() {
     try {
       const res = await requestWebGpuDevice();
-      if (res && res.device) {
+      // The model runs in float16 (`enable f16;` in its kernels), so a device without shader-f16 takes the WebGL2
+      // path, as a browser without WebGPU does. Subgroups are optional: without them (Safari on an iPad) the engine
+      // reduces in workgroup memory (`subgroupMode` 'shared', `none`).
+      if (res?.device && !res.device.features?.has?.('shader-f16')) {
+        console.warn('WebGPU device lacks shader-f16; designs run on WebGL2');
+        res.device.destroy?.();
+      } else if (res && res.device) {
         this.gpuDevice = res.device;
         this.gpuAdapterInfo = res.adapter?.info ?? null;
         this._watchDevice(res.device);
