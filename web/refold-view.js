@@ -208,7 +208,7 @@ export function partialTemplates(designAtoms, chains, minFraction = 0.5) {
 }
 
 /** One line for a refold result: RMSD to the design, then the model's own confidence. */
-export function describeRefold(model, result, chains, partial = []) {
+export function describeRefold(model, result, chains, partial = [], motif = null) {
   const name = REFOLD_MODELS[model] ?? model;
   const c = result.confidence ?? {};
   const parts = [];
@@ -227,6 +227,11 @@ export function describeRefold(model, result, chains, partial = []) {
   if (Number.isFinite(c.meanPlddt)) parts.push(`pLDDT ${c.meanPlddt.toFixed(0)}`);
   if (Number.isFinite(c.ptm)) parts.push(`pTM ${c.ptm.toFixed(2)}`);
   if (Number.isFinite(c.iptm)) parts.push(`ipTM ${c.iptm.toFixed(2)}`);
+  // The motif put back: fitted on itself, then fitted on the designed backbone (see motif-metrics.js)
+  if (motif && Number.isFinite(motif.motifRmsd)) {
+    parts.push(`motif ${motif.motifRmsd.toFixed(2)} Å`
+      + (Number.isFinite(motif.motifBackboneRmsd) ? ` (${motif.motifBackboneRmsd.toFixed(2)} Å on the backbone)` : ''));
+  }
   for (const p of partial) parts.push(`chain ${p.chain} templated on ${p.residues.length}/${p.of} kept residues`);
   return `${name} refold: ${parts.join(' · ') || 'done'}`;
 }
@@ -300,41 +305,13 @@ export function refoldMetrics(result, designed, designPdb) {
 }
 
 /**
- * Upstream's pass criteria for the jobs whose every number a refold here measures. Motif, enzyme and small-molecule
- * criteria also need motif and ligand RMSDs this page does not compute, so those jobs show numbers but no verdict.
+ * Which of upstream's pass criteria judge a job (`kind` on the design handed to Studio's Refold panel, which holds the
+ * thresholds): its task, and whether everything the refold folds was designed. Motif, enzyme and small-molecule jobs
+ * also need ligand RMSDs and thresholds not applied here, so they show numbers and no verdict.
  */
-export const PASS_CRITERIA = {
-  // unconditional: refolded backbone RMSD ≤ 1.5 Å
-  monomer: [{ key: 'rmsd', max: 1.5 }],
-  // ppi: pTM of the binder ≥ 80, min iPAE ≤ 1.5, binder RMSD with the target aligned ≤ 2.5 Å
-  binder: [{ key: 'chainPtm', min: 0.8 }, { key: 'minIpae', max: 1.5 }, { key: 'placedRmsd', max: 2.5 }],
-  // antibody: min iPAE ≤ 2.0, binder RMSD with the target aligned ≤ 2.0 Å
-  antibody: [{ key: 'minIpae', max: 2.0 }, { key: 'placedRmsd', max: 2.0 }],
-};
-
-/** Which criteria a job is judged by: its task, and whether everything the refold folds was designed. */
 export function criteriaKind(taskKey, { designedAll = false, hasLigand = false } = {}) {
   if (taskKey === 'binder') return 'binder';
   if (taskKey === 'antibody') return 'antibody';
   if (designedAll && !hasLigand && !['motif', 'enzyme', 'sm_binder'].includes(taskKey)) return 'monomer';
   return null;
-}
-
-/** Whether `metrics` meet the criteria of `kind`: true, false, or null (no criteria, or a number missing). */
-export function passes(metrics, kind) {
-  const rules = PASS_CRITERIA[kind];
-  if (!rules || !metrics) return null;
-  for (const { key, min, max } of rules) {
-    const v = metrics[key];
-    if (!Number.isFinite(v)) return null;
-    if ((min != null && v < min) || (max != null && v > max)) return false;
-  }
-  return true;
-}
-
-/** The number a job's designs are best ranked by, and which way: upstream's first criterion. */
-export function rankKey(kind) {
-  if (kind === 'binder' || kind === 'antibody') return { key: 'minIpae', dir: 1 };
-  if (kind === 'monomer') return { key: 'rmsd', dir: 1 };
-  return { key: 'plddt', dir: -1 };
 }

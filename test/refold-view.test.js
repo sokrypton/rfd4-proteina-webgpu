@@ -121,8 +121,8 @@ test('partialTemplates: a mostly held chain is templated on its held residues, a
 });
 
 
-test('a refold is scored as upstream\'s pass criteria read it', async () => {
-  const { polymerChains, refoldMetrics, passes, criteriaKind, rankKey } = await import('../web/refold-view.js');
+test('a refold is scored by the names of upstream\'s pass criteria', async () => {
+  const { polymerChains, refoldMetrics, criteriaKind } = await import('../web/refold-view.js');
   const atom = (k, chain, res, het = false) => `${het ? 'HETATM' : 'ATOM  '}${String(k).padStart(5)}  CA  ALA ${chain}${String(res).padStart(4)}    `
     + '   0.000   0.000   0.000  1.00  0.00           C';
   // binder B (2 residues) on target A (3 residues), a ligand after
@@ -142,16 +142,17 @@ test('a refold is scored as upstream\'s pass criteria read it', async () => {
   assert.equal(m.minIpae.toFixed(2), '0.90');
   assert.equal(m.placedRmsd.toFixed(3), Math.sqrt(5).toFixed(3));
   assert.equal(m.chainPtm, 0.85);
-  assert.equal(passes(m, 'binder'), true, 'min iPAE 0.9, pTM 0.85, placed 2.24 Å: all within');
-  assert.equal(passes({ ...m, placedRmsd: 3.0 }, 'binder'), false, 'a binder that moved on its target fails');
-  assert.equal(passes(m, 'antibody'), false, 'antibodies are held to 2.0 Å');
-  assert.equal(passes({ ...m, minIpae: NaN }, 'binder'), null, 'a missing number is no verdict');
+  // (Whether those numbers pass is Studio's Refold panel's to say: its pass criteria are tested there.)
   assert.equal(criteriaKind('binder'), 'binder');
   assert.equal(criteriaKind('unconditional', { designedAll: true }), 'monomer');
   assert.equal(criteriaKind('motif', { designedAll: true }), null);
-  assert.deepEqual(rankKey('antibody'), { key: 'minIpae', dir: 1 });
   // a monomer has no interface
   const mono = refoldMetrics({ rmsd: 1.1, deviations: [], confidence: { predictedAlignedError: new Float32Array(4) } }, ['A'], atom(1, 'A', 1) + '\n' + atom(2, 'A', 2));
   assert.ok(Number.isNaN(mono.minIpae));
-  assert.equal(passes(mono, 'monomer'), true);
+});
+
+test('describeRefold says how the motif was put back, fitted on itself and fitted on the backbone', () => {
+  const line = describeRefold('openbind0', { rmsd: 1.1, confidence: { meanPlddt: 92 } }, ['A'], [], { motifRmsd: 0.62, motifBackboneRmsd: 1.9 });
+  assert.match(line, /motif 0\.62 Å \(1\.90 Å on the backbone\)/);
+  assert.ok(!/motif/.test(describeRefold('openbind0', { rmsd: 1.1, confidence: {} }, ['A'])), 'no motif, no words about one');
 });

@@ -37,9 +37,9 @@ test('resultsFiles packages input, designs, trajectories, every refold and a sum
   assert.equal(summary.designs[0].refolds[0].plddt, 80.12);
   const csv = files.find((f) => f.name === 'summary.csv').text.trim().split('\n');
   assert.equal(csv.length, 1 + 3 + 1);
-  // no metrics on these refolds: RMSD on target, designed-chain pTM, min iPAE and the verdict are left empty
-  assert.ok(csv[1].startsWith('1,7,50,B,A:MK B:G,af3,0,,,0.5,,80.12,0.8,0.61,,,,A,H:109'), 'refold seed 0 when none was given');
-  assert.ok(csv[0].includes('rmsd_on_target') && csv[0].includes('min_ipae') && csv[0].includes('passes'));
+  // no metrics on these refolds: RMSD on target, designed-chain pTM, min iPAE, the motif RMSDs and the verdict are left empty
+  assert.ok(csv[1].startsWith('1,7,50,B,A:MK B:G,af3,0,,,0.5,,80.12,0.8,0.61,,,,,,A,H:109'), 'refold seed 0 when none was given');
+  assert.ok(csv[0].includes('rmsd_on_target') && csv[0].includes('min_ipae') && csv[0].includes('passes') && csv[0].includes('motif_rmsd') && csv[0].includes('motif_backbone_aligned_rmsd'));
   assert.match(files.find((f) => f.name === 'README.txt').text, /WEIGHTS_TERMS_OF_USE/);
   assert.ok(!names.some((n) => n.endsWith('.pdb')));
 });
@@ -48,4 +48,25 @@ test('without AlphaFold 3 refolds the README carries no AlphaFold 3 terms', () =
   const files = resultsFiles({ input: null, designs: [{ index: 1, label: 'Design 1', cif: 'x', pdb: null }] });
   assert.ok(!/AlphaFold 3/.test(files.find((f) => f.name === 'README.txt').text));
   assert.ok(!files.some((f) => f.name === 'input.cif'));
+});
+
+test('a refold kept by Studio\'s Refold panel is saved as the page always saved one', async () => {
+  const { refoldRecordForZip } = await import('../web/refold-provider.js');
+  // What the panel hands back for a design (`panel.records(id)`): its settings and result, the page's extras in `data`.
+  const record = {
+    model: 'openbind0', modelLabel: 'OpenBind-0', seed: 3, recycles: 3, steps: 25, cif: 'data_overlay', pass: true,
+    metrics: { rmsd: 1.1, placedRmsd: NaN, plddt: 91, minIpae: 1.4 }, text: 'OpenBind-0 refold: 1.10 Å',
+    data: { pdb: 'ATOM', cif: 'data_refold', rmsd: 1.1, confidence: { meanPlddt: 91, ptm: 0.9 }, templated: ['A'], partial: [] },
+  };
+  const files = resultsFiles({
+    input: null,
+    designs: [{ index: 1, label: 'seed 3', seed: 3, cif: 'data_d', pdb: null, designedChains: ['B'], refolds: [refoldRecordForZip(record)] }],
+    generatedAt: '2026-11-11T00:00:00Z',
+  });
+  assert.ok(files.some((f) => f.name === 'design-1-refold-openbind0.cif' && f.text === 'data_refold'), 'the refold itself, not the overlay');
+  const summary = JSON.parse(files.find((f) => f.name === 'summary.json').text);
+  const [refold] = summary.designs[0].refolds;
+  assert.deepEqual([refold.model_name, refold.seed, refold.recycles, refold.steps], ['OpenBind-0', 3, 3, 25]);
+  assert.deepEqual([refold.rmsd_designed_chain, refold.plddt, refold.ptm, refold.min_ipae, refold.passes], [1.1, 91, 0.9, 1.4, true]);
+  assert.deepEqual(refold.templated_chains, ['A']);
 });

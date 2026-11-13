@@ -44,6 +44,8 @@ function refoldSummary(r) {
     iptm: round(c.iptm, 3),
     designed_chain_ptm: round(r.metrics?.chainPtm, 3),
     min_ipae: round(r.metrics?.minIpae, 3),
+    motif_rmsd: round(r.metrics?.motifRmsd, 3),
+    motif_backbone_aligned_rmsd: round(r.metrics?.motifBackboneRmsd, 3),
     passes: r.pass ?? null,
     templated_chains: r.templated ?? [],
     partial_templates: (r.partial ?? []).map((p) => ({ chain: p.chain, residues: p.residues })),
@@ -109,6 +111,7 @@ export function resultsFiles({ input, designs, generatedAt = new Date().toISOStr
       rows.push({
         ...base, refold_model: r.model, refold_seed: r.seed, refold_recycles: r.recycles, refold_steps: r.steps, rmsd_designed_chain: r.rmsd_designed_chain, rmsd_on_target: r.rmsd_on_target,
         plddt: r.plddt, ptm: r.ptm, iptm: r.iptm, designed_chain_ptm: r.designed_chain_ptm, min_ipae: r.min_ipae,
+        motif_rmsd: r.motif_rmsd, motif_backbone_aligned_rmsd: r.motif_backbone_aligned_rmsd,
         passes: r.passes, templated_chains: r.templated_chains,
         partial_templates: r.partial_templates.map((p) => `${p.chain}:${p.residues}`),
       });
@@ -116,7 +119,7 @@ export function resultsFiles({ input, designs, generatedAt = new Date().toISOStr
   }
   files.push({ name: 'summary.json', text: `${JSON.stringify(summary, null, 2)}\n` });
   const columns = ['design', 'seed', 'steps_run', 'designed_chains', 'sequences', 'refold_model', 'refold_seed', 'refold_recycles', 'refold_steps', 'rmsd_designed_chain',
-    'rmsd_on_target', 'plddt', 'ptm', 'iptm', 'designed_chain_ptm', 'min_ipae', 'passes', 'templated_chains',
+    'rmsd_on_target', 'plddt', 'ptm', 'iptm', 'designed_chain_ptm', 'min_ipae', 'motif_rmsd', 'motif_backbone_aligned_rmsd', 'passes', 'templated_chains',
     'partial_templates'];
   files.push({
     name: 'summary.csv',
@@ -145,7 +148,10 @@ function readme({ hasInput, usesAf3, page, generatedAt }) {
     'error between a designed residue and another chain\'s. passes applies the model\'s own pass criteria',
     '(RFD4-Proteina configs/metrics/pass_criteria): monomers RMSD <= 1.5 A; binders designed-chain pTM >= 0.80,',
     'min iPAE <= 1.5, RMSD on target <= 2.5 A; antibodies min iPAE <= 2.0, RMSD on target <= 2.0 A. Empty where',
-    'no criteria apply (motifs, enzymes and small-molecule binders also need motif and ligand RMSDs not computed).',
+    'no criteria apply (motifs, enzymes and small-molecule binders also need ligand RMSDs and thresholds not applied here).',
+    'motif_rmsd is RFD4-Proteina\'s refolded_motif_allatom_rmsd: the refold fitted on the motif atoms the run held (each rigid',
+    'group on its own), RMSD of those atoms. motif_backbone_aligned_rmsd is the same atoms after fitting the refold on the',
+    'designed chains\' backbone, so where the motif sits in the scaffold counts. Empty where a design has no motif.',
   ];
   if (usesAf3) {
     lines.push('', 'AlphaFold 3 refolds were made with Google DeepMind\'s AlphaFold 3 parameters, which are for',

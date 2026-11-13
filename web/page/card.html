@@ -43,57 +43,11 @@
                 <div id="rfd4p-warnings" class="rfd4p-warnings"></div>
             </div>
 
-            <!-- Every design of the runs on this input, one row each with its refold's numbers (web/app.js _renderDesigns). -->
+            <!-- Every design of the runs on this input, one row each with its refold's numbers (Studio's Refold panel, mounted here by web/app.js). -->
             <div id="design-results" class="rfd4p-results-box" hidden>
-                <div id="design-view-radios" class="rfd4p-designs" role="radiogroup" aria-label="Designs"></div>
-                <!-- Refold: fold each design's sequence again and score how it comes back (web/app.js _refoldDesigns). -->
-                <div id="rfd4p-refold" class="rfd4p-refold-box" hidden>
-                    <strong>Refold</strong>
-                    <div class="rfd4p-refold-grid">
-                        <label>Model
-                            <select id="rfd4p-refold-model" class="rfd4p-refold-model">
-                                <option value="af3" selected>AlphaFold 3</option>
-                                <option value="openbind0">OpenBind-0</option>
-                            </select>
-                        </label>
-                        <label title="Another seed samples the fold again">Seed
-                            <input id="rfd4p-refold-seed" type="number" min="0" max="4294967295" step="1" value="0" />
-                        </label>
-                        <label title="Trunk recycling passes: more is slower, sometimes more confident">Recycles
-                            <select id="rfd4p-refold-recycles">
-                                <option value="0">0</option><option value="1">1</option><option value="2">2</option>
-                                <option value="3" selected>3</option><option value="5">5</option><option value="10">10</option>
-                            </select>
-                        </label>
-                        <label title="Diffusion steps of the structure module: 25 is LocalFold's default, 200 AlphaFold 3's own">Steps
-                            <select id="rfd4p-refold-steps">
-                                <option value="25" selected>25</option><option value="50">50</option>
-                                <option value="100">100</option><option value="200">200</option>
-                            </select>
-                        </label>
-                    </div>
-                    <button id="rfd4p-refold-btn" class="secondary compact" type="button"
-                            title="Refold every design not yet refolded with these settings">Refold all</button>
-                    <p id="rfd4p-refold-result" class="rfd4p-refold-result" aria-live="polite" hidden></p>
-                </div>
-                <dialog id="rfd4p-refold-terms" class="rfd4p-refold-terms" aria-labelledby="rfd4p-refold-terms-title">
-                    <form method="dialog">
-                        <h2 id="rfd4p-refold-terms-title">AlphaFold 3 model parameters</h2>
-                        <p>These are Google DeepMind's parameters. They are not available for commercial use and carry a
-                            prohibited-use policy.</p>
-                        <p><strong>OpenBind-0</strong> runs the same architecture under Apache 2.0. It is a different model.</p>
-                        <p class="rfd4p-refold-terms-links">
-                            <a href="https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md" target="_blank" rel="noopener noreferrer">AlphaFold 3 weights terms</a>
-                            &middot;
-                            <a href="https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_PROHIBITED_USE_POLICY.md" target="_blank" rel="noopener noreferrer">prohibited use policy</a>
-                        </p>
-                        <div class="button-row">
-                            <button value="switch" class="primary compact">Use OpenBind-0</button>
-                            <button value="accept" class="secondary compact">I agree, use AlphaFold 3</button>
-                            <button value="cancel" class="secondary compact">Cancel</button>
-                        </div>
-                    </form>
-                </dialog>
+                <div id="rfd4p-refold-mount" class="rfd4p-refold-mount"></div>
+                <!-- Studio's Refold panel: this table's refold numbers and the Refold box with its terms dialog are mounted
+                     here (window.atomworksStudio.mountRefoldPanel, web/refold-provider.js); the page supplies only the fold. -->
                 <div class="button-row" id="downloads" hidden>
                     <button id="download-all-btn" class="secondary compact" type="button" title="Input, every design with its trajectory, every refold, and a summary table">Save all (.zip)</button>
                 </div>
