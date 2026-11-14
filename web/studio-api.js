@@ -3827,6 +3827,24 @@ export function getSharedStudioStore() {
   return rootWin.__rfd4pStudioStore;
 }
 
+/** A minimal mmCIF of a chain as it was loaded ({ atoms, chain }): every polymer residue, as drawn for the "chain as loaded" overlay. */
+function chainSourceCif(src) {
+  const { atoms, chain } = src;
+  const rows = ['data_overlay', 'loop_', ...['group_PDB', 'id', 'type_symbol', 'label_atom_id', 'label_comp_id', 'label_asym_id',
+    'label_entity_id', 'label_seq_id', 'auth_seq_id', 'auth_asym_id', 'Cartn_x', 'Cartn_y', 'Cartn_z', 'occupancy', 'B_iso_or_equiv',
+    'pdbx_PDB_model_num'].map((k) => `_atom_site.${k}`)];
+  let id = 0;
+  for (let i = 0; i < atoms.nAtoms; i += 1) {
+    if (String(atoms.chain_id[i]) !== chain || /^\d+-\d+$/.test(String(atoms.res_name[i]))) continue;
+    const c = atoms.coord[i];
+    if (!c || !Number.isFinite(c[0])) continue;
+    const el = String(atoms.element?.[i] ?? String(atoms.atom_name[i])[0]).toUpperCase() || 'C';
+    const name = String(atoms.atom_name[i]);
+    rows.push(`ATOM ${++id} ${el} ${/['"\s]/.test(name) ? `"${name}"` : name} ${atoms.res_name[i]} ${chain} 1 ${atoms.res_id[i]} ${atoms.res_id[i]} ${chain} ${c[0].toFixed(3)} ${c[1].toFixed(3)} ${c[2].toFixed(3)} 1.00 0.00 1`);
+  }
+  return id ? `${rows.join('\n')}\n` : null;
+}
+
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -4003,6 +4021,28 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
         });
       }
 
+      // Read routes of the design card: a chain as a plan, the chain as loaded, and where new-residue segments came from.
+      const planMatch = subpath.match(/^\/chains\/([^/]+)\/plan$/);
+      if (planMatch && method === 'GET') {
+        return jsonResponse(doc.chainPlan(decodeURIComponent(planMatch[1])));
+      }
+      const sourceMatch = subpath.match(/^\/chains\/([^/]+)\/source$/);
+      if (sourceMatch && method === 'GET') {
+        const cid = decodeURIComponent(sourceMatch[1]);
+        const src = doc.chainSources?.get(cid);
+        const cif = src ? chainSourceCif(src) : null;
+        if (!cif) return jsonResponse({ detail: 'no source for this chain' }, 404);
+        return jsonResponse({ chain: src.chain, cif });
+      }
+      if (subpath === '/segments/origins' && method === 'GET') {
+        const origins = {};
+        for (let i = 0; i < doc.atoms.nAtoms; i += 1) {
+          const found = doc.segmentOrigin(i);
+          if (found) origins[String(i)] = found;
+        }
+        return jsonResponse({ origins });
+      }
+
       const body = init.body && typeof init.body === 'string' ? JSON.parse(init.body) : {};
 
       if (subpath === '/selections/resolve' && method === 'POST') {
@@ -4075,6 +4115,11 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
       if (subpath === '/charges' && method === 'POST') {
         const editResult = doc.setCharge(body.atom_indices || [], { value: body.value, delta: body.delta });
         return jsonResponse({ session_id: sessionId, structure: doc.summary(), edit_result: editResult });
+      }
+      if (subpath === '/chains/preview' && method === 'POST') {
+        let copy;
+        try { copy = doc.previewRebuild(String(body.chain_id), body.parts || []); } catch (err) { return jsonResponse({ detail: String(err?.message ?? err) }, 400); }
+        return jsonResponse({ cif: copy.toCif() });
       }
       if (subpath === '/chains/rebuild' && method === 'POST') {
         const editResult = doc.rebuildChain(body.chain_id, body.parts || []);
