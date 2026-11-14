@@ -9,7 +9,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { buildBatch } from '../shared/rfd4p/pipeline/index.js';
-import { designSpec } from '../web/design-spec.js';
 import { StudioDoc } from '../web/studio-api.js';
 
 const atom = (k, name, el, seq, x) =>
@@ -95,7 +94,8 @@ test('a motif residue removed leaves its two blocks of new residues joined end t
   // The blocks either side share a name and a number ("15-30" at 4 and 4A): the bonds between them are told apart by
   // the insertion code when the job is read back, or both landed on the second and the model saw two chain breaks.
   const doc = new StudioDoc(readFileSync(new URL('../web/studio/examples/motif_scaffolding.cif', import.meta.url), 'utf8'), 'motif');
-  const before = designSpec(doc.atoms).contig;
+  const planOf = () => JSON.stringify(doc.chainPlan('A').parts.map(({ kind, lo, hi, min, max }) => ({ kind, lo, hi, min, max })));
+  const before = planOf();
   const a = doc.atoms;
   doc.removeAtoms(Array.from({ length: a.nAtoms }, (_, i) => i).filter((i) => String(a.chain_id[i]) === 'A' && a.res_id[i] === 3 && !doc._isSegmentAtom(i)));
   const res = buildBatch(doc.toCif(), { seed: 1 });
@@ -112,7 +112,7 @@ test('a motif residue removed leaves its two blocks of new residues joined end t
   const parts = plan.parts.map((q) => (q.kind === 'kept' ? { kind: 'kept', lo: q.lo, hi: q.hi } : { kind: 'new', atom: q.atom, min: q.min, max: q.max }));
   parts.splice(3, 0, { kind: 'kept', lo: 3, hi: 3 });
   doc.rebuildChain('A', parts);
-  assert.equal(designSpec(doc.atoms).contig, before);
+  assert.equal(planOf(), before);
   const names = new Set(Array.from({ length: doc.atoms.nAtoms }, (_, i) => doc.atoms.annotations['annotation_src-component_1_atom']?.[i]).filter((x) => /^A\d/.test(x ?? '')));
   assert.deepEqual([...names], ['A38', 'A14', 'A99']);
 });

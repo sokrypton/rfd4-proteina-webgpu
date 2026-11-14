@@ -12,15 +12,17 @@ export async function main() {
   await new Promise((resolve, reject) => { iframe.onload = resolve; iframe.onerror = reject; iframe.src = '/index.html'; });
   const win = iframe.contentWindow;
   const t0 = performance.now();
-  while (!win.rfd4pApp || win.rfd4pApp.els.predictBtn.disabled) {
+  while (!win.rfd4pApp?.card) {
     if (performance.now() - t0 > 60000) throw new Error('app init timeout');
     await new Promise((r) => setTimeout(r, 100));
   }
   const app = win.rfd4pApp;
+  // The card's status line (the page's runs report there).
+  const statusEl = () => win.document.getElementById('rfd4p-status-message');
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const run = async (nsteps = 8) => {
     await app.runDesign({ nsteps, recycleSchedule: 'none' });
-    return { status: app.els.statusMessage.textContent.slice(0, 160), ok: Boolean(app.lastResult?.cif) && !app.els.statusMessage.classList.contains('error') };
+    return { status: statusEl().textContent.slice(0, 160), ok: Boolean(app.lastResult?.cif) && !statusEl().classList.contains('error') };
   };
   // Destroy the device only once a design is genuinely mid-flight. This used to be a fixed 1.5 s sleep, which
   // raced the design itself: an 8-step design takes ~1.2 s on an M5, so the destroy landed after it had already
@@ -28,7 +30,7 @@ export async function main() {
   const waitForStep = async (minStep) => {
     const t = performance.now();
     for (;;) {
-      const m = /step (\d+)\/(\d+)/.exec(app.els.statusMessage.textContent);
+      const m = /step (\d+)\/(\d+)/.exec(statusEl().textContent);
       if (m && Number(m[1]) >= minStep) return;
       if (performance.now() - t > 30000) throw new Error('design never reached a mid-run step');
       await sleep(20);

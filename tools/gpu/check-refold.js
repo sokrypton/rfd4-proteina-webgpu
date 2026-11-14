@@ -1,16 +1,19 @@
 /**
- * Refolding a finished design, end to end: run a design, refold it, and check the result the page shows.
+ * Refolding a finished design, end to end, through Studio's Design card: start a chain from the start screen, press
+ * the card's Generate, refold the design in the Refold panel, and check the result the page shows.
  *
  * Uses OpenBind-0 (Apache-2.0) rather than AlphaFold 3 on purpose. AF3's parameters carry Google DeepMind's terms,
  * which Studio's Refold panel puts behind a dialog a person has to accept; a gate must not click through that.
  * The panel settles terms only for a model that has them, so this path is the same one minus the agreement.
  *
- * The Refold panel is Studio's (window.atomworksStudio.mountRefoldPanel, mounted by web/app.js); the fold is this page's
- * (web/refold-provider.js). This drives the panel the way a person does, by its controls, and reads what it kept.
+ * The card and its Refold panel are Studio's (window.atomworksStudio.mountDesignCard, mounted by web/app.js, which
+ * hosts the panel in the card's Outputs tab); the engine and the fold are this page's (web/app.js, web/refold-provider.js).
+ * This drives the card and the panel the way a person does, by their controls, and reads what they kept.
  *
  * The weight bundle is ~265 MiB from HuggingFace on a cold Cache API, so give this a long timeout:
  *   LOCALFOLD_STOCK_FLAGS=1 LOCALFOLD_GPU_TIMEOUT_MS=2400000 node tools/gpu-chrome.mjs tools/gpu/check-refold.js
- * Add --nsteps= / --recycle= only to depart from the preset's own sampling.
+ * Add --nsteps= / --recycle= only to depart from the card's defaults (60 steps, Thinking `none`); `--seed=` the first
+ * design's seed (42).
  *
  * `--gl=1`: the page's WebGL2 path (`?gl=1`), where the refold is LocalFold's WebGL2 fold.
  * `--weights=/runs/model-openbind0-int5`: the bundle from a local copy instead of HuggingFace (a link under /runs/,
@@ -18,10 +21,11 @@
  */
 export async function main(device, args = []) {
   const opt = Object.fromEntries(args.map((a) => a.replace(/^--/, '').split('=')));
-  const preset = opt.preset ?? 'uncond_short';
+  // The card's start screen: `+ new`, a free chain of 60-100 residues. (`--start=` another of its buttons.)
+  const preset = opt.start ?? 'rfd4p-start-seq';
   const model = opt.model ?? 'openbind0';
-  // Default to the preset's own sampling. `uncond_short` asks for 60 steps and `low` recycling; forcing a cheaper
-  // schedule produces a worse design, and a worse design refolds worse, which would read as a refold problem.
+  // Default to the card's own sampling: 60 steps, Thinking none. Forcing a cheaper schedule produces a worse design,
+  // and a worse design refolds worse, which would read as a refold problem.
   const overrides = {};
   if (opt.nsteps !== undefined) overrides.nsteps = Number(opt.nsteps);
   if (opt.recycle !== undefined) overrides.recycleSchedule = opt.recycle;
@@ -44,11 +48,12 @@ export async function main(device, args = []) {
   };
 
   const t0 = performance.now();
-  while (!win.rfd4pApp || win.rfd4pApp.els.predictBtn.disabled) {
+  while (!win.rfd4pApp?.card) {
     if (performance.now() - t0 > 60000) throw new Error('app init timeout');
     await sleep(100);
   }
   const app = win.rfd4pApp;
+  const card = app.card;
   const doc = win.document;
   if (opt.weights) {
     // The vendored LocalFold's own module instance (vendor/ is outside the import map), as its loader reads it.
@@ -58,13 +63,7 @@ export async function main(device, args = []) {
     MODEL_BUNDLES[model].directory = opt.weights;
   }
 
-  await app._loadPreset(preset);
-  const tD = performance.now();
-  await app.runDesign(overrides);
-  const designMs = Math.round(performance.now() - tD);
-  if (!app.lastResult?.cif) throw new Error(`design failed: ${app.els.statusMessage.textContent.slice(0, 200)}`);
-
-  // The panel reads its fields when they change, as a person's edit does, so set each one the way a person would.
+  // The card reads its fields when they change, as a person's edit does, so set each one the way a person would.
   const choose = (id, value) => {
     const field = doc.getElementById(id);
     if (field.tagName === 'SELECT' && ![...field.options].some((o) => o.value === String(value))) {
@@ -74,6 +73,24 @@ export async function main(device, args = []) {
     field.dispatchEvent(new win.Event('input', { bubbles: true }));
     field.dispatchEvent(new win.Event('change', { bubbles: true }));
   };
+  for (let i = 0; i < 400 && !doc.getElementById(preset); i += 1) await sleep(50);
+  doc.getElementById(preset).click();
+  for (let i = 0; i < 400 && !(card.inputSessionId() && card.spec()); i += 1) await sleep(50);
+  if (!card.spec()) throw new Error(`${preset} did not open a job in the card`);
+  await sleep(1500);
+  choose('seed-input', opt.seed ?? 42);
+  if (overrides.recycleSchedule) {
+    const radio = doc.querySelector(`#thinking-radio-group input[value="${overrides.recycleSchedule}"]`);
+    if (!radio) throw new Error(`no Thinking choice ${overrides.recycleSchedule}`);
+    radio.click();
+  }
+  if (overrides.nsteps !== undefined) app.nsteps = overrides.nsteps;
+  const tD = performance.now();
+  await card.generate();
+  const designMs = Math.round(performance.now() - tD);
+  const design = card.designs()[0];
+  if (!app.lastResult?.cif || !design) throw new Error(`design failed: ${doc.getElementById('rfd4p-status-message').textContent.slice(0, 200)}`);
+
   if (opt['refold-recycles']) choose('refold-recycles', opt['refold-recycles']);
   if (opt['refold-steps']) choose('refold-steps', opt['refold-steps']);
   const panel = doc.getElementById('refold-box');
@@ -104,7 +121,7 @@ export async function main(device, args = []) {
     lastStatus = status;
     lastTick = now;
   }, 20);
-  const refolding = app.refoldPanel.refold();
+  const refolding = card.refold.refold();
   await sleep(500);
   if (terms?.open) { terms.close(); throw new Error(`the AF3 terms dialog opened for model ${model}`); }
   await refolding;
@@ -113,10 +130,10 @@ export async function main(device, args = []) {
 
   const text = (result.textContent ?? '').trim();
   // The status line can read well while nothing was recorded, so check the view the page actually keeps.
-  const view = app.generatedViews?.get(app.studioSessionId) ?? null;
+  const view = design.data ?? null;
   const toRecord = (r) => ({ ...r, ...r.data });   // the page's own extras (pdb, confidence, ...) ride in `data`
-  const refolds = (app.refoldPanel.records(app.studioSessionId) ?? []).map(toRecord);
-  if (app.refoldPanel.session.isRunning) throw new Error('refold left a run behind');
+  const refolds = (card.refold.records(design.id) ?? []).map(toRecord);
+  if (card.refold.session.isRunning) throw new Error('refold left a run behind');
   if (refolds.length !== 1) {
     throw new Error(`expected one recorded refold, got ${refolds.length}: ${text || '(no failure line)'}; errors: ${errors.slice(0, 4).join(' | ')}`);
   }
@@ -149,9 +166,9 @@ export async function main(device, args = []) {
       lastStatus2 = status;
       lastTick = now;
     }, 20);
-    await app.refoldPanel.refold();
+    await card.refold.refold();
     win.clearInterval(tick2);
-    again = { refoldMs: Math.round(performance.now() - t2), longestStallMs: Math.round(longestStallMs), stalls: stalls2.slice(0, 12), refolds: app.refoldPanel.records(app.studioSessionId).length };
+    again = { refoldMs: Math.round(performance.now() - t2), longestStallMs: Math.round(longestStallMs), stalls: stalls2.slice(0, 12), refolds: card.refold.records(design.id).length };
   }
   // Is either structure a chain at all? Consecutive Cα spacing (3.8 Å in a protein), design and refold.
   const caSpacing = (pdb) => {
@@ -167,7 +184,7 @@ export async function main(device, args = []) {
   };
   const geometry = { design: caSpacing(view.pdb), refold: caSpacing(refold.pdb) };
   return {
-    ok: true, geometry, again, preset, overrides, model, offered, designMs, refoldMs, longestStallMs: Math.round(longestStallMs), stalls: stalls.slice(0, 12), backend: app.els.webgpuBadge?.textContent,
+    ok: true, geometry, again, preset, overrides, model, offered, designMs, refoldMs, longestStallMs: Math.round(longestStallMs), stalls: stalls.slice(0, 12), backend: doc.getElementById('webgpu-badge')?.textContent,
     resultText: String(refold.text ?? '').slice(0, 300),
     viewerBackend: doc.getElementById('viewer')?.dataset.backend ?? null,
     renderedAtoms: Number(doc.getElementById('viewer')?.dataset.renderedAtoms ?? 0),

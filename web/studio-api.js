@@ -437,7 +437,6 @@ export class StudioDoc {
       this.revision = 0;
     }
     this.undoStack = [];
-    this.trajectoryCif = opts.trajectoryCif ?? null;
     // A plain structure opens with everything fixed (coordinates and sequence): a user starts from what they loaded
     // and marks what to design, rather than starting from "redesign all of it".
     if (opts.preset === 'rcsb' && opts.loadStandardAnnotations !== false && this.atoms.nAtoms) {
@@ -3964,10 +3963,6 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
       }
       if (subpath === '/pdb' && method === 'GET') {
         return textResponse(doc.toPdb(), 200, 'chemical/x-pdb');
-      }
-      if (subpath === '/trajectory.cif' && method === 'GET') {
-        if (!doc.trajectoryCif) return jsonResponse({ detail: 'No trajectory available' }, 404);
-        return textResponse(doc.trajectoryCif, 200, 'chemical/x-mmcif');
       }
       if (subpath === '/export' && method === 'POST') {
         return jsonResponse({

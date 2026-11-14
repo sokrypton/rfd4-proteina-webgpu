@@ -14,11 +14,13 @@ export async function main() {
   const win = iframe.contentWindow;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const t0 = performance.now();
-  while (!win.rfd4pApp || win.rfd4pApp.els.predictBtn.disabled) {
+  while (!win.rfd4pApp?.card) {
     if (performance.now() - t0 > 60000) throw new Error('app init timeout');
     await sleep(100);
   }
   const app = win.rfd4pApp;
+  // The card's status line (the page's runs report there).
+  const statusEl = () => win.document.getElementById('rfd4p-status-message');
   const doc = win.document;
   const viewerEl = doc.getElementById('viewer');
   const sel = doc.getElementById('viewer-mode');
@@ -61,7 +63,7 @@ export async function main() {
   await app.runDesign({ nsteps: 10, recycleSchedule: 'none' });
   const designMs = Math.round(performance.now() - tD);
   await sleep(1500);
-  if (!app.lastResult?.cif) throw new Error(`design failed on Patinae: ${app.els.statusMessage.textContent.slice(0, 200)}`);
+  if (!app.lastResult?.cif) throw new Error(`design failed on Patinae: ${statusEl().textContent.slice(0, 200)}`);
   if (liveFrames < 2) throw new Error(`no live frames rendered on Patinae (got ${liveFrames})`);
   if (viewerEl.dataset.backend !== 'patinae') throw new Error('Patinae fell back to Mol* during the design');
 
