@@ -46,17 +46,20 @@ for (const ref of [...refs].sort()) {
   }
 }
 
-// 2b. Assets a module fetches at runtime through `new URL('...', import.meta.url)`. These never appear in
-// index.html, so nothing above sees them: `web/guide-dialog.js` loads `help/index.html` that way, and a missing
-// guide would fail only when a visitor pressed the button.
+// 2b. Assets a module fetches at runtime through `new URL('...', import.meta.url)`, and pages the provider hands Studio
+// by address (`guide: { url: new URL('./help/index.html', location.href).href }`, resolved against the page). These never
+// appear in index.html, so nothing above sees them, and a missing guide would fail only when a visitor pressed the button.
 const moduleFiles = tracked('web/*.js');
 for (const f of moduleFiles) {
   const src = readFileSync(join(ROOT, f), 'utf8');
-  for (const m of src.matchAll(/new URL\(\s*['"`]([^'"`]+)['"`]\s*,\s*import\.meta\.url\s*\)/g)) {
-    const spec = m[1];
+  const fetched = [
+    ...[...src.matchAll(/new URL\(\s*['"`]([^'"`]+)['"`]\s*,\s*import\.meta\.url\s*\)/g)].map((m) => [m[1], dirname(join(ROOT, f))]),
+    ...[...src.matchAll(/new URL\(\s*['"`](\.\/[^'"`]+)['"`]\s*,\s*location\.href\s*\)/g)].map((m) => [m[1], ROOT]),
+  ];
+  for (const [spec, base] of fetched) {
     // Only static specifiers can be checked; a template with `${...}` is resolved at runtime.
     if (spec.includes('${') || /^(https?:)?\/\//.test(spec) || spec.startsWith('data:')) continue;
-    const resolved = resolve(dirname(join(ROOT, f)), spec.split('?')[0]);
+    const resolved = resolve(base, spec.split('?')[0]);
     const target = resolved.endsWith('/') ? join(resolved, 'index.html') : resolved;
     if (!existsSync(target)) {
       problems.push(`${f} fetches ${spec} at runtime, which does not exist (${relative(ROOT, target)})`);

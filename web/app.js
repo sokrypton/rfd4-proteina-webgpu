@@ -43,7 +43,6 @@ import { createLocalFoldProvider, refoldRecordForZip, refoldTermsStorage } from 
 import { motifAtomsOf } from './motif-metrics.js';
 import { webgl2Available } from '../webgl/rfd4p/gl.js';
 import { Rfd4pModelGL } from '../webgl/rfd4p/model.js';
-import { openGuide } from './guide-dialog.js';
 import { criteriaKind, designedChains, motifSlots, partialTemplates, polymerChains } from './refold-view.js';
 
 installStudioApiInterceptor();
@@ -610,7 +609,8 @@ class Rfd4pStudioApp {
         storage: refoldTermsStorage,
       },
       renderExtras: (container) => this._renderSpeedHint(container),
-      guide: () => openGuide(),
+      // Studio's popup over the designer: the guide page (help/index.html, also a page of its own) read once and shown in a dialog.
+      guide: { url: new URL('./help/index.html', location.href).href },
       zipTitle: 'RFD4-Proteina (WebGPU) results',
       // The refold's own record (its RMSD of the designed chain fitted on itself, its templates) is what the zip keeps.
       zipRefold: (record) => refoldRecordForZip(record),

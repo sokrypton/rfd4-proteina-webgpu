@@ -4,9 +4,9 @@
   "override": {
     "repository": "atomworks-studio (local build)",
     "branch": "integration/design-card",
-    "commit": "b83e585",
+    "commit": "3e69f5a",
     "local": true,
-    "why": "Studio's Design card: the start screen, job editor, run settings, Generate, designs and Save all that this page's own card (web/design-panel.js, removed) used to be, mounted through window.atomworksStudio.mountDesignCard with this page as the engine. This is the local integration build of that branch, an unreleased state of it, not a release: it is here so the page can be tried against the card before Studio releases it."
+    "why": "Studio's Design card: the start screen, job editor, run settings, Generate, designs and Save all that this page's own card (web/design-panel.js, removed) used to be, mounted through window.atomworksStudio.mountDesignCard with this page as the engine. This is a local build of that branch plus feature/dc-guide (the Guide as a built-in popup, `guide: { url }`), an unreleased state of it, not a release: it is here so the page can be tried against the card before Studio releases it."
   },
   "version": "0.0.8",
   "package": "atomworks-studio",
