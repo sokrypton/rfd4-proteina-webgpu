@@ -1,5 +1,13 @@
 {
   "_comment": "The AtomWorks Studio release this site is built from: the atomworks-studio wheel on PyPI, whose annotation_studio/web/ directory is the browser bundle. tools/build-studio.mjs downloads that wheel, checks it against sha256 (the wheel's, as PyPI lists it) and composes index.html from it. Nothing from Studio is vendored in this repository.",
+  "_override": "NOT A RELEASE. While `override` is set, assets/ and index.html are built from a local integration build of Studio's `integration/design-card` branch (the Design card, `window.atomworksStudio.mountDesignCard`), not from the release below, which has no Design card: `npm run build:studio` refuses to run, and the site is rebuilt with `npm run build:studio -- --from <bundle built from override.commit>` (packages/web: pnpm install && pnpm build, then --from packages/web/dist). Do not deploy this build as it is: remove `override` and bump `version`, `sha256` once a release contains the card, then build normally.",
+  "override": {
+    "repository": "atomworks-studio (local build)",
+    "branch": "integration/design-card",
+    "commit": "b83e585",
+    "local": true,
+    "why": "Studio's Design card: the start screen, job editor, run settings, Generate, designs and Save all that this page's own card (web/design-panel.js, removed) used to be, mounted through window.atomworksStudio.mountDesignCard with this page as the engine. This is the local integration build of that branch, an unreleased state of it, not a release: it is here so the page can be tried against the card before Studio releases it."
+  },
   "version": "0.0.8",
   "package": "atomworks-studio",
   "sha256": "df59fdd717310c31ccf83ecd2f6c94fb9ea4266d6061e710814ce976b6add45d",
