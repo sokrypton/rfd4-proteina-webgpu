@@ -192,67 +192,10 @@ function unmodelledTokens(inputAtoms) {
 }
 
 /**
- * The reference motif, as atom records at their conditioning coordinates (Å, input frame), for drawing beside each
- * live frame so a motif-scaffolding run keeps showing what it is scaffolding. A motif is a coordinate-conditioned
- * token that is unindexed, or indexed inside a chain that is otherwise designed; a chain whose residues are all
- * coordinate-conditioned is a target and is drawn by the frame itself. Placed on an unused chain id so it can never
- * share a residue key with the scaffold.
- */
-/**
  * Whether a chain's held residues are a motif, worth showing against what the model builds: a few residues it scaffolds
  * (1QJG's three), not a kept domain the job extends (6MRR and 100 new residues), whose shadow would only double it.
  */
 const isSmallMotif = (fixed, total) => fixed > 0 && fixed < total && fixed <= total / 4;
-
-function buildMotifOverlayAtoms(inputAtoms) {
-  if (!inputAtoms?.token_id || !inputAtoms.condition_coordinate_1_atom) return [];
-  // Conditioned coordinates are centred in the batch; designs are shown in the input's frame, so the motif is too.
-  const [sx, sy, sz] = inputAtoms.center_shift ?? [0, 0, 0];
-  const crdOf = (i) => {
-    const c = inputAtoms.condition_coordinate_1_atom[i];
-    return Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1]) && Number.isFinite(c[2])
-      ? [c[0] + sx, c[1] + sy, c[2] + sz] : null;
-  };
-  const tokenChain = new Map();
-  const tokenHasCrd = new Map();
-  const tokenIndexed = new Map();
-  const unmodelled = unmodelledTokens(inputAtoms);
-  for (let i = 0; i < inputAtoms.token_id.length; i += 1) {
-    const tid = inputAtoms.token_id[i];
-    if (unmodelled.has(tid)) continue;
-    tokenChain.set(tid, inputAtoms.chain_id[i]);
-    if (crdOf(i)) tokenHasCrd.set(tid, true);
-    if (!tokenIndexed.has(tid)) {
-      tokenIndexed.set(tid, inputAtoms.condition_index_1_residue ? Boolean(inputAtoms.condition_index_1_residue[i]) : true);
-    }
-  }
-  const chainTokens = new Map();
-  for (const [tid, chain] of tokenChain) {
-    const c = chainTokens.get(chain) ?? { total: 0, fixed: 0 };
-    c.total += 1;
-    if (tokenHasCrd.get(tid)) c.fixed += 1;
-    chainTokens.set(chain, c);
-  }
-  // Residues placed anywhere always (an enzyme's catalytic tips); residues held in place only as a small motif.
-  const isMotifToken = (tid) => tokenHasCrd.get(tid) && (!tokenIndexed.get(tid)
-    || isSmallMotif(chainTokens.get(tokenChain.get(tid)).fixed, chainTokens.get(tokenChain.get(tid)).total));
-  const used = new Set(tokenChain.values());
-  const chainId = [...'MNOPQRSTUVWXYZ'].find((c) => !used.has(c)) ?? 'MOTIF';
-  const out = [];
-  for (let i = 0; i < inputAtoms.token_id.length; i += 1) {
-    const crd = crdOf(i);
-    const name = inputAtoms.atom_name[i];
-    // Ligands are drawn by the frame itself (atomized tokens are always emitted).
-    if (!crd || inputAtoms.hetero?.[i] || !isMotifToken(inputAtoms.token_id[i]) || !name || name === 'UNK') continue;
-    out.push({
-      groupPdb: 'HETATM', isHetero: true, atomName: name, resName: inputAtoms.res_name[i], chainId,
-      resId: Number(inputAtoms.res_id[i]), authSeqId: Number(inputAtoms.res_id[i]), insCode: '',
-      element: inputAtoms.element?.[i] || undefined, x: crd[0], y: crd[1], z: crd[2],
-      occupancy: 1.0, bFactor: NaN, charge: 0, entityId: null,
-    });
-  }
-  return out;
-}
 
 /**
  * Side chains (Cβ onward) of the design's own motif residues — an unindexed motif placed by the insertion mapping
@@ -295,9 +238,8 @@ function overlayCifOf(atoms, name) {
  * Display-only overlays drawn beside a design, each as its own Mol* structure so none can be distance-bonded to the
  * design or to each other: the reference motif (drawn translucent) and the design's motif side chains.
  */
-function designOverlays(structureAtoms, motifOverlay, skipTokens) {
+function designOverlays(structureAtoms, skipTokens) {
   return {
-    motif: overlayCifOf(motifOverlay, 'motif'),
     sideChains: overlayCifOf(motifSideChainAtoms(structureAtoms, skipTokens), 'motif_side_chains'),
   };
 }
@@ -352,117 +294,6 @@ function alignCaNmToAnchors(caNm, tokenIndices, fixedCoordsNm) {
   return out;
 }
 
-const ONE_LETTER = {
-  ALA: 'A', ARG: 'R', ASN: 'N', ASP: 'D', CYS: 'C', GLN: 'Q', GLU: 'E', GLY: 'G', HIS: 'H', ILE: 'I',
-  LEU: 'L', LYS: 'K', MET: 'M', PHE: 'F', PRO: 'P', SER: 'S', THR: 'T', TRP: 'W', TYR: 'Y', VAL: 'V',
-  MSE: 'M', UNK: 'X', DA: 'A', DC: 'C', DG: 'G', DT: 'T', A: 'A', C: 'C', G: 'G', U: 'U',
-};
-
-/**
- * The designed sequence of each live frame, drawn in Studio's sequence dock while a design runs. It sits beside
- * Studio's own (interactive) `#sequence-view`, which is only hidden meanwhile, so finishing, stopping or failing
- * just removes the strip and Studio's view is back untouched. Residues that changed since the previous frame are
- * highlighted, which shows the sequence settling.
- */
-class LiveSequenceStrip {
-  constructor() {
-    this.dock = document.getElementById('sequence-dock');
-    this.view = document.getElementById('sequence-view');
-    this.el = null;
-    this.tokens = new Map();
-  }
-
-  /** @param {Set<string>} [hotspots] `chain|resId|resName` keys (`hotspotResidueKeys`), marked as in Studio's view */
-  start(hotspots = new Set()) {
-    this.hotspots = hotspots;
-    if (!this.view || this.el) return;
-    document.getElementById('rfd4p-live-sequence')?.remove();
-    this.el = document.createElement('div');
-    this.el.id = 'rfd4p-live-sequence';
-    this.el.className = 'sequence-view';
-    this.el.setAttribute('aria-live', 'off');
-    this.view.after(this.el);
-    // On the dock, not the view: Studio's sequence render resets the view's className.
-    this.dock?.classList.add('rfd4p-live');
-    this.tokens.clear();
-  }
-
-  /** @param {Array<{chainId: string, resId: number, resName: string}>} atoms */
-  update(atoms) {
-    if (!this.el) return;
-    const residues = new Map();
-    for (const a of atoms) {
-      const code = ONE_LETTER[a.resName];
-      const key = `${a.chainId}:${a.resId}`;
-      if (code && !residues.has(key)) residues.set(key, { chainId: a.chainId, resId: a.resId, resName: a.resName, code });
-    }
-    if (this.tokens.size !== residues.size || [...residues.keys()].some((k) => !this.tokens.has(k))) {
-      this.build(residues);
-    } else {
-      for (const [key, r] of residues) {
-        const tok = this.tokens.get(key);
-        const diff = tok.textContent !== r.code;
-        if (diff) {
-          tok.textContent = r.code;
-          tok.title = `${r.chainId}/${r.resName} ${r.resId}`;
-        }
-        tok.classList.toggle('rfd4p-changed', diff);
-      }
-    }
-  }
-
-  build(residues) {
-    this.el.replaceChildren();
-    this.tokens.clear();
-    const tracks = new Map();
-    for (const [key, r] of residues) {
-      let track = tracks.get(r.chainId);
-      if (!track) {
-        const chain = document.createElement('div');
-        chain.className = 'sequence-chain';
-        const color = window.atomworksStudio?.chainColor?.(r.chainId);
-        if (color) chain.style.setProperty('--chain-color', color);
-        const label = document.createElement('span');
-        label.className = 'sequence-chain-label';
-        label.textContent = r.chainId;
-        track = document.createElement('div');
-        track.className = 'sequence-track';
-        chain.append(label, track);
-        this.el.appendChild(chain);
-        tracks.set(r.chainId, track);
-      }
-      const tok = document.createElement('span');
-      tok.className = 'sequence-token';
-      if (this.hotspots?.has(`${r.chainId}|${r.resId}|${r.resName}`)) tok.classList.add('condition-hotspot');
-      tok.textContent = r.code;
-      tok.title = `${r.chainId}/${r.resName} ${r.resId}`;
-      track.appendChild(tok);
-      this.tokens.set(key, tok);
-    }
-  }
-
-  stop() {
-    if (!this.el) return;
-    this.el.remove();
-    this.el = null;
-    this.tokens.clear();
-    this.dock?.classList.remove('rfd4p-live');
-  }
-}
-
-/** The hotspot residues of a Studio document, as `chain|resId|resName` keys. */
-function hotspotResidueKeys(atoms) {
-  const keys = new Set();
-  // A Studio document keeps it under `annotations`; a built batch's atoms also carry it flat.
-  const hot = atoms?.annotations?.condition_hotspot_1_atom ?? atoms?.condition_hotspot_1_atom;
-  if (!hot) return keys;
-  const n = atoms.nAtoms ?? atoms.chain_id.length;
-  for (let i = 0; i < n; i += 1) {
-    if (hot[i]) keys.add(`${atoms.chain_id[i]}|${atoms.res_id[i]}|${atoms.res_name[i]}`);
-  }
-  return keys;
-}
-
 const PRESET_TO_TASK = {
   uncond_short: 'unconditional',
   ppi_pdl1: 'unconditional',
@@ -487,40 +318,16 @@ const NO_HOOKS = {
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** The ghost the reference motif is drawn in: one colour, so it never reads as extra bonds on the sampled side chain. */
-const MOTIF_OVERLAY = { label: 'Motif (reference)', alpha: 0.35, color: 0xe2e8f0, sizeAspectRatio: 0.6 };
+/**
+ * The card draws the reference motif, the hotspots and the live designed sequence itself, from the input and the frames
+ * (design-card/run-context.ts); the engine adds what only it knows: the side chains of the design's own motif residues.
+ */
 const SIDE_CHAIN_OVERLAY = { label: 'Motif side chains' };
 
 /** `designOverlays` as the card draws them beside a frame or a design (`FrameOptions.overlays`). */
 const cardOverlays = (overlays) => ({
-  motif: { cif: overlays?.motif ?? null, options: MOTIF_OVERLAY },
   sideChains: { cif: overlays?.sideChains ?? null, options: SIDE_CHAIN_OVERLAY },
 });
-
-/** The residues of a hotspot key set, as the viewer names a live frame's (res_id, past any new residues). */
-const hotspotsOf = (keys) => [...keys].map((key) => {
-  const [chain, residue] = key.split('|');
-  return { chain, residue: Number(residue) };
-});
-
-const insCodeOf = (atoms, i) => { const c = String(atoms.ins_code?.[i] ?? ''); return c === '.' || c === '?' ? '' : c; };
-
-/**
- * `keys` (`hotspotResidueKeys` of the input) as the viewer names them on a finished design: its CIF's auth_seq_id and
- * insertion code. A design keeps a kept chain's letter and numbering; residues that do not match (chain, number and
- * residue) are left alone.
- */
-function designHotspots(cif, keys) {
-  if (!keys?.size) return [];
-  const a = new StudioDoc(cif, 'design.cif').atoms;
-  const found = new Map();
-  for (let i = 0; i < a.nAtoms; i += 1) {
-    if (!keys.has(`${a.chain_id[i]}|${a.res_id[i]}|${a.res_name[i]}`)) continue;
-    const r = { chain: String(a.chain_id[i]), residue: Number(a.auth_seq_id?.[i] ?? a.res_id[i]), insCode: insCodeOf(a, i) };
-    found.set(`${r.chain}|${r.residue}|${r.insCode}`, r);
-  }
-  return [...found.values()];
-}
 
 /** Settings of the design card, as this engine takes them (the card's own defaults, written out). */
 const CARD_SETTINGS = {
@@ -928,10 +735,9 @@ class Rfd4pStudioApp {
    * `hooks`. A failure the person should read in other words carries `userMessage`.
    */
   async generate(request, hooks = NO_HOOKS) {
-    const liveSequence = new LiveSequenceStrip();
     this.running = true;
     try {
-      return await this._generate(request, hooks, liveSequence);
+      return await this._generate(request, hooks);
     } catch (err) {
       if (request.signal?.aborted || String(err?.message || '').includes('aborted')) throw err;
       // A failed readback can surface before device.lost settles; give it a moment so a lost device is
@@ -946,12 +752,11 @@ class Rfd4pStudioApp {
       }
       throw err;
     } finally {
-      liveSequence.stop();
       this.running = false;
     }
   }
 
-  async _generate(request, hooks, liveSequence) {
+  async _generate(request, hooks) {
     if (this.noWebGpu) throw Object.assign(new Error(NO_WEBGPU_MESSAGE), { userMessage: NO_WEBGPU_MESSAGE });
     const { signal } = request;
     const s = request.settings ?? {};
@@ -1024,11 +829,6 @@ class Rfd4pStudioApp {
     for (let sampleIdx = 0; sampleIdx < numSamples; sampleIdx += 1) {
       const sampleSeed = baseSeed + sampleIdx;
       const { batch, n, atoms } = sampleIdx === 0 ? firstBatchRes : this._buildCurrentBatch(sampleSeed, request.cif);
-      // Hotspots stay marked while the design runs and on every design it makes. Live frames number residues as the job
-      // does (res_id, past any new residues), not as the input is shown, so each sample's keys come from its own batch.
-      const hotspotKeys = hotspotResidueKeys(atoms);
-      liveSequence.start(hotspotKeys);
-      const liveHotspots = hotspotsOf(hotspotKeys);
       const tokens = extractTokenMetadata(batch);
       const fixedAnchors = extractFixedTokenAnchorsNm(batch, n);
       const allTokenIndices = Int32Array.from({ length: n }, (_, idx) => idx);
@@ -1048,7 +848,6 @@ class Rfd4pStudioApp {
       // Every step is shown: each one is decoded (the last is replaced by the final structure), and a step waits
       // for the previous frame's Mol* update rather than dropping its own frame.
       const wantLiveFrame = (step, total) => step < total - 1;
-      const motifOverlay = buildMotifOverlayAtoms(atoms);
       const unmodelled = unmodelledTokens(atoms);
       // Overlays for the frame being built; shown once its structure has been drawn.
       let liveOverlays = null;
@@ -1072,10 +871,9 @@ class Rfd4pStudioApp {
           if (!fixedAnchors && !structure.inputFrame && !isAnchored(structure.atoms) && referenceCaNm) {
             alignStructureAtomsToCa(structure.atoms, referenceCaNm, n);
           }
-          liveSequence.update(structure.atoms);
           // Kept for the saved trajectory: each frame as drawn live.
           if (frame) frame.atoms = structure.atoms;
-          liveOverlays = designOverlays(structure.atoms, motifOverlay, unmodelled);
+          liveOverlays = designOverlays(structure.atoms, unmodelled);
           return toCifString(structure) + caSecondaryStructureCif(structure.atoms);
         } catch (err) {
           console.warn('Live all-atom frame failed; showing Cα frame:', err);
@@ -1109,7 +907,7 @@ class Rfd4pStudioApp {
         // On the GPU path only decoded frames are shown; the CA-only frame is for the CPU backend (no live decode).
         const frameReady = Boolean(info.decoded) || !useGpu;
         if (frameReady && !isStopping) {
-          liveOverlays = { motif: overlayCifOf(motifOverlay, 'motif'), sideChains: null };
+          liveOverlays = { sideChains: null };
           const liveCif = liveAllAtomCif(info, trajectoryFrames.at(-1)) ?? buildLiveFrameCifFromCa(alignedCaNm, tokens, null, UNIFIED_ATOM37_TOKENS);
           if (liveCif) {
             // Early x1 estimates are a collapsed blob that later expands several-fold, so a camera
@@ -1120,7 +918,7 @@ class Rfd4pStudioApp {
             liveFramesRendered += 1;
             // The card waits for the frame before this one to be drawn, so no step's frame is dropped.
             await hooks.frame(liveCif, {
-              name: `step_${info.step + 1}.cif`, keepCamera, hotspots: liveHotspots, overlays: cardOverlays(liveOverlays),
+              name: `step_${info.step + 1}.cif`, keepCamera, overlays: cardOverlays(liveOverlays),
             });
           }
         }
@@ -1165,7 +963,7 @@ class Rfd4pStudioApp {
       if (result.stepsRun != null && result.stepsRun < result.nsteps) earlyStops.push(`${result.stepsRun}/${result.nsteps}`);
 
       const structureAtoms = result.structure?.atoms ?? [];
-      const overlays = designOverlays(structureAtoms, motifOverlay, unmodelled);
+      const overlays = designOverlays(structureAtoms, unmodelled);
       const trajectoryCif = buildTrajectoryCifFromFrames(
         trajectoryFrames,
         tokens,
@@ -1192,7 +990,6 @@ class Rfd4pStudioApp {
         stepsRun: result.stepsRun ?? null,
         nsteps: result.nsteps ?? nsteps,
         designedChains: designed,
-        hotspots: designHotspots(result.cif, hotspotKeys),
         overlays: cardOverlays(overlays),
         // What a refold needs (web/refold-provider.js), handed back with the design.
         data: {

@@ -1,29 +1,8 @@
 /*
  * What this page adds to Studio's page. The Design card (its start screen, job editor, run settings and designs) and the
  * simple view of Studio around it come with Studio (`window.atomworksStudio.mountDesignCard` installs their stylesheets);
- * only these two are the page's: the engine's live designed sequence and the guide popup.
+ * only this is the page's: the guide popup.
  */
-
-/* Live designed sequence in Studio's sequence dock while RFD4-Proteina runs (web/app.js LiveSequenceStrip) */
-.sequence-dock.rfd4p-live #sequence-view,
-.sequence-dock.collapsed #rfd4p-live-sequence {
-  display: none;
-}
-
-.sequence-dock #rfd4p-live-sequence {
-  max-height: 98px;
-  margin-top: 5px;
-}
-
-#rfd4p-live-sequence .sequence-token {
-  transition: background-color 0.4s ease, color 0.4s ease;
-}
-
-#rfd4p-live-sequence .sequence-token.rfd4p-changed {
-  color: var(--accent-ink, #142038);
-  background: var(--accent, #82aaff);
-  transition: none;
-}
 
 /* + new, + pdb, + lig: one bar across the card, tinted, so the way to build a job stands out; the same on the start
    screen and under a job. */
