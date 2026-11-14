@@ -3925,6 +3925,8 @@ export async function handleStudioApiRequest(urlObj, init = {}, nativeFetch = gl
       const sessionOpts = {
         preset,
         assembly: String(form?.get('assembly') ?? parsedOptions.assembly ?? '1'),
+        // Residues the entry did not resolve stay, as the example recipes want (the Python server reads the same field).
+        keepUnresolved: form?.get('keep_unresolved') === 'true',
         loadStandardAnnotations: parsedOptions.load_standard_annotations,
       };
       const { sessionId } = store.createSession(text, name, sessionOpts);
