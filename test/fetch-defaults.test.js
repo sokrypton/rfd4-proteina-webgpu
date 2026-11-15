@@ -5,7 +5,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { StudioDoc } from '../web/studio-api.js';
-import { designSpec } from '../web/design-spec.js';
 
 const atom = (k, group, el, name, comp, asym, seq, x) =>
   `${group} ${k} ${el} ${name} ${comp} ${asym} 1 ${seq} ${seq} ${comp} ${asym} ${name} ${x}.000 0.000 0.000 1.00 0.00 0 1`;
@@ -22,9 +21,12 @@ const cif = [...header, ...residues, atom(++k, 'HETATM', 'NA', 'NA', 'NA', 'B', 
 test('a fetched structure opens fixed, without buffer ions', () => {
   const doc = new StudioDoc(cif, 't', { preset: 'rcsb' });
   assert.deepEqual([...new Set(Array.from(doc.atoms.res_name, String))], ['ALA']);
-  const spec = designSpec(doc.atoms);
-  assert.equal(spec.task.key, 'nothing');
-  assert.deepEqual(spec.chains[0].pieces.map((p) => [p.kind, p.keep]), [['kept', 'all']]);
+  // Nothing to design: the chain is one kept run, every residue held in place with its sequence.
+  assert.deepEqual(doc.chainPlan('A').parts.map((p) => [p.kind, p.lo, p.hi]), [['kept', 1, 6]]);
+  const a = doc.atoms;
+  const held = a.annotations.condition_coordinate_1_atom;
+  assert.ok(Array.from({ length: a.nAtoms }, (_, i) => i).filter((i) => String(a.chain_id[i]) === 'A').every((i) => Number.isFinite(held[i]?.[0])));
+  assert.ok(!Array.from(a.annotations.condition_sequence_1_residue ?? []).includes('<M>'));
 });
 
 test('"rigid" twice is one rigid group when the group is given', () => {

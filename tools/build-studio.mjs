@@ -5,13 +5,15 @@
  * Studio used to be vendored under studio-src/ and built here, which meant re-applying local patches on every
  * import and keeping a fork of Studio's index.html. The fork was the worse half: Studio looks its elements up by id
  * and throws on a missing one, so a page that had drifted would stop Studio booting outright. Nothing is vendored
- * now — the bundle comes out of the released PyPI wheel, and the page is composed from Studio's own index.html plus the two
- * fragments this repo owns (web/page/head.html, web/page/card.html).
+ * now — the bundle comes out of the released PyPI wheel, and the page is composed from Studio's own index.html plus the
+ * fragment this repo owns (web/page/head.html).
  *
  *   npm run build:studio                      # the pinned release in studio.json
  *   npm run build:studio -- --from <dir>      # a bundle built locally, for trying an unreleased Studio
  *
- * Studio is driven through its documented embedding API (window.atomworksStudio); see web/app.js.
+ * Studio is driven through its documented embedding API (window.atomworksStudio); see web/app.js. The design card (start
+ * screen, job editor, run settings, Generate, designs, Refold, Save all) is Studio's: web/app.js mounts it with
+ * `window.atomworksStudio.mountDesignCard`, so the page composes no card markup of its own.
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -82,9 +84,8 @@ for (const file of emitted) {
 }
 writeFileSync(LIST, JSON.stringify(emitted.sort(), null, 2) + '\n');
 
-// Compose the page: Studio's markup, this repo's head additions, this repo's card ahead of Studio's shell.
+// Compose the page: Studio's markup plus this repo's head additions (the card is mounted by web/app.js).
 const head = readFileSync(join(ROOT, 'web/page/head.html'), 'utf8').trimEnd();
-const card = readFileSync(join(ROOT, 'web/page/card.html'), 'utf8').trimEnd();
 let page = readFileSync(studioPage, 'utf8');
 
 page = page.replace(/<title>[^<]*<\/title>/, `<title>${PIN.title}</title>`);
@@ -93,9 +94,7 @@ if (!page.includes('</head>')) throw new Error('Studio index.html has no </head>
 const entryScript = page.match(/\s*<script type="module" crossorigin src="[^"]+"><\/script>/);
 if (!entryScript) throw new Error('Studio index.html has no module entry script');
 page = page.replace(entryScript[0], `\n${head}${entryScript[0]}`);
-const body = page.match(/<body[^>]*>/);
-if (!body) throw new Error('Studio index.html has no <body>');
-page = page.replace(body[0], `${body[0]}\n${card}`);
+if (!page.includes('id="atomworks-studio-popover"')) throw new Error('Studio index.html has no #atomworks-studio-popover (the sidebar the card mounts into)');
 // Patinae (Studio's WebGPU renderer) is not offered on this page. It works, but its adapter implements neither
 // `updateLiveCif` nor `setLiveMode`, both optional in Studio's viewer contract, so every live frame of a design
 // goes through the full `loadCif` rebuild and its `loadCif` has no options parameter, dropping `keepCamera`.

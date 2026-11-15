@@ -1,12 +1,15 @@
     <!-- This site serves the Studio bundle itself; its offline cache would pin stale assets on Pages. -->
     <meta name="atomworks-studio-service-worker" content="off" />
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <link rel="stylesheet" href="./web/styles.css" />
-    <!-- Light or dark before anything draws, so the viewer never flashes the other colour (web/app.js _initTheme keeps it). -->
+    <!-- Light or dark before anything draws, so the viewer never flashes the other colour (Studio's Design card keeps it,
+         under the same key, once mounted). -->
     <script>
       try {
         const t = localStorage.getItem('rfd4p.theme') ?? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
         document.documentElement.dataset.hostTheme = t;
+        new MutationObserver((_, observer) => {
+          if (document.body) { document.body.dataset.hostTheme = t; observer.disconnect(); }
+        }).observe(document.documentElement, { childList: true });
       } catch { /* storage blocked: dark */ }
     </script>
     <!-- app.js first: its import of studio-api.js installs the /api/* fetch interceptor the Studio bundle boots against. -->

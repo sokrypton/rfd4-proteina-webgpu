@@ -14,11 +14,13 @@ export async function main(device, args = []) {
   const win = iframe.contentWindow;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const t0 = performance.now();
-  while (!win.rfd4pApp || win.rfd4pApp.els.predictBtn.disabled) {
+  while (!win.rfd4pApp?.card) {
     if (performance.now() - t0 > 60000) throw new Error('app init timeout');
     await sleep(100);
   }
   const app = win.rfd4pApp;
+  // The card's status line (the page's runs report there).
+  const statusEl = () => win.document.getElementById('rfd4p-status-message');
   const doc = win.document;
   const viewerEl = doc.getElementById('viewer');
   const sel = doc.getElementById('viewer-mode');

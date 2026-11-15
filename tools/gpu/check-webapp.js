@@ -1,12 +1,16 @@
 /**
- * End-to-end browser verification of `index.html` (AtomWorks Studio + `web/app.js`) in headless Chrome:
- *   1. Mounts `/index.html` (AtomWorks Studio and the RFD4-Proteina card share one document) in a harness iframe.
+ * End-to-end browser verification of `index.html` (AtomWorks Studio, its Design card and `web/app.js`'s engine) in
+ * headless Chrome:
+ *   1. Mounts `/index.html` (AtomWorks Studio and its Design card share one document) in a harness iframe.
  *   2. Verifies all 9 official AtomWorks Studio examples and `/api/v1/*` routes (conditions, internal-coords,
  *      distance-restraints, segments insert/realize/collapse, undo, export) work end-to-end.
  *   3. Verifies all 10 presets in `RFD4P_PRESETS` build batches cleanly.
- *   4. Runs a real WebGPU design (`nsteps=10`, `recycleSchedule='none'`) on `motif_unidx_1prw`
- *      and verifies that the generated Studio session + multi-model `trajectory.cif` (10 models) + PDB/mmCIF are populated.
+ *   4. Runs a real WebGPU design (`nsteps=10`, `recycleSchedule='none'`) on `motif_unidx_1prw` (`app.runDesign`, the
+ *      engine without the card) and verifies that the generated design opens as a Studio session, its multi-model
+ *      trajectory (10 models) and PDB/mmCIF are populated.
  *   5. Runs `inverse_folding_1prw` to verify on-demand lazy loading of the 5 encoder shards (910 -> 1,257 tensors).
+ *   6. Runs every Studio example through the card (`openExample`, then the card's own Generate) and a second design on
+ *      one input, which joins the card's list.
  *
  *   DISPLAY=:99 node tools/gpu-chrome.mjs tools/gpu/check-webapp.js
  */
@@ -27,7 +31,7 @@ export async function main() {
 
   const win = iframe.contentWindow;
   const t0 = performance.now();
-  while (!win.rfd4pApp || win.rfd4pApp.els.predictBtn.disabled) {
+  while (!win.rfd4pApp?.card) {
     if (performance.now() - t0 > 15000) {
       throw new Error('Timed out waiting for window.rfd4pApp.init()');
     }
@@ -35,6 +39,9 @@ export async function main() {
   }
 
   const app = win.rfd4pApp;
+  const card = app.card;
+  // The card's status line, where a run reports.
+  const statusEl = () => win.document.getElementById('rfd4p-status-message');
 
   // Wait for embedded AtomWorks Studio iframe to mount and render its 9 examples
   const studioWin = win;
@@ -52,13 +59,13 @@ export async function main() {
   // Click the first Studio example ("Protein binder · PD-L1") and wait for session creation
   studioDoc.querySelector('.example-load').click();
   const tSession = performance.now();
-  while (!app.inputSessionId) {
+  while (!card.inputSessionId()) {
     if (performance.now() - tSession > 10000) {
       throw new Error('Timed out waiting for Studio example click to create a session');
     }
     await new Promise((r) => setTimeout(r, 50));
   }
-  const initialStudioSessionId = app.inputSessionId;
+  const initialStudioSessionId = card.inputSessionId();
 
   // Exercise `/api/v1/*` routes against the active Studio session
   const apiJson = async (path, method = 'GET', body = null) => {
@@ -169,7 +176,7 @@ export async function main() {
     await app._loadPreset(p.id);
     const n = app.currentBatchResult?.n ?? 0;
     if (n <= 0) {
-      throw new Error(`Preset ${p.id} failed to build batch (status=${app.els.statusMessage.textContent})`);
+      throw new Error(`Preset ${p.id} failed to build batch (status=${statusEl().textContent})`);
     }
     presetResults.push({ presetId: p.id, n });
   }
@@ -194,19 +201,16 @@ export async function main() {
     throw new Error(`Expected live intermediate denoised frames to render during diffusion, got ${liveFramesCalled}`);
   }
 
-  const statusText = app.els.statusMessage.textContent;
-  if (app.els.statusMessage.classList.contains('error') || !app.lastResult) {
+  const statusText = statusEl().textContent;
+  if (statusEl().classList.contains('error') || !app.lastResult) {
     throw new Error(`runDesign failed: ${statusText}`);
   }
 
   const coreTensorCount = Object.keys(app.activeWeights ?? {}).length;
   const encoderLoadedAfterCore = Boolean(app.shardedBundle?.encoderLoaded);
 
-  // Verify generated Studio session and multi-model trajectory CIF (10 models)
-  const generatedEntries = [...app.generatedViews.entries()].filter(([, v]) => !v.isInput);
-  const [designSessionId, designEntry] = generatedEntries[0] ?? [];
-  const trajResp = await win.fetch(`/api/v1/sessions/${designSessionId}/trajectory.cif`);
-  const trajCifText = trajResp.ok ? await trajResp.text() : '';
+  // Verify the generated design's multi-model trajectory CIF (10 models), as the card is handed it
+  const trajCifText = app.lastDesign?.trajectoryCif ?? '';
   const modelNumbers = new Set();
   for (const line of trajCifText.split('\n')) {
     if (line.startsWith('ATOM ') || line.startsWith('HETATM ')) {
@@ -220,34 +224,34 @@ export async function main() {
   await app._loadPreset('inverse_folding_1prw');
   await app.runDesign({ nsteps: 10, recycleSchedule: 'none' });
 
-  const invStatusText = app.els.statusMessage.textContent;
-  if (app.els.statusMessage.classList.contains('error') || !app.lastResult) {
+  const invStatusText = statusEl().textContent;
+  if (statusEl().classList.contains('error') || !app.lastResult) {
     throw new Error(`inverse_folding_1prw runDesign failed: ${invStatusText}`);
   }
   const fullTensorCount = Object.keys(app.activeWeights ?? {}).length;
   const encoderLoadedAfterInv = Boolean(app.shardedBundle?.encoderLoaded);
 
-  // Verify all 9 AtomWorks Studio examples run end-to-end through Studio session -> WebGPU generate -> Studio output
+  // Verify all 9 AtomWorks Studio examples run end-to-end through the card: Studio session -> the card's Generate ->
+  // WebGPU generate -> a design in the card's list
   const examplesList = await apiJson('/api/v1/examples', 'GET');
   const studioExampleRuns = [];
+  app.nsteps = 5;
   for (const ex of examplesList) {
-    const cifResp = await win.fetch(`/api/v1/examples/${encodeURIComponent(ex.id)}/cif`);
-    if (!cifResp.ok) throw new Error(`Failed to fetch example CIF for ${ex.id}`);
-    const cifText = await cifResp.text();
-    const exFile = new win.File([cifText], ex.file, { type: 'chemical/x-mmcif' });
-    const exForm = new win.FormData();
-    exForm.append('file', exFile);
-    exForm.append('parse_preset', 'minimal');
-    const sessData = await (await win.fetch('/api/v1/sessions', { method: 'POST', body: exForm })).json();
-    app.studioSessionId = sessData.session_id;
-    app.inputSessionId = sessData.session_id;
-    app.useStudioSession = true;
-    app._setPartialDiffusion(ex.task === 'partial_diffusion');
+    const before = card.inputSessionId();
+    await win.atomworksStudio.openExample(ex.id);
+    const tOpen = performance.now();
+    while (card.inputSessionId() === before || !card.spec()) {
+      if (performance.now() - tOpen > 20000) throw new Error(`Studio example '${ex.id}' never opened in the card`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    // The card reads the new document (chains, spec) a moment after Studio announces it.
+    await new Promise((r) => setTimeout(r, 2500));
+    app.lastResult = null;
     const tEx0 = performance.now();
-    await app.runDesign({ nsteps: 5, recycleSchedule: 'none' });
+    await card.generate();
     const exElapsedMs = Math.round(performance.now() - tEx0);
-    const exStatus = app.els.statusMessage.textContent;
-    if (app.els.statusMessage.classList.contains('error') || !app.lastResult?.cif) {
+    const exStatus = statusEl().textContent;
+    if (statusEl().classList.contains('error') || !app.lastResult?.cif || card.designs().length < 1) {
       throw new Error(`Studio example '${ex.id}' (${ex.label}) failed: ${exStatus} deviceLost=${JSON.stringify(app.gpuDeviceLost ?? null)}`);
     }
     const outAtoms = app.lastResult.structure?.atoms?.length ?? 0;
@@ -262,6 +266,7 @@ export async function main() {
       ms: exElapsedMs,
     });
   }
+  app.nsteps = 60;
 
   // Verify opening a .pdb file in AtomWorks Studio works end-to-end
   const pdbFile = new win.File([app.lastResult.pdb], 'test_design.pdb', { type: 'chemical/x-pdb' });
@@ -273,20 +278,17 @@ export async function main() {
   const pdbSessionData = pdbSessionResp.ok ? await pdbSessionResp.json() : null;
 
   // The designs list is per input: generating again from the SAME unchanged input appends, while an edited or
-  // different input starts the list over (web/app.js, `this.runsInput !== this.inputSessionId`). This gate had
-  // asserted >= 2 radios after running two DIFFERENT presets, which only held before that behaviour existed.
-  // Run the same input twice instead, which is what actually proves designs accumulate and can be picked between.
-  // The designs are Studio's Refold panel's rows now; the Outputs tab names how many there are ("Outputs (2)").
-  const radioCount = () => {
-    const label = [...win.document.querySelectorAll('#rfd4p-tabs [role="tab"]')].map((t) => t.textContent).find((t) => t.startsWith('Outputs'));
-    return Number(/\((\d+)\)/.exec(label ?? '')?.[1] ?? 0);
-  };
-  const designRadioCountAfterNewInput = radioCount();
-  await app.runDesign({ nsteps: 10, recycleSchedule: 'none' });
-  const designRadioCount = radioCount();
-  if (designRadioCount <= designRadioCountAfterNewInput) {
+  // different input starts the list over (the card, `runs` of one input revision). This gate had asserted >= 2
+  // after running two DIFFERENT presets, which only held before that behaviour existed. Run the same input twice
+  // instead, which is what actually proves designs accumulate and can be picked between.
+  const designCountAfterNewInput = card.designs().length;
+  app.nsteps = 10;
+  await card.generate();
+  app.nsteps = 60;
+  const designCount = card.designs().length;
+  if (designCount <= designCountAfterNewInput) {
     throw new Error(`a second design on the same input did not join the list:`
-      + ` ${designRadioCountAfterNewInput} -> ${designRadioCount}`);
+      + ` ${designCountAfterNewInput} -> ${designCount}`);
   }
   // The input is a tab (Input / Outputs) over the designs, no longer a row of their table.
   const jobTabCount = win.document.querySelectorAll('#rfd4p-tabs [role="tab"]').length;
@@ -330,8 +332,8 @@ export async function main() {
       molstarRenderedAtoms > 0 &&
       restraintsAfterAdd.restraints?.length >= 1 &&
       Boolean(exported.cif && exported.name) &&
-      designRadioCount >= 1 && jobTabCount === 2 &&
-      Boolean(designEntry?.hasTrajectory) &&
+      designCount >= 2 && jobTabCount === 2 &&
+      Boolean(app.lastDesign?.trajectoryCif) &&
       trajectoryModelCount === 10 &&
       convertedCif.includes('_atom_site.Cartn_x') &&
       (pdbSessionData?.structure?.atom_count ?? 0) > 0 &&
@@ -351,8 +353,8 @@ export async function main() {
     interactionCount: interactionsRes.interaction_count,
     colorButtonCount: colorBtns.length,
     exportedName: exported.name,
-    designRadioCount,
-    designRadioCountAfterNewInput,
+    designCount,
+    designCountAfterNewInput,
     jobTabCount,
     liveFramesCalled,
     trajectoryModelCount,

@@ -23,11 +23,13 @@ export async function main(device, args = []) {
   device.lost?.then((i) => { lost = `${i.reason}: ${i.message}`; });
 
   const t0 = performance.now();
-  while (!win.rfd4pApp || win.rfd4pApp.els.predictBtn.disabled) {
+  while (!win.rfd4pApp?.card) {
     if (performance.now() - t0 > 60000) throw new Error('app init timeout');
     await sleep(100);
   }
   const app = win.rfd4pApp;
+  // The card's status line (the page's runs report there).
+  const statusEl = () => win.document.getElementById('rfd4p-status-message');
   const { RFD4P_PRESETS } = await import('/webgpu/index.js');
   const known = new Set(RFD4P_PRESETS.map((p) => p.id));
   const out = { availablePresets: [...known], nsteps, runs, results: [] };
@@ -44,9 +46,9 @@ export async function main(device, args = []) {
       const onStepProbe = () => { const now = performance.now(); stepMs.push(Math.round(now - last)); last = now; };
       // Observe step boundaries through the status line the app already updates.
       const obs = new win.MutationObserver(() => {
-        if (/step \d+\//.test(app.els.statusMessage.textContent)) onStepProbe();
+        if (/step \d+\//.test(statusEl().textContent)) onStepProbe();
       });
-      obs.observe(app.els.statusMessage, { childList: true, characterData: true, subtree: true });
+      obs.observe(statusEl(), { childList: true, characterData: true, subtree: true });
       app.lastResult = null;
       const t = performance.now();
       let threw = null;
@@ -59,7 +61,7 @@ export async function main(device, args = []) {
         totalMs: Math.round(performance.now() - t),
         ok: Boolean(app.lastResult?.cif),
         threw,
-        status: app.els.statusMessage.textContent.slice(0, 180),
+        status: statusEl().textContent.slice(0, 180),
         stepMs,
         firstTwoVsMedian: (() => {
           if (stepMs.length < 6) return null;

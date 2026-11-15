@@ -89,13 +89,13 @@ const around = (selectors, { pad = 10, structure = false, upTo = null } = {}) =>
     height: Math.min(w.innerHeight, bottom + ${pad}) - y };
 }`);
 
-/** Open the start screen and build an example from its card, as a visitor would. */
+/** Open the start screen and build an example from its card (Studio's Design card), as a visitor would. */
 const openExample = (example) => page(`async (w, d, sleep) => {
   for (let i = 0; i < 600 && !d.querySelector('[data-example="${example}"]'); i++) await sleep(50);
   if (d.getElementById('rfd4p-start').hidden) { d.getElementById('rfd4p-new').click(); await sleep(400); }
   d.querySelector('[data-example="${example}"]').click(); await sleep(300);
-  const panel = w.rfd4pApp.designPanel;
-  for (let i = 0; i < 2400 && (panel.building || !d.getElementById('rfd4p-start').hidden); i++) await sleep(50);
+  // Built out of sight with the card's own controls, then shown once, finished (body.rfd4p-building meanwhile).
+  for (let i = 0; i < 2400 && (d.body.classList.contains('rfd4p-building') || !d.getElementById('rfd4p-start').hidden); i++) await sleep(50);
   await sleep(3000);
   return d.getElementById('rfd4p-task-label').textContent;
 }`);
@@ -131,10 +131,12 @@ const SCENES = {
   async select() {
     await openExample('protein_binder');
     await page(`async (w, d, sleep) => {
-      const a = w.rfd4pApp.designPanel._inputDoc().atoms; const pick = [];
+      // The page's in-browser Studio API holds the open document; the card's popup opens where the pointer last was.
+      const store = (await import('/web/studio-api.js')).getSharedStudioStore();
+      const a = store.getSession(w.rfd4pApp.card.inputSessionId()).atoms; const pick = [];
       for (let i = 0; i < a.nAtoms; i++) if (a.chain_id[i] === 'A' && a.res_id[i] >= 50 && a.res_id[i] <= 60) pick.push(i);
       const r = d.getElementById('viewer').getBoundingClientRect();
-      w.rfd4pApp.designPanel.lastPointer = { x: r.left + r.width * 0.6, y: r.top + r.height * 0.6 };
+      d.getElementById('viewer').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: r.left + r.width * 0.6, clientY: r.top + r.height * 0.6 }));
       w.atomworksStudio.setSelection(pick); await sleep(2500);
     }`);
     await shot('select', await around(['.rfd4p-sel-pop'], { structure: true }));
@@ -148,13 +150,13 @@ const SCENES = {
       d.getElementById('samples-input').value = '3';
       d.getElementById('predict').click();
       const app = w.rfd4pApp;
-      for (let i = 0; i < 400 && !app.activeAbortController; i++) await sleep(50);
-      for (let i = 0; i < 12000 && app.activeAbortController; i++) await sleep(100);
+      for (let i = 0; i < 400 && !app.running; i++) await sleep(50);
+      for (let i = 0; i < 12000 && app.running; i++) await sleep(100);
       await sleep(1500);
       d.getElementById('refold-model').value = 'openbind0';
       d.getElementById('refold-model').dispatchEvent(new w.Event('change', { bubbles: true }));
       d.getElementById('refold-btn').click(); await sleep(500);
-      for (let i = 0; i < 12000 && app.refoldPanel.session.isRunning; i++) await sleep(100);
+      for (let i = 0; i < 12000 && app.card.refold.session.isRunning; i++) await sleep(100);
       await sleep(3000);
     }`);
     await shot('designs', await around(['#rfd4p-job']));
@@ -191,7 +193,7 @@ try {
     await sleep(1500);
     // The faster-WebGPU notice shows on a GPU without Chrome's experimental features (headless Chrome's): not part
     // of what the guide shows.
-    await page(`async (w, d, sleep) => { for (let i = 0; i < 600 && !w.rfd4pApp?.designPanel; i++) await sleep(50);
+    await page(`async (w, d, sleep) => { for (let i = 0; i < 600 && !w.rfd4pApp?.card; i++) await sleep(50);
       await sleep(500); d.getElementById('rfd4p-speed-dismiss')?.click(); }`);
     await SCENES[name]();
   }

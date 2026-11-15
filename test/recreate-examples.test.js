@@ -1,25 +1,18 @@
 /**
- * Every bundled Studio example can be rebuilt from a bare structure with the design panel's operations alone: strip
- * the example (segments realized into plain residues, all conditions reset), replay what a user would click, and
- * compare the design spec with the original's.
+ * Every bundled Studio example can be rebuilt from a bare structure with the document operations the design card
+ * clicks: strip the example (segments realized into plain residues, all conditions reset), replay what a user would
+ * click, and compare what the model reads (test/model-read.js) with the original's. (The card's own recipes for the
+ * examples are Studio's; this holds the operations on the page's engine.)
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { designSpec } from '../web/design-spec.js';
 import { StudioDoc } from '../web/studio-api.js';
+import { modelRead, segmentsOf } from './model-read.js';
 
 const cifOf = (file) => readFileSync(new URL(`../web/studio/examples/${file}`, import.meta.url), 'utf8');
-const summary = (spec) => ({
-  task: spec.task.key,
-  contig: spec.contig,
-  roles: Object.fromEntries(spec.chains.map((c) => [c.id, c.role])),
-  hotspots: Object.fromEntries(spec.chains.map((c) => [c.id, c.hotspots])),
-});
-
-/** The spec without residue numbers (realizing a bare copy renumbers residues; the model does not use numbering). */
-const unnumbered = (spec) => ({ ...summary(spec), contig: spec.contig.replace(/\b([A-Z]+)\d+(-\d+)?\b/g, '$1#') });
+const summary = (doc) => modelRead(doc);
 
 /** The example as shipped, and a bare copy: segments realized into residues, conditions removed. */
 function load(file, { realize = true } = {}) {
@@ -61,7 +54,7 @@ test('protein binder: fix the target, mark hotspots, add a 50-120 chain', () => 
   bare.setConditions(role(bare, 'A', 'fixed'));
   bare.insertSegment({ minimum: 50, maximum: 120, newChain: true });
   bare.setCondition('hotspot', hotspotAtoms(original));
-  assert.deepEqual(summary(designSpec(bare.atoms)), summary(designSpec(original.atoms)));
+  assert.deepEqual(summary(bare), summary(original));
 });
 
 test('antibody: keep L/H sequences, redesign CDR H3, fix the target with hotspots', () => {
@@ -77,7 +70,7 @@ test('antibody: keep L/H sequences, redesign CDR H3, fix the target with hotspot
     { condition: 'sequence', atom_indices: h3, enabled: false, scope: 'residue' },
   ]);
   bare.setCondition('hotspot', hotspotAtoms(original));
-  assert.deepEqual(summary(designSpec(bare.atoms)), summary(designSpec(original.atoms)));
+  assert.deepEqual(summary(bare), summary(original));
 });
 
 test('enzyme: catalytic side chain placed anywhere in a 180-residue scaffold around a fixed ligand', () => {
@@ -87,7 +80,7 @@ test('enzyme: catalytic side chain placed anywhere in a 180-residue scaffold aro
   // Ligand rows: "Fix pose" on ORO and ZN.
   bare.setCondition('coordinate', atomsWhere(bare, (a, i) => ['ORO', 'ZN'].includes(a.res_name[i])));
   // Realizing renumbered the Asp; an unindexed motif's number does not matter, so compare without it.
-  assert.deepEqual(unnumbered(designSpec(bare.atoms)), unnumbered(designSpec(original.atoms)));
+  assert.deepEqual(summary(bare), summary(original));
 });
 
 test('motif scaffolding: keep three residues, rebuild the gaps, then set each segment range', () => {
@@ -97,15 +90,15 @@ test('motif scaffolding: keep three residues, rebuild the gaps, then set each se
     return Array.isArray(c) && Number.isFinite(c[0]);
   }).map((i) => original.atoms.res_name[i]));
   bare.scaffoldMotif(atomsWhere(bare, (a, i) => fixedRes.has(a.res_name[i]) && !a.hetero[i]));
-  const want = designSpec(original.atoms).chains[0].segments;
-  const have = designSpec(bare.atoms).chains[0].segments;
+  const want = segmentsOf(original);
+  const have = segmentsOf(bare);
   assert.equal(have.length, want.length);
-  // Segment rows: type the original ranges (atom indices are re-read after every edit, as the panel re-renders).
+  // Segment rows: type the original ranges (atom indices are re-read after every edit, as the card re-renders).
   for (let k = 0; k < want.length; k += 1) {
-    const seg = designSpec(bare.atoms).chains[0].segments[k];
+    const seg = segmentsOf(bare)[k];
     bare.setSegmentRange(seg.atomIndex, want[k].min, want[k].max);
   }
-  assert.deepEqual(unnumbered(designSpec(bare.atoms)), unnumbered(designSpec(original.atoms)));
+  assert.deepEqual(summary(bare), summary(original));
 });
 
 test('nanobody: keep the framework sequence, replace each CDR with a new-residue segment, fix the target', () => {
@@ -113,7 +106,7 @@ test('nanobody: keep the framework sequence, replace each CDR with a new-residue
   bare.setConditions([...role(bare, 'A', 'fixed'), ...role(bare, 'H', 'sequence')]);
   bare.setCondition('hotspot', hotspotAtoms(original));
   // Selection action "Replace with new residues" on each realized CDR (the residues between framework pieces).
-  const want = designSpec(original.atoms).chains.find((c) => c.id === 'H').segments;
+  const want = segmentsOf(original).filter((x) => String(original.atoms.chain_id[x.atomIndex]) === 'H');
   for (const seg of want) {
     const cdr = atomsWhere(bare, (a, i) => String(a.chain_id[i]) === 'H' && a.res_name[i] === '<M>');
     // Realized residues of the first remaining CDR: the first contiguous run of placeholders.
@@ -125,15 +118,14 @@ test('nanobody: keep the framework sequence, replace each CDR with a new-residue
     }
     bare.replaceWithSegments(run, seg.min, seg.max);
   }
-  assert.deepEqual(summary(designSpec(bare.atoms)), summary(designSpec(original.atoms)));
+  assert.deepEqual(summary(bare), summary(original));
 });
 
 test('small-molecule binder: keep the ligand (pose predicted) and design a 150-residue protein around it', () => {
   const { original, bare } = load('small_molecule_binder.cif');
   bare.designAroundLigand({ removeProtein: true, poseFixed: false, minimum: 150, maximum: 150 });
-  const got = summary(designSpec(bare.atoms));
-  const want = summary(designSpec(original.atoms));
-  assert.equal(got.task, want.task);
-  assert.equal(got.contig, want.contig);
-  assert.deepEqual(Object.values(got.roles).sort(), Object.values(want.roles).sort());
+  // The chain letters may differ (the ligand's keeps its own); what each chain holds does not.
+  const got = Object.values(summary(bare)).map((c) => JSON.stringify(c)).sort();
+  const want = Object.values(summary(original)).map((c) => JSON.stringify(c)).sort();
+  assert.deepEqual(got, want);
 });

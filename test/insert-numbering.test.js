@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { buildBatch } from '../shared/rfd4p/pipeline/index.js';
-import { designSpec } from '../web/design-spec.js';
 import { StudioDoc } from '../web/studio-api.js';
 
 const binder = () => new StudioDoc(readFileSync(new URL('../web/studio/examples/protein_binder.cif', import.meta.url), 'utf8'), 'binder');
@@ -25,8 +24,7 @@ test('new residues inserted inside a chain leave its numbering alone', () => {
   assert.deepEqual(resIdsOf(doc, 'A'), before);
   const sentinels = doc.atoms.res_name.map((r, i) => [r, doc.atoms.res_id[i], doc.atoms.ins_code[i]]).filter(([r]) => /^\d+-\d+$/.test(String(r)));
   assert.deepEqual(sentinels.filter(([, , c]) => c).map(([r, id, c]) => `${r}@${id}${c}`), ['5-10@40A', '3-3@40B']);
-  const pieces = designSpec(doc.atoms).chains.find((c) => c.id === 'A').pieces
-    .map((p) => (p.kind === 'new' ? `new ${p.min}-${p.max}` : `${p.start}-${p.end}`));
+  const pieces = doc.chainPlan('A').parts.map((p) => (p.kind === 'new' ? `new ${p.min}-${p.max}` : `${p.lo}-${p.hi}`));
   assert.deepEqual(pieces, ['17-40', 'new 5-10', 'new 3-3', '41-131']);
 });
 
