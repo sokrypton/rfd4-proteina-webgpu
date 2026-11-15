@@ -276,7 +276,11 @@ export async function main() {
   // different input starts the list over (web/app.js, `this.runsInput !== this.inputSessionId`). This gate had
   // asserted >= 2 radios after running two DIFFERENT presets, which only held before that behaviour existed.
   // Run the same input twice instead, which is what actually proves designs accumulate and can be picked between.
-  const radioCount = () => app.els.designViewRadios?.querySelectorAll('input[type="radio"]').length ?? 0;
+  // The designs are Studio's Refold panel's rows now; the Outputs tab names how many there are ("Outputs (2)").
+  const radioCount = () => {
+    const label = [...win.document.querySelectorAll('#rfd4p-tabs [role="tab"]')].map((t) => t.textContent).find((t) => t.startsWith('Outputs'));
+    return Number(/\((\d+)\)/.exec(label ?? '')?.[1] ?? 0);
+  };
   const designRadioCountAfterNewInput = radioCount();
   await app.runDesign({ nsteps: 10, recycleSchedule: 'none' });
   const designRadioCount = radioCount();
