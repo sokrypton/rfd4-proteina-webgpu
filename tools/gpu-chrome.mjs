@@ -22,7 +22,7 @@
  *     node tools/gpu-chrome.mjs tools/gpu/bench-triangle.js --lengths=300,600
  */
 import { spawn, spawnSync } from "node:child_process";
-import { createReadStream, rmSync } from "node:fs";
+import { createReadStream, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, relative, resolve } from "node:path";
@@ -84,6 +84,12 @@ function adb(...argv) {
 // does not implement and Mesa's llvmpipe does. So it runs HEADFUL against an
 // X server, which on a GPU box means Xvfb. `LOCALFOLD_HEADLESS=1` forces the
 // headless flag back on for a machine whose driver does have that extension.
+// The same harness in Firefox: `LOCALFOLD_GPU_FIREFOX=1` (LOCALFOLD_FIREFOX names the binary). Its WebGPU is wgpu and
+// naga, another validator and WGSL compiler (LocalFold docs/FIREFOX.md). A visible window, a fresh profile, no flags.
+const FIREFOX = process.env.LOCALFOLD_GPU_FIREFOX === "1"
+  ? (process.env.LOCALFOLD_FIREFOX ?? (process.platform === "darwin"
+    ? "/Applications/Firefox.app/Contents/MacOS/firefox" : "firefox"))
+  : null;
 const LINUX_HEADLESS = process.env.LOCALFOLD_HEADLESS === "1";
 //
 // 🔴 AND `shader-f16` IS OFF ON EVERY NVIDIA GPU UNTIL A DAWN TOGGLE SAYS
@@ -256,7 +262,18 @@ async function main() {
   // server sends no-store above.
   const profile = ANDROID ? null
     : join(process.env.TMPDIR ?? "/tmp", `gpu-chrome-${process.pid}-${Date.now()}`);
-  const chrome = ANDROID ? null : spawn(CHROME, [
+  if (FIREFOX !== null) {
+    mkdirSync(profile, { recursive: true });
+    writeFileSync(join(profile, "user.js"), [
+      "browser.shell.checkDefaultBrowser=false", "browser.aboutwelcome.enabled=false", "app.update.enabled=false",
+      "datareporting.policy.dataSubmissionEnabled=false", "toolkit.telemetry.reportingpolicy.firstRun=false",
+      "browser.sessionstore.resume_from_crash=false", "dom.min_background_timeout_value=4",
+    ].map((line) => { const [key, value] = line.split("="); return `user_pref("${key}", ${value});`; }).join("\n") + "\n");
+  }
+  const chrome = ANDROID ? null : FIREFOX !== null
+    ? spawn(FIREFOX, ["-profile", profile, "-no-remote", "-new-instance", `http://127.0.0.1:${port}/__runner`],
+      { stdio: ["ignore", "ignore", "pipe"] })
+    : spawn(CHROME, [
     // LOCALFOLD_HEADED=1 opens a real window on macOS too: headless Chrome tolerates
     // command buffers that a visible one kills as a GPU hang (SPEED-HANDOFF.md rule 4).
     ...((process.platform === "linux" && !LINUX_HEADLESS) || process.env.LOCALFOLD_HEADED === "1" ? [] : ["--headless=new"]),

@@ -1,9 +1,13 @@
 {
-  "_comment": "The LocalFold commit whose refold code this site carries. tools/sync-localfold.mjs copies the import closure of `entries` at exactly this commit into vendor/localfold-<commit>/ and writes web/localfold.js to re-export it. Nothing under vendor/ is edited by hand.",
+  "_comment": "The LocalFold commit whose refold code this site carries. tools/sync-localfold.mjs copies the import closure of `entries` at exactly this commit into vendor/localfold-<commit>/ and writes web/localfold.js to re-export it. Nothing under vendor/ is edited by hand. `runtime` entries are copied the same way and re-exported by webgpu/localfold-runtime.js: the device request and WGSL rewrites (Firefox's compiler) this site's own engine uses.",
   "repository": "sokrypton/localfold",
-  "commit": "e087d217",
+  "commit": "1edc50a7",
   "entries": [
     "web/validate-design.js",
     "web/af3-model.js"
+  ],
+  "runtime": [
+    "webgpu/runtime/device.js",
+    "webgpu/runtime/wgsl-compat.js"
   ]
 }

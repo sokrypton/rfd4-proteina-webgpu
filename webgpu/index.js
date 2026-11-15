@@ -57,6 +57,7 @@ import {
   resolvePartialT,
   sampleNoisedTargetBackbone,
 } from '../shared/rfd4p/partial.js';
+import { requestAlphaFoldDevice } from './localfold-runtime.js';
 import { RFD4P_PRESETS, getRfd4pPresetById } from '../shared/rfd4p/presets.js';
 import {
   buildAtomArrayFromConditionSpec,
@@ -126,28 +127,10 @@ export async function requestWebGpuDevice({ exclude = [] } = {}) {
   }
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) return null;
-  const requiredLimits = {};
-  for (const name of [
-    'maxStorageBufferBindingSize',
-    'maxBufferSize',
-    'maxComputeWorkgroupsPerDimension',
-    'maxComputeWorkgroupStorageSize',
-    'maxComputeWorkgroupSizeX',
-    'maxComputeInvocationsPerWorkgroup',
-  ]) {
-    const v = adapter.limits?.[name];
-    if (typeof v === 'number' && Number.isFinite(v)) {
-      requiredLimits[name] = v;
-    }
-  }
-  const requiredFeatures = [
-    'timestamp-query',
-    'shader-f16',
-    'subgroups',
-    'subgroup-size-control',
-    'chromium-experimental-subgroup-matrix',
-  ].filter((f) => adapter.features?.has(f) && !exclude.includes(f));
-  const device = await adapter.requestDevice({ requiredLimits, requiredFeatures });
+  // LocalFold's own request (the same raised limits and features), so the device is the one its refold expects: its
+  // adapter recorded, its WGSL compiler asked what it takes (Firefox's refuses the f16 width bitcasts) and, in
+  // Firefox, its waits pumped (it reports finished work on a 100 ms tick). `exclude` answers as a browser without them.
+  const device = await requestAlphaFoldDevice(adapter, { withholdFeatures: exclude });
   if (!device.adapterInfo && adapter.info) device.adapterInfo = adapter.info;
   return { adapter, device };
 }

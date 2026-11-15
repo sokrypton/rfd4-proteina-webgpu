@@ -10,6 +10,8 @@
  * touching a buffer (AGENTS.md).
  */
 
+import { compilerText } from '../localfold-runtime.js';
+
 const MAX_X = 65535;
 const STORAGE = 0x80;
 const COPY_SRC = 0x4;
@@ -2748,7 +2750,10 @@ export class Rfd4pEngine {
   async pipeline(key, source) {
     let p = this.pipelines.get(key);
     if (!p) {
-      const code = applySubgroupMode(source, this.subgroups);
+      // Firefox's compiler (naga) refuses the f16 width bitcasts the packed kernels read and write their halves with;
+      // LocalFold's compilerText spells them with unpack2x16float / pack2x16float there (the same halves), and unrolls
+      // short loops and cuts workgroup arrays over 8 KiB, which naga runs slowly. Other browsers get the text as is.
+      const code = compilerText(this.device, applySubgroupMode(source, this.subgroups));
       p = this.device.createComputePipelineAsync({
         label: `rfd4p.${key}`,
         layout: 'auto',
