@@ -1,7 +1,7 @@
 {
   "_comment": "The AtomWorks Studio release this site is built from: the atomworks-studio wheel on PyPI, whose annotation_studio/web/ directory is the browser bundle. tools/build-studio.mjs downloads that wheel, checks it against sha256 (the wheel's, as PyPI lists it) and composes index.html from it. Nothing from Studio is vendored in this repository.",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "package": "atomworks-studio",
-  "sha256": "423fad7bbaf603479f055d1934a53aac22da5a9c818a0730e8a4847a4a603137",
+  "sha256": "3d3a738fd08e114cc6453045b0c1a4339d7430b2b63e4876d1e7924834f227a1",
   "title": "AtomWorks Studio \u00b7 RFD4-Proteina (WebGPU)"
 }
