@@ -4,7 +4,7 @@
   "override": {
     "repository": "sokrypton/atomworks-studio",
     "branch": "design-card-add-sequence",
-    "commit": "e8e9d87",
+    "commit": "4d7caa0",
     "why": "+ seq: a chain typed as its sequence, structure free (a peptide or disordered target to bind), on top of Studio 0.0.12."
   },
   "version": "0.0.12",

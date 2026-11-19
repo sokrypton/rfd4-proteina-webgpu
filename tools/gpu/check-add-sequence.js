@@ -45,6 +45,17 @@ export async function main(device, args = []) {
   d.getElementById('rfd4p-undo').click();
   await until(() => card.spec()?.chains?.length === 2, 'undo');
   await sleep(500);
+  // The peptide's piece: Structure and Sequence shown, not offered; hotspots set on it (the epitope) are kept.
+  d.querySelector('#rfd4p-chain-list .rfd4p-sub-open').click();
+  await until(() => d.querySelector('.rfd4p-piece-pop:not([hidden])'), 'piece popup');
+  const pop = d.querySelector('.rfd4p-piece-pop:not([hidden])');
+  const rowOf = (label) => [...pop.querySelectorAll('.rfd4p-pop-row')].find((r) => r.querySelector('.rfd4p-pop-label')?.textContent === label);
+  const popup = { structure: rowOf('Structure')?.querySelector('select') ? 'offered' : rowOf('Structure')?.textContent,
+    sequence: rowOf('Sequence')?.querySelector('select') ? 'offered' : rowOf('Sequence')?.textContent };
+  rowOf('Hotspots').querySelector('input').value = 'A8-12';
+  [...pop.querySelectorAll('button')].find((b) => b.textContent === 'Apply').click();
+  await until(() => (card.spec()?.chains?.[0]?.hotspotResIds?.length ?? 0) === 5, 'hotspots');
+  await sleep(500);
   app.nsteps = Number(opt.nsteps ?? 60);
   await card.generate();
   const pdb = app.lastResult?.pdb ?? '';
@@ -64,10 +75,12 @@ export async function main(device, args = []) {
     job: { task: spec.task.key, label: spec.task.label, roles: spec.chains.map((c) => `${c.id}:${c.role}`) },
     threeChains,
     status: d.getElementById('rfd4p-status-message')?.textContent ?? '',
-    peptide: pep.map((r) => r.aa).join(''), binderLength: binder.length, peptideResiduesWithin8A: near,
+    peptide: pep.map((r) => r.aa).join(''), binderLength: binder.length, peptideResiduesWithin8A: near, popup,
+    hotspotsWithin8A: pep.slice(7, 12).filter((p) => binder.some((b) => Math.hypot(...p.xyz.map((v, k) => v - b.xyz[k])) < 8)).length,
   };
   const ok = /twenty amino acids: X, B/.test(badStatus) && result.start.roles[0] === 'sequence' && spec.task.key === 'binder'
-    && result.peptide === seq && binder.length >= 60 && near >= 3;
+    && result.peptide === seq && binder.length >= 60 && near >= 3
+    && popup.structure === 'Structurefree' && popup.sequence === 'Sequencefixed';
   if (!ok) throw new Error(`+ seq check failed: ${JSON.stringify(result)}`);
   return { ok, ...result };
 }
