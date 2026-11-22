@@ -198,60 +198,6 @@ function unmodelledTokens(inputAtoms) {
 const isSmallMotif = (fixed, total) => fixed > 0 && fixed < total && fixed <= total / 4;
 
 /**
- * The held motif as given (the batch's conditioned coordinates, in the input's frame), as display-only atoms: residues
- * placed anywhere always (an enzyme's catalytic tips), residues held in place only as a small motif (`isSmallMotif`).
- */
-function buildMotifOverlayAtoms(inputAtoms) {
-  if (!inputAtoms?.token_id || !inputAtoms.condition_coordinate_1_atom) return [];
-  // Conditioned coordinates are centred in the batch; designs are shown in the input's frame, so the motif is too.
-  const [sx, sy, sz] = inputAtoms.center_shift ?? [0, 0, 0];
-  const crdOf = (i) => {
-    const c = inputAtoms.condition_coordinate_1_atom[i];
-    return Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1]) && Number.isFinite(c[2])
-      ? [c[0] + sx, c[1] + sy, c[2] + sz] : null;
-  };
-  const tokenChain = new Map();
-  const tokenHasCrd = new Map();
-  const tokenIndexed = new Map();
-  const unmodelled = unmodelledTokens(inputAtoms);
-  for (let i = 0; i < inputAtoms.token_id.length; i += 1) {
-    const tid = inputAtoms.token_id[i];
-    if (unmodelled.has(tid)) continue;
-    tokenChain.set(tid, inputAtoms.chain_id[i]);
-    if (crdOf(i)) tokenHasCrd.set(tid, true);
-    if (!tokenIndexed.has(tid)) {
-      tokenIndexed.set(tid, inputAtoms.condition_index_1_residue ? Boolean(inputAtoms.condition_index_1_residue[i]) : true);
-    }
-  }
-  const chainTokens = new Map();
-  for (const [tid, chain] of tokenChain) {
-    const c = chainTokens.get(chain) ?? { total: 0, fixed: 0 };
-    c.total += 1;
-    if (tokenHasCrd.get(tid)) c.fixed += 1;
-    chainTokens.set(chain, c);
-  }
-  // Residues placed anywhere always (an enzyme's catalytic tips); residues held in place only as a small motif.
-  const isMotifToken = (tid) => tokenHasCrd.get(tid) && (!tokenIndexed.get(tid)
-    || isSmallMotif(chainTokens.get(tokenChain.get(tid)).fixed, chainTokens.get(tokenChain.get(tid)).total));
-  const used = new Set(tokenChain.values());
-  const chainId = [...'MNOPQRSTUVWXYZ'].find((c) => !used.has(c)) ?? 'MOTIF';
-  const out = [];
-  for (let i = 0; i < inputAtoms.token_id.length; i += 1) {
-    const crd = crdOf(i);
-    const name = inputAtoms.atom_name[i];
-    // Ligands are drawn by the frame itself (atomized tokens are always emitted).
-    if (!crd || inputAtoms.hetero?.[i] || !isMotifToken(inputAtoms.token_id[i]) || !name || name === 'UNK') continue;
-    out.push({
-      groupPdb: 'HETATM', isHetero: true, atomName: name, resName: inputAtoms.res_name[i], chainId,
-      resId: Number(inputAtoms.res_id[i]), authSeqId: Number(inputAtoms.res_id[i]), insCode: '',
-      element: inputAtoms.element?.[i] || undefined, x: crd[0], y: crd[1], z: crd[2],
-      occupancy: 1.0, bFactor: NaN, charge: 0, entityId: null,
-    });
-  }
-  return out;
-}
-
-/**
  * Side chains (Cβ onward) of the design's own motif residues — an unindexed motif placed by the insertion mapping
  * (e.g. an enzyme's catalytic residues), or a coordinate-conditioned residue in a chain that is otherwise designed —
  * as copies drawn as sticks on top of the cartoon. Target chains (every residue fixed) are
@@ -377,17 +323,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * (design-card/run-context.ts); the engine adds what only it knows: the side chains of the design's own motif residues.
  */
 const SIDE_CHAIN_OVERLAY = { label: 'Motif side chains' };
-const MOTIF_OVERLAY = { label: 'Motif (reference)', alpha: 0.35, color: 0xe2e8f0, sizeAspectRatio: 0.6 };
 
-/**
- * `designOverlays` as the card draws them beside a frame or a design (`FrameOptions.overlays`), and the reference motif
- * where the engine finds one. The card's own motif reads the input document, where a scaffold's new residues are still
- * one placeholder, so 1QJG's three residues looked like most of their chain and were not drawn; the batch has them
- * realised. Supplied only when there is one, so the card's own stands otherwise (the page's keys win over the card's).
- */
-const cardOverlays = (overlays, motifCif = null) => ({
+/** `designOverlays` as the card draws them beside a frame or a design (`FrameOptions.overlays`). */
+const cardOverlays = (overlays) => ({
   sideChains: { cif: overlays?.sideChains ?? null, options: SIDE_CHAIN_OVERLAY },
-  ...(motifCif ? { motif: { cif: motifCif, options: MOTIF_OVERLAY } } : {}),
 });
 
 /** Settings of the design card, as this engine takes them (the card's own defaults, written out). */
@@ -910,8 +849,6 @@ class Rfd4pStudioApp {
       // for the previous frame's Mol* update rather than dropping its own frame.
       const wantLiveFrame = (step, total) => step < total - 1;
       const unmodelled = unmodelledTokens(atoms);
-      // The held motif as given, drawn grey beside every frame and the design (`buildMotifOverlayAtoms`).
-      const motifCif = overlayCifOf(buildMotifOverlayAtoms(atoms), 'motif_reference');
       // Overlays for the frame being built; shown once its structure has been drawn.
       let liveOverlays = null;
       const hasUnindexedMotif = Boolean(atoms.condition_index_1_residue?.some((v, i) =>
@@ -981,7 +918,7 @@ class Rfd4pStudioApp {
             liveFramesRendered += 1;
             // The card waits for the frame before this one to be drawn, so no step's frame is dropped.
             await hooks.frame(liveCif, {
-              name: `step_${info.step + 1}.cif`, keepCamera, overlays: cardOverlays(liveOverlays, motifCif),
+              name: `step_${info.step + 1}.cif`, keepCamera, overlays: cardOverlays(liveOverlays),
             });
           }
         }
@@ -1053,7 +990,7 @@ class Rfd4pStudioApp {
         stepsRun: result.stepsRun ?? null,
         nsteps: result.nsteps ?? nsteps,
         designedChains: designed,
-        overlays: cardOverlays(overlays, motifCif),
+        overlays: cardOverlays(overlays),
         // What a refold needs (web/refold-provider.js), handed back with the design.
         data: {
           pdb: result.pdb,

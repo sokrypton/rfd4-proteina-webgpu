@@ -1,14 +1,7 @@
 {
   "_comment": "The AtomWorks Studio release this site is built from: the atomworks-studio wheel on PyPI, whose annotation_studio/web/ directory is the browser bundle. tools/build-studio.mjs downloads that wheel, checks it against sha256 (the wheel's, as PyPI lists it) and composes index.html from it. Nothing from Studio is vendored in this repository.",
-  "_override": "NOT A RELEASE. While `override` is set, assets/ and index.html are built from sokrypton/atomworks-studio branch `design-card-add-sequence` (the Design card's + seq, opened as a PR against RosettaCommons/atomworks-studio), not from the release below: `npm run build:studio` refuses to run, and the site is rebuilt with `npm run build:studio -- --from <packages/web/dist built from override.commit>` (pnpm install && pnpm build; rustup's toolchain). Deployed at the owner's call. Remove `override` and bump `version`, `sha256` once a release contains + seq, then build normally.",
-  "override": {
-    "repository": "sokrypton/atomworks-studio",
-    "branch": "design-card-add-sequence",
-    "commit": "4d7caa0",
-    "why": "+ seq: a chain typed as its sequence, structure free (a peptide or disordered target to bind), on top of Studio 0.0.12."
-  },
-  "version": "0.0.12",
+  "version": "0.0.13",
   "package": "atomworks-studio",
-  "sha256": "b76be83149811b5462d0fcdaf3bc98c40674043601bbd23c59a5ea6601302940",
+  "sha256": "080014055528d15c77147c79617aa6c6ccbc2f4a3cb10afda0a9b8b615bde2e5",
   "title": "AtomWorks Studio · RFD4-Proteina (WebGPU)"
 }
