@@ -758,6 +758,16 @@ export function alignAtomsToInputFrame(atoms, cwiCoords, anchorIndices) {
   return atoms;
 }
 
+/** Extract finite input-frame coordinates for an atom belonging to a rigid group (`grp > 0`). */
+function inCoordOf(inputAtoms, ai, grp) {
+  if (!(grp > 0) || ai == null) return null;
+  const c = inputAtoms?.coord?.[ai];
+  if (!c || c.length < 3 || !Number.isFinite(c[0]) || !Number.isFinite(c[1]) || !Number.isFinite(c[2])) {
+    return null;
+  }
+  return [Number(c[0]), Number(c[1]), Number(c[2])];
+}
+
 /** See `inputFrame` in `processSampleToAtoms`. True when the atoms were moved onto the input. */
 function alignOntoRigidGroup(outAtoms, inputAtoms) {
   const hotChains = new Set();
@@ -765,7 +775,13 @@ function alignOntoRigidGroup(outAtoms, inputAtoms) {
   if (hot) for (let i = 0; i < hot.length; i += 1) if (hot[i]) hotChains.add(String(inputAtoms.chain_id[i]));
   const groups = new Map();
   outAtoms.forEach((a, i) => {
-    if (!(a.coordGroup > 0) || !a.inCoord) return;
+    if (
+      !(a.coordGroup > 0) ||
+      !a.inCoord ||
+      !Number.isFinite(a.x) ||
+      !Number.isFinite(a.y) ||
+      !Number.isFinite(a.z)
+    ) return;
     if (!groups.has(a.coordGroup)) groups.set(a.coordGroup, { idx: [], hot: false });
     const g = groups.get(a.coordGroup);
     g.idx.push(i);
@@ -942,6 +958,7 @@ export function processSampleToAtoms({
       const hasIntCrd = Array.isArray(intCrdRaw) && intCrdRaw[0] !== null && Number.isFinite(intCrdRaw[0]);
       const isHet = inputAtoms.hetero ? Boolean(inputAtoms.hetero[a0]) : true;
       const srcComp = inputAtoms['annotation_src-component_1_atom']?.[a0] ?? '.';
+      const coordGroup = inputAtoms.condition_CoordinateGroup_1_atom?.[a0] ?? -1;
       const rec = {
         serial: outAtoms.length + 1,
         groupPdb: isHet ? 'HETATM' : 'ATOM',
@@ -967,9 +984,10 @@ export function processSampleToAtoms({
         isUnindexedInsertion: false,
         crdSrcComponent: hasCrd || hasIntCrd ? srcComp : '.',
         srcComponent: srcComp,
-        coordGroup: inputAtoms.condition_CoordinateGroup_1_atom?.[a0] ?? -1,
+        coordGroup,
         crd: hasCrd ? [Number(crdRaw[0]), Number(crdRaw[1]), Number(crdRaw[2])] : null,
         intCrd: hasIntCrd ? [Number(intCrdRaw[0]), Number(intCrdRaw[1]), Number(intCrdRaw[2])] : null,
+        inCoord: inCoordOf(inputAtoms, a0, coordGroup),
       };
       outAtoms.push(rec);
       tokenAtomList.push(rec);
@@ -1040,8 +1058,7 @@ export function processSampleToAtoms({
           crd: hasCrd ? [Number(crdRaw[0]), Number(crdRaw[1]), Number(crdRaw[2])] : null,
           intCrd: hasIntCrd ? [Number(intCrdRaw[0]), Number(intCrdRaw[1]), Number(intCrdRaw[2])] : null,
           // Where an atom of a rigid (internal-coordinate) group sits in the input, for `inputFrame`.
-          inCoord: coordGroup > 0 && ai !== undefined && inputAtoms.coord?.[ai]?.every?.(Number.isFinite)
-            ? [Number(inputAtoms.coord[ai][0]), Number(inputAtoms.coord[ai][1]), Number(inputAtoms.coord[ai][2])] : null,
+          inCoord: inCoordOf(inputAtoms, ai, coordGroup),
         };
         outAtoms.push(rec);
         tokenAtomList.push(rec);
@@ -1085,7 +1102,9 @@ export function processSampleToAtoms({
       return true;
     };
 
+    let usedGeometricFallback = false;
     if (!canApplyMapping(predictedInsertionMapping)) {
+      usedGeometricFallback = true;
       predictedInsertionMapping = buildGeometricInsertionMapping(
         coors,
         residueType,
@@ -1135,6 +1154,9 @@ export function processSampleToAtoms({
 
           if (srcGrp !== -1) {
             tgtRec.coordGroup = srcGrp;
+            // Only trust `inCoord` from the insertion head: `buildGeometricInsertionMapping` compares
+            // input-frame coords against model-frame coords, which is invalid for a rotated rigid group.
+            tgtRec.inCoord = usedGeometricFallback ? null : inCoordOf(inputAtoms, ai, srcGrp);
           }
           if (hasCrd) {
             tgtRec.crd = [Number(crdRaw[0]), Number(crdRaw[1]), Number(crdRaw[2])];

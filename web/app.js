@@ -915,7 +915,10 @@ class Rfd4pStudioApp {
       // Overlays for the frame being built; shown once its structure has been drawn.
       let liveOverlays = null;
       const hasUnindexedMotif = Boolean(atoms.condition_index_1_residue?.some((v, i) =>
-        !v && !atoms.hetero?.[i] && atoms.condition_coordinate_1_atom?.[i]?.some?.(Number.isFinite)));
+        !v && !atoms.hetero?.[i] && (
+          atoms.condition_coordinate_1_atom?.[i]?.some?.(Number.isFinite) ||
+          atoms.condition_CoordinateGroup_1_atom?.[i] > 0
+        )));
       const liveAllAtomCif = (info, frame = null) => {
         if (!info.decoded) return null;
         try {

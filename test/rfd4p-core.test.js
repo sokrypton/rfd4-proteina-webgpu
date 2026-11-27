@@ -281,3 +281,192 @@ test('readShardedTensor dequantizes block-64 INT8 and ./weights/int8/manifest.js
     assert.equal(Object.keys(manifest.tensors).length, 1257);
   }
 });
+
+test('processSampleToAtoms inputFrame aligns atomized ligands and unindexed motifs onto inputAtoms.coord', () => {
+  // 90 deg rotation around Z + translation [25, -14, 8]
+  const rotTrans = ([x, y, z]) => [-y + 25, x - 14, z + 8];
+  const alaIdx = UNIFIED_ATOM37_ENCODING.token_to_idx.ALA;
+  const alaSlots = UNIFIED_ATOM37_ENCODING.token_slot_map.ALA; // N, CA, C, O, CB
+
+  // Input atom table:
+  //   tid 0: designed polymer residue (<M>, group -1) — receives unindexed motif from tid 4
+  //   tid 1..3: atomized ligand atoms (group 1)
+  //   tid 4: unindexed motif residue ALA (group 1, condition_unindexed=1)
+  const ligCoords = [
+    [10.0, 20.0, 30.0],
+    [11.5, 20.0, 30.0],
+    [10.0, 21.6, 30.2],
+  ];
+  const motifAtoms = [
+    ['N',  [12.0, 18.0, 29.0]],
+    ['CA', [13.2, 18.6, 29.4]],
+    ['C',  [13.8, 19.8, 28.7]],
+    ['O',  [13.2, 20.8, 28.4]],
+    ['CB', [14.3, 17.6, 29.8]],
+  ];
+
+  const inputAtoms = {
+    token_id: [],
+    atom_name: [],
+    res_name: [],
+    chain_id: [],
+    res_id: [],
+    ins_code: [],
+    element: [],
+    hetero: [],
+    atomize: [],
+    coord: [],
+    condition_CoordinateGroup_1_atom: [],
+    condition_index_1_residue: [],
+    condition_coordinate_1_atom: [],
+    condition_InternalCoordinate_1_atom: [],
+  };
+  const pushAtom = (tid, name, res, ch, resId, el, het, atomize, coord, grp, unidx) => {
+    inputAtoms.token_id.push(tid);
+    inputAtoms.atom_name.push(name);
+    inputAtoms.res_name.push(res);
+    inputAtoms.chain_id.push(ch);
+    inputAtoms.res_id.push(resId);
+    inputAtoms.ins_code.push('');
+    inputAtoms.element.push(el);
+    inputAtoms.hetero.push(het);
+    inputAtoms.atomize.push(atomize);
+    inputAtoms.coord.push(coord);
+    inputAtoms.condition_CoordinateGroup_1_atom.push(grp);
+    inputAtoms.condition_index_1_residue.push(!unidx);
+    inputAtoms.condition_coordinate_1_atom.push(null);
+    inputAtoms.condition_InternalCoordinate_1_atom.push(grp > 0 ? coord : null);
+  };
+
+  // tid 0: designed scaffold residue
+  pushAtom(0, 'CA', '<M>', 'A', 1, 'C', false, false, [0, 0, 0], -1, false);
+  // tid 1..3: atomized ligand DHZ in group 1
+  ligCoords.forEach((c, k) => pushAtom(1 + k, `C${k + 1}`, 'DHZ', 'B', 1, 'C', true, true, c, 1, false));
+  // tid 4: unindexed motif ALA in group 1
+  motifAtoms.forEach(([nm, c]) => pushAtom(4, nm, 'ALA', 'M', 102, nm[0], false, false, c, 1, true));
+
+  const n = 5;
+  const coors = new Float32Array(n * 37 * 3);
+  const atomMask = new Uint8Array(n * 37);
+  const residueType = new Int32Array([alaIdx, -1, -1, -1, alaIdx]);
+  const paddingMask = new Uint8Array([1, 1, 1, 1, 1]);
+
+  // Place tid 0 (designed residue) at rotated+translated motif coords
+  for (const [nm, c] of motifAtoms) {
+    const slot = alaSlots[nm];
+    atomMask[0 * 37 + slot] = 1;
+    const rt = rotTrans(c);
+    coors[(0 * 37 + slot) * 3 + 0] = rt[0];
+    coors[(0 * 37 + slot) * 3 + 1] = rt[1];
+    coors[(0 * 37 + slot) * 3 + 2] = rt[2];
+  }
+  // Place atomized ligand atoms (tid 1..3) at slot 1 (atomized default slot)
+  ligCoords.forEach((c, k) => {
+    const tid = 1 + k;
+    atomMask[tid * 37 + 1] = 1;
+    const rt = rotTrans(c);
+    coors[(tid * 37 + 1) * 3 + 0] = rt[0];
+    coors[(tid * 37 + 1) * 3 + 1] = rt[1];
+    coors[(tid * 37 + 1) * 3 + 2] = rt[2];
+  });
+  // Insertion logits strongly map unindexed tid 4 -> target tid 0
+  const insertionLogits = new Float32Array(n * n).fill(-10);
+  insertionLogits[4 * n + 0] = 20;
+
+  const res = processSampleToAtoms({
+    coors,
+    atomMask,
+    residueType,
+    paddingMask,
+    insertionLogits,
+    inputAtoms,
+    inputFrame: true,
+  });
+
+  assert.equal(res.inputFrame, true);
+  // Every group-1 atom (both unindexed motif and atomized ligand) must align back to inputAtoms.coord
+  const grpAtoms = res.atoms.filter((a) => a.coordGroup === 1);
+  assert.equal(grpAtoms.length, motifAtoms.length + ligCoords.length);
+  let sumSq = 0;
+  for (const a of grpAtoms) {
+    assert.ok(a.inCoord, `missing inCoord on ${a.resName}:${a.atomName}`);
+    const d2 = (a.x - a.inCoord[0]) ** 2 + (a.y - a.inCoord[1]) ** 2 + (a.z - a.inCoord[2]) ** 2;
+    sumSq += d2;
+  }
+  const rmsd = Math.sqrt(sumSq / grpAtoms.length);
+  assert.ok(rmsd < 1e-3, `expected RMSD < 1e-3 Å, got ${rmsd}`);
+
+  // NaN guard: a single NaN generated atom in the rigid group must not poison the alignment
+  const coorsWithNan = new Float32Array(coors);
+  coorsWithNan[(1 * 37 + 1) * 3 + 0] = NaN;
+  const resNan = processSampleToAtoms({
+    coors: coorsWithNan,
+    atomMask,
+    residueType,
+    paddingMask,
+    insertionLogits,
+    inputAtoms,
+    inputFrame: true,
+  });
+  assert.equal(resNan.inputFrame, true);
+  const finiteMotif = resNan.atoms.filter((a) => a.coordGroup === 1 && Number.isFinite(a.x));
+  assert.equal(finiteMotif.length, motifAtoms.length + ligCoords.length - 1);
+  for (const a of finiteMotif) {
+    const d = Math.hypot(a.x - a.inCoord[0], a.y - a.inCoord[1], a.z - a.inCoord[2]);
+    assert.ok(d < 1e-3, `NaN guard failed for ${a.atomName}: dist=${d}`);
+  }
+
+  // Unindexed-only (no ligand): aligns onto unindexed motif alone when insertionLogits are supplied,
+  // and does NOT trust geometric fallback when insertionLogits are absent.
+  const uOnlyAtoms = {
+    token_id: [0, ...motifAtoms.map(() => 1)],
+    atom_name: ['CA', ...motifAtoms.map(([nm]) => nm)],
+    res_name: ['<M>', ...motifAtoms.map(() => 'ALA')],
+    chain_id: ['A', ...motifAtoms.map(() => 'M')],
+    res_id: [1, ...motifAtoms.map(() => 102)],
+    ins_code: Array(1 + motifAtoms.length).fill(''),
+    element: ['C', ...motifAtoms.map(([nm]) => nm[0])],
+    hetero: Array(1 + motifAtoms.length).fill(false),
+    atomize: Array(1 + motifAtoms.length).fill(false),
+    coord: [[0, 0, 0], ...motifAtoms.map(([, c]) => c)],
+    condition_CoordinateGroup_1_atom: [-1, ...motifAtoms.map(() => 1)],
+    condition_index_1_residue: [true, ...motifAtoms.map(() => false)],
+    condition_coordinate_1_atom: Array(1 + motifAtoms.length).fill(null),
+    condition_InternalCoordinate_1_atom: [null, ...motifAtoms.map(([, c]) => c)],
+  };
+  const uCoors = new Float32Array(2 * 37 * 3);
+  const uMask = new Uint8Array(2 * 37);
+  for (const [nm, c] of motifAtoms) {
+    const slot = alaSlots[nm];
+    uMask[0 * 37 + slot] = 1;
+    const rt = rotTrans(c);
+    uCoors[(0 * 37 + slot) * 3 + 0] = rt[0];
+    uCoors[(0 * 37 + slot) * 3 + 1] = rt[1];
+    uCoors[(0 * 37 + slot) * 3 + 2] = rt[2];
+  }
+  const uLogits = new Float32Array([-10, -10, 20, -10]); // tid 1 -> tid 0
+  const resUOnly = processSampleToAtoms({
+    coors: uCoors,
+    atomMask: uMask,
+    residueType: new Int32Array([alaIdx, alaIdx]),
+    paddingMask: new Uint8Array([1, 1]),
+    insertionLogits: uLogits,
+    inputAtoms: uOnlyAtoms,
+    inputFrame: true,
+  });
+  assert.equal(resUOnly.inputFrame, true);
+  for (const a of resUOnly.atoms) {
+    assert.ok(Math.hypot(a.x - a.inCoord[0], a.y - a.inCoord[1], a.z - a.inCoord[2]) < 1e-3);
+  }
+  // Without insertionLogits, geometric fallback must not stamp inCoord onto unindexed targets
+  const resNoLogits = processSampleToAtoms({
+    coors: uCoors,
+    atomMask: uMask,
+    residueType: new Int32Array([alaIdx, alaIdx]),
+    paddingMask: new Uint8Array([1, 1]),
+    insertionLogits: null,
+    inputAtoms: uOnlyAtoms,
+    inputFrame: true,
+  });
+  assert.equal(resNoLogits.inputFrame, false);
+});
